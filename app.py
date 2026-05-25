@@ -46,8 +46,8 @@ def show_home():
                 fill: #60A5FA !important;
             }
             
-            /* Premium Card Layouts */
-            .hub-card {
+            /* Premium Card Layouts applied directly to the Column container */
+            div[data-testid="column"]:has(.hub-card) {
                 background-color: #18181D !important;
                 border: 1px solid #3E3E4A !important;
                 border-radius: 12px !important;
@@ -56,9 +56,17 @@ def show_home():
                 margin-bottom: 1.5rem;
                 transition: all 0.3s ease-in-out;
             }
-            div[data-testid="column"]:has(.hub-card):hover .hub-card {
+            div[data-testid="column"]:has(.hub-card):hover {
                 border-color: #60A5FA !important;
                 transform: translateY(-2px);
+            }
+            .hub-card {
+                background-color: transparent !important;
+                border: none !important;
+                border-radius: 0 !important;
+                padding: 0 !important;
+                box-shadow: none !important;
+                margin: 0 !important;
             }
             .hub-badge {
                 background-color: #60A5FA22; 
@@ -72,34 +80,46 @@ def show_home():
                 margin-bottom: 10px;
             }
             
-            /* Card absolute link overlay to make the entire card clickable */
-            div[data-testid="column"]:has(.hub-card) {
-                position: relative !important;
+            /* Style st.page_link to be a premium blue pill button inside the card container */
+            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a {
+                background: linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%) !important;
+                color: #FFFFFF !important;
+                padding: 0.5rem 1.5rem !important;
+                border-radius: 24px !important;
+                font-weight: 600 !important;
+                font-size: 14px !important;
+                text-decoration: none !important;
+                display: inline-flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                border: none !important;
+                box-shadow: none !important;
+                transition: all 0.2s ease-in-out !important;
+                margin-top: 15px !important;
+                width: fit-content !important;
+            }
+            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a:hover {
+                background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%) !important;
+                color: #FFFFFF !important;
+                transform: scale(1.02) !important;
+                box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important;
             }
             
-            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] {
-                position: absolute !important;
-                top: 0 !important;
-                left: 0 !important;
-                width: 100% !important;
-                height: 100% !important;
+            /* Force the inner page link text to be white and bold */
+            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a p {
+                color: #FFFFFF !important;
                 margin: 0 !important;
                 padding: 0 !important;
-                z-index: 999 !important;
+                font-weight: 600 !important;
+                font-size: 14px !important;
             }
             
-            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a {
-                width: 100% !important;
-                height: 100% !important;
-                opacity: 0 !important;
-                background-color: transparent !important;
-                border: none !important;
-                display: block !important;
-            }
-            
-            /* Change cursor to pointer when hovering anywhere over the card column */
-            div[data-testid="column"]:has(.hub-card):hover {
-                cursor: pointer;
+            /* Align icon beautifully if present */
+            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a img,
+            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a svg,
+            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a span {
+                filter: brightness(0) invert(1) !important; /* Make icon white */
+                margin-right: 8px !important;
             }
             
             /* Premium button styles without box-shadow */
@@ -142,8 +162,9 @@ def show_home():
             </div>
         """, unsafe_allow_html=True)
         
-        # Clickable Native Page Link stretched to cover the entire card seamlessly
-        st.page_link(planner_page, label="", icon=None)
+        # Native Page Link styled as the premium blue button
+        st.page_link(planner_page, label="Open", icon="🎯")
+
 
 # 3. Define the page listing for navigation
 home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
