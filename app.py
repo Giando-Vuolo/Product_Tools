@@ -81,7 +81,15 @@ def show_home():
             }
             
             /* Style st.page_link to be a premium blue pill button inside the card container */
-            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a {
+            div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"],
+            div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] a,
+            div[data-testid="column"]:has(.hub-card) .stPageLink,
+            div[data-testid="column"]:has(.hub-card) .stPageLink a,
+            div[data-testid="column"]:has(.hub-card) a[class*="stPageLink"],
+            div[data-testid="column"]:has(.hub-card) div[class*="stPageLink"] a,
+            [data-testid="stPageLink"] a,
+            .stPageLink a,
+            a[class*="stPageLink"] {
                 background: linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%) !important;
                 color: #FFFFFF !important;
                 padding: 0.5rem 1.5rem !important;
@@ -100,7 +108,16 @@ def show_home():
                 height: 2.25rem !important; /* Force standard height matching other buttons */
                 box-sizing: border-box !important;
             }
-            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a:hover {
+            
+            div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"]:hover,
+            div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] a:hover,
+            div[data-testid="column"]:has(.hub-card) .stPageLink:hover,
+            div[data-testid="column"]:has(.hub-card) .stPageLink a:hover,
+            div[data-testid="column"]:has(.hub-card) a[class*="stPageLink"]:hover,
+            div[data-testid="column"]:has(.hub-card) div[class*="stPageLink"] a:hover,
+            [data-testid="stPageLink"] a:hover,
+            .stPageLink a:hover,
+            a[class*="stPageLink"]:hover {
                 background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%) !important;
                 color: #FFFFFF !important;
                 border: none !important;
@@ -109,7 +126,13 @@ def show_home():
             }
             
             /* Force the inner page link text to be white and bold */
-            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a p {
+            div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] p,
+            div[data-testid="column"]:has(.hub-card) .stPageLink p,
+            div[data-testid="column"]:has(.hub-card) a[class*="stPageLink"] p,
+            div[data-testid="column"]:has(.hub-card) div[class*="stPageLink"] a p,
+            [data-testid="stPageLink"] a p,
+            .stPageLink a p,
+            a[class*="stPageLink"] p {
                 color: #FFFFFF !important;
                 margin: 0 !important;
                 padding: 0 !important;
@@ -119,9 +142,18 @@ def show_home():
             }
             
             /* Hide page link icon completely to match clean text style of other buttons */
-            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a img,
-            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a svg,
-            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a span {
+            div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] img,
+            div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] svg,
+            div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] span,
+            div[data-testid="column"]:has(.hub-card) .stPageLink img,
+            div[data-testid="column"]:has(.hub-card) .stPageLink svg,
+            div[data-testid="column"]:has(.hub-card) .stPageLink span,
+            [data-testid="stPageLink"] img,
+            [data-testid="stPageLink"] svg,
+            [data-testid="stPageLink"] span,
+            .stPageLink img,
+            .stPageLink svg,
+            .stPageLink span {
                 display: none !important;
             }
             
@@ -166,7 +198,7 @@ def show_home():
         """, unsafe_allow_html=True)
         
         # Native Page Link styled as the premium blue button
-        st.page_link(planner_page, label="Open", icon="🎯")
+        st.page_link(planner_page, label="Open", icon="⤴")
 
 
 # 3. Define the page listing for navigation
