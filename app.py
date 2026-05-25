@@ -106,69 +106,19 @@ st.markdown("Welcome to the **Product Owner & Project Management Tools Suite**. 
 
 st.divider()
 
-# Active and Upcoming Tools Grid
-st.subheader("🛠️ Active Tools & Workspace")
+# Active Tools Section
+st.subheader("🛠️ Available Tools")
 
-col1, col2, col3 = st.columns(3)
+col_card, _ = st.columns([2, 1])
 
-with col1:
+with col_card:
     st.markdown("""
         <div class="hub-card">
             <span class="hub-badge">ACTIVE 🚀</span>
             <h3>🎯 Quarterly Planner</h3>
-            <p>Visualize backlogs, track team velocity, and build interactive hierarchical roadmap Gantt charts from Jira exports.</p>
-            <p style="font-size: 12px; color: #94A3B8;">👈 Select this tool from the sidebar to launch.</p>
+            <p>Visualize backlog exports, track sprint velocities, edit dates interactively, and view detailed hierarchical roadmap timelines using a customized Gantt chart.</p>
         </div>
     """, unsafe_allow_html=True)
-
-with col2:
-    st.markdown("""
-        <div class="hub-card">
-            <span class="hub-badge-soon">UNDER DEVELOPMENT ⚙️</span>
-            <h3>📊 Jira Metrics & KPIs</h3>
-            <p>Analyze cycle times, work-in-progress (WIP) limits, cumulative flow diagrams, and overall backlog health analysis.</p>
-            <p style="font-size: 12px; color: #94A3B8;">Release planned for next sprint.</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-with col3:
-    st.markdown("""
-        <div class="hub-card">
-            <span class="hub-badge-soon">PLANNING PHASE 📅</span>
-            <h3>📈 Velocity Forecasting</h3>
-            <p>Predict team milestone completion rates using historical sprint velocities and Monte Carlo planning simulations.</p>
-            <p style="font-size: 12px; color: #94A3B8;">Feasibility assessment underway.</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-st.divider()
-
-# Setup / Quick Testing Section
-st.subheader("📋 Getting Started & Testing")
-
-col_left, col_right = st.columns([2, 1])
-
-with col_left:
-    st.markdown("""
-    To get started with the active tools:
-    1. **Prepare your Data**: Export your backlog from Jira or any project board into a standard CSV format.
-    2. **Launch the Tool**: Select **`1 🎯 Quarterly Planner`** from the left navigation sidebar.
-    3. **Upload & Analyze**: Drag and drop your file into the uploader dropzone inside the tool to instantly render the backlog tables, sprint editors, and Gantt charts.
-    """)
-
-with col_right:
-    st.markdown("### ⬇️ Download Template")
-    st.markdown("Don't have a Jira CSV export on hand? Download a realistic template dataset to test the workspace:")
     
-    try:
-        mock_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jira_mock.csv")
-        with open(mock_path, "r") as f:
-            mock_csv = f.read()
-        st.download_button(
-            label="⬇️ Download jira_mock.csv", 
-            data=mock_csv.encode('utf-8'), 
-            file_name="jira_mock.csv", 
-            mime="text/csv"
-        )
-    except Exception:
-        st.error("Template file could not be loaded locally.")
+    # Clickable Native Page Link to open the Quarterly Planner tool instantly
+    st.page_link("pages/1_🎯_Quarterly_Planner.py", label="Launch Quarterly Planner", icon="🎯")
