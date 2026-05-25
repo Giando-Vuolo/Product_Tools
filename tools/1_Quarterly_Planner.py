@@ -4,7 +4,6 @@ import plotly.express as px
 import re
 import os
 
-st.set_page_config(page_title="Quarterly Planner", layout="wide")
 
 if 'selected_epic_key' not in st.session_state:
     st.session_state.selected_epic_key = None
