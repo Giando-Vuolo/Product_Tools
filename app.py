@@ -56,7 +56,7 @@ def show_home():
                 margin-bottom: 1.5rem;
                 transition: all 0.3s ease-in-out;
             }
-            .hub-card:hover {
+            div[data-testid="column"]:has(.hub-card):hover .hub-card {
                 border-color: #60A5FA !important;
                 transform: translateY(-2px);
             }
@@ -70,6 +70,36 @@ def show_home():
                 font-weight: 600; 
                 display: inline-block;
                 margin-bottom: 10px;
+            }
+            
+            /* Card absolute link overlay to make the entire card clickable */
+            div[data-testid="column"]:has(.hub-card) {
+                position: relative !important;
+            }
+            
+            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] {
+                position: absolute !important;
+                top: 0 !important;
+                left: 0 !important;
+                width: 100% !important;
+                height: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                z-index: 999 !important;
+            }
+            
+            div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a {
+                width: 100% !important;
+                height: 100% !important;
+                opacity: 0 !important;
+                background-color: transparent !important;
+                border: none !important;
+                display: block !important;
+            }
+            
+            /* Change cursor to pointer when hovering anywhere over the card column */
+            div[data-testid="column"]:has(.hub-card):hover {
+                cursor: pointer;
             }
             
             /* Premium button styles without box-shadow */
@@ -112,8 +142,8 @@ def show_home():
             </div>
         """, unsafe_allow_html=True)
         
-        # Clickable Native Page Link using the actual st.Page object (completely bug-free!)
-        st.page_link(planner_page, label="Launch Quarterly Planner", icon="🎯")
+        # Clickable Native Page Link stretched to cover the entire card seamlessly
+        st.page_link(planner_page, label="", icon=None)
 
 # 3. Define the page listing for navigation
 home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
