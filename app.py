@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import re
+import os
 
 st.set_page_config(page_title="Quarterly Planner", layout="wide")
 
@@ -19,18 +20,18 @@ st.markdown("""
     <style>
         /* General dark theme override */
         .main, .block-container, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
-            background-color: #0B0F19 !important;
-            color: #E2E8F0 !important;
+            background-color: #27272E !important;
+            color: #F8FAFC !important;
         }
         
         /* High visibility and premium SaaS styling for file uploader */
         [data-testid="stFileUploadDropzone"] {
-            background-color: #1E293B !important;
-            border: 1px dashed #3B82F6 !important;
+            background-color: #18181D !important;
+            border: 1px dashed #60A5FA !important;
             border-radius: 12px !important;
         }
         [data-testid="stFileUploadDropzone"] * {
-            color: #E2E8F0 !important;
+            color: #F8FAFC !important;
         }
         [data-testid="stFileUploaderFileName"], 
         .stFileUploaderFileName, 
@@ -39,8 +40,8 @@ st.markdown("""
             font-weight: 600 !important;
         }
         [data-testid="stFileUploader"] section {
-            background-color: #1E293B !important;
-            border: 1px solid #334155 !important;
+            background-color: #18181D !important;
+            border: 1px solid #3E3E4A !important;
             border-radius: 12px !important;
         }
         [data-testid="stFileUploader"] section * {
@@ -53,11 +54,11 @@ st.markdown("""
             font-weight: 700 !important;
         }
         .stMarkdown p, .stMarkdown li, .stMarkdown span {
-            color: #E2E8F0 !important;
+            color: #F8FAFC !important;
         }
         label, .stWidgetLabel {
-            color: #F8FAFC !important;
-            font-weight: 500 !important;
+            color: #FFFFFF !important;
+            font-weight: 600 !important;
         }
         
         /* Sidebar Toggle Button */
@@ -76,8 +77,8 @@ st.markdown("""
         
         /* Sidebar dark theme label improvements */
         section[data-testid="stSidebar"] {
-            background-color: #0F172A !important;
-            border-right: 1px solid #1E293B !important;
+            background-color: #18181D !important;
+            border-right: 1px solid #3E3E4A !important;
         }
         section[data-testid="stSidebar"] h1,
         section[data-testid="stSidebar"] h2,
@@ -92,28 +93,28 @@ st.markdown("""
         div[data-testid="stDataFrame"] { 
             border-radius: 12px; 
             overflow: hidden; 
-            border: 1px solid #334155 !important;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
-            background-color: #1E293B;
+            border: 1px solid #3E3E4A !important;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            background-color: #18181D;
         }
         div[data-testid="stExpander"] { 
             border-radius: 12px !important; 
-            border: 1px solid #334155 !important; 
-            background-color: #1E293B !important;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+            border: 1px solid #3E3E4A !important; 
+            background-color: #18181D !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
             margin-bottom: 1rem;
             overflow: hidden;
         }
         div[data-testid="stExpander"] > details {
-            background-color: #1E293B !important;
+            background-color: #18181D !important;
         }
         div[data-testid="stExpander"] summary {
-            background-color: #1E293B !important;
+            background-color: #18181D !important;
             color: #FFFFFF !important;
             font-weight: 600;
         }
         div[data-testid="stExpander"] summary:hover {
-            background-color: #243048 !important;
+            background-color: #2D2D38 !important;
         }
         div[data-testid="stExpander"] .stMarkdown {
             color: #F8FAFC !important;
@@ -122,11 +123,11 @@ st.markdown("""
         /* General bordered container style */
         div[data-testid="stVerticalBlockBorderWrapper"],
         div.stVerticalBlockBorder {
-            border: 1px solid #334155 !important;
+            border: 1px solid #3E3E4A !important;
             border-radius: 12px !important;
-            background-color: #1E293B !important;
+            background-color: #18181D !important;
             padding: 1.5rem !important;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3) !important;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5) !important;
         }
         
         /* Gantt chart container box specifically targeted with key or contents */
@@ -141,9 +142,9 @@ st.markdown("""
         div.stVerticalBlockBorder:has(.stPlotlyChart),
         div.stVerticalBlockBorder:has([data-testid="stPlotlyChart"]),
         .st-key-gantt_container {
-            background-color: #2E3E56 !important; /* Premium lighter slate-navy background */
-            border: 2px solid #475569 !important; /* Lighter, thicker border definition for high contrast */
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4) !important;
+            background-color: #18181D !important; /* Cohesive Charcoal background */
+            border: 2px solid #3E3E4A !important; /* High contrast clean border */
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6) !important;
             border-radius: 12px !important;
             padding: 1.5rem !important;
         }
@@ -156,13 +157,13 @@ st.markdown("""
             color: #FFFFFF !important; 
             padding: 0.5rem 1.5rem; 
             font-weight: 600;
-            box-shadow: 0 4px 14px 0 rgba(59, 130, 246, 0.4) !important;
+            box-shadow: none !important;
             transition: all 0.2s ease-in-out;
         }
         .stButton>button:hover, .stDownloadButton>button:hover, button[data-testid="stBaseButton-secondary"]:hover { 
             background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%) !important;
             color: #FFFFFF !important;
-            box-shadow: 0 6px 20px 0 rgba(59, 130, 246, 0.6) !important;
+            box-shadow: none !important;
             transform: translateY(-1px);
         }
         
@@ -190,6 +191,68 @@ def parse_quarter_to_date(q_str):
         return pd.Timestamp(year=year, month=month, day=1)
     return pd.Timestamp.today()
 
+
+def get_status_group(status_str, is_milestone=False):
+    """
+    Unifies status mapping across the Gantt chart and selected detail panel views.
+    """
+    if is_milestone:
+        return "Milestone"
+    s = str(status_str).strip().lower()
+    if s in ["to do", "open", "backlog", "pending", "por hacer", "abierto"]:
+        return "To Do"
+    elif s in ["in progress", "en progreso", "desarrollo", "testing", "in_progress"]:
+        return "In Progress"
+    elif s in ["done", "completado", "listo", "closed", "cerrado", "finalizado", "terminado"]:
+        return "Done"
+    elif s in ["blocked", "bloqueado", "impedimento", "pausado"]:
+        return "Blocked"
+    return "To Do"
+
+
+def truncate_text(text, max_len=45):
+    """
+    Cleans and truncates text values for optimized rendering inside Plotly visualizations.
+    """
+    if pd.isna(text):
+        return ""
+    text_str = str(text)
+    return text_str[:max_len-3] + "..." if len(text_str) > max_len else text_str
+
+
+def clean_val(val, fallback="N/A"):
+    """
+    Sanitizes values to avoid rendering empty or 'NaN' elements in active UI layouts.
+    """
+    if pd.isna(val) or val == "" or str(val).strip().lower() == "nan":
+        return fallback
+    return str(val)
+
+
+def make_select_option(r):
+    """
+    Formats a dictionary row representing a Jira epic into a clean dropdown selector option.
+    """
+    k = clean_val(r.get('Key'), 'N/A')
+    n = clean_val(r.get('Epic Name'), 'Unnamed Epic')
+    return f"[{k}] {n}"
+
+
+def val_changed(v1, v2):
+    """
+    Safe comparison check preventing TypeError: 'boolean value of NA is ambiguous' errors in pandas.
+    """
+    n1, n2 = pd.isna(v1), pd.isna(v2)
+    if n1 and n2:
+        return False
+    if n1 != n2:
+        return True
+    try:
+        return bool(v1 != v2)
+    except Exception:
+        return True
+
+
 st.title("🎯 Quarterly Planner")
 
 uploaded_file = st.file_uploader("Upload your data (CSV)", type=['csv'])
@@ -202,7 +265,7 @@ if uploaded_file:
     if not df_raw.empty:
         df_raw.dropna(how='all', inplace=True)
         
-    # Normalizar nombres de columnas comunes en exportaciones reales de Jira
+    # Normalize common column headers from Jira CSV exports
     rename_mapping = {}
     for col in df_raw.columns:
         col_lower = col.strip().lower()
@@ -422,7 +485,7 @@ if uploaded_file:
         st.success("Dates synchronized with default settings!")
         st.rerun()
 
-    # 4. Hot Editing Data Table (st.data_editor) inside collapsible "Data" expander
+    # 4. Collapsible Backlog Editor
     column_config = {
         "Key": st.column_config.TextColumn("id", width="medium"),
         "Epic Name": st.column_config.TextColumn("Epic Name", width="large"),
@@ -453,18 +516,6 @@ if uploaded_file:
                 if idx in st.session_state.main_df.index:
                     old_row = st.session_state.main_df.loc[idx]
                     new_row = edited_df.loc[idx]
-                    
-                    # Safe comparison helper to prevent TypeError: boolean value of NA is ambiguous
-                    def val_changed(v1, v2):
-                        n1, n2 = pd.isna(v1), pd.isna(v2)
-                        if n1 and n2:
-                            return False
-                        if n1 != n2:
-                            return True
-                        try:
-                            return bool(v1 != v2)
-                        except:
-                            return True
                     
                     sprint_changed = val_changed(old_row.get('Sprint'), new_row.get('Sprint'))
                     quarter_changed = val_changed(old_row.get('Quarter'), new_row.get('Quarter'))
@@ -578,288 +629,271 @@ if uploaded_file:
                     st.markdown(f"- {adv}")
     
 # ---------------------------------------------------------
-    # 7. Gantt Chart View (Plotly) - UNIFICADO Y COLAPSABLE
+    # 7. Gantt Chart View (Plotly)
     # ---------------------------------------------------------
-    st.write("### Gantt chart")
+    with st.expander("📅 Gantt Chart", expanded=True):
+        if not filtered_df.empty:
+            gantt_df = filtered_df.copy()
     
-    if not filtered_df.empty:
-        gantt_df = filtered_df.copy()
-        
-        # Limpiador y truncador de texto para evitar compresión visual
-        def truncate_text(text, max_len=45):
-            if pd.isna(text): return ""
-            text_str = str(text)
-            return text_str[:max_len-3] + "..." if len(text_str) > max_len else text_str
-
-        # Mapeo unificado de estados de Jira
-        def get_status_group(status_str, is_milestone=False):
-            if is_milestone: return "Milestone"
-            s = str(status_str).strip().lower()
-            if s in ["to do", "open", "backlog", "pending", "por hacer", "abierto"]: return "To Do"
-            elif s in ["in progress", "en progreso", "desarrollo", "testing", "in_progress"]: return "In Progress"
-            elif s in ["done", "completado", "listo", "closed", "cerrado", "finalizado", "terminado"]: return "Done"
-            elif s in ["blocked", "bloqueado", "impedimento", "pausado"]: return "Blocked"
-            return "To Do"
-
-        # Paleta premium con colores suaves solicitados y el color del Header
-        status_colors = {
-            "To Do": "#94A3B8",       
-            "In Progress": "#60A5FA",  
-            "Done": "#4ADE80",        
-            "Blocked": "#F87171",     
-            "Milestone": "#FACC15",   
-            "Cluster Header": "#475569" # Gris oscuro elegante para la barra resumen del Cluster
-        }
-        
-        gantt_df['Gantt_Status'] = gantt_df.apply(
-            lambda r: get_status_group(r.get('Status', 'To Do'), r.get('Milestone') == True), axis=1
-        )
-        gantt_df['Sprint_Visual'] = gantt_df['Sprint'].apply(lambda x: f"Sprint {int(x)}" if pd.notna(x) else "Unassigned")
-        
-        # Inicializar estados de colapso si no existen
-        if 'collapsed_clusters' not in st.session_state:
-            st.session_state.collapsed_clusters = set()
-        if 'chart_key_counter' not in st.session_state:
-            st.session_state.chart_key_counter = 0
-
-        unique_clusters = gantt_df['Cluster'].fillna("General").unique()
-        sorted_clusters = sorted([c for c in unique_clusters if c != "General"])
-        if "General" in unique_clusters:
-            sorted_clusters.append("General")
-
-        # Top-level UI controls for expanding/collapsing
-        st.markdown('### 👀 Gantt View Mode')
-        
-        # Inject CSS specifically for the radio buttons to change their text color
-        st.markdown("""
-            <style>
-            /* Apunta a las etiquetas del radio button */
-            div.stRadio > div[role="radiogroup"] p {
-                color: #60A5FA !important; /* Azul claro / Accent */
-                font-weight: 600 !important;
-                font-size: 1.05rem !important;
+            # Standard colors mapped to roadmap statuses
+            status_colors = {
+                "To Do": "#94A3B8",       
+                "In Progress": "#60A5FA",  
+                "Done": "#4ADE80",        
+                "Blocked": "#F87171",     
+                "Milestone": "#FACC15",   
+                "Cluster Header": "#475569" # Dark neutral header color for Cluster Summary rollup bar
             }
-            </style>
-        """, unsafe_allow_html=True)
-        
-        view_mode = st.radio(
-            "Selecciona el modo de visualización",
-            options=["Clusters", "Items", "All"],
-            index=2, # Default to "All"
-            horizontal=True,
-            label_visibility="collapsed"
-        )
-
-        # Detect active year and determine shared X-axis range
-        años_detectados = gantt_df['Start Date'].dt.year.dropna().unique()
-        año_activo = int(años_detectados[0]) if len(años_detectados) > 0 else pd.Timestamp.today().year
-
-        shared_xaxis_range = None
-        if quarters_sel:
-            start_dates = []
-            end_dates = []
-            for q in quarters_sel:
-                q_date = parse_quarter_to_date(q)
-                start_dates.append(q_date)
-                end_dates.append(q_date + pd.DateOffset(months=3))
-            if start_dates and end_dates:
-                shared_xaxis_range = [min(start_dates), max(end_dates)]
-        else:
-            shared_xaxis_range = [f"{año_activo}-01-01", f"{año_activo}-12-31"]
-
-        plotting_rows = []
-        y_axis_order = []
-        epic_counter = 0
-        
-        # Construcción de la jerarquía visual
-        for idx_c, cluster_name in enumerate(sorted_clusters):
-            cluster_gantt_df = gantt_df[gantt_df['Cluster'].fillna("General") == cluster_name]
-            if cluster_gantt_df.empty: 
-                continue
             
-            # Calcular barra resumen (Rollup) automática del Cluster
-            c_start = cluster_gantt_df['Start Date'].min()
-            c_due = cluster_gantt_df['Due Date'].max()
-            if pd.isna(c_start): c_start = pd.Timestamp.today()
-            if pd.isna(c_due): c_due = pd.Timestamp.today() + pd.DateOffset(days=30)
+            gantt_df['Gantt_Status'] = gantt_df.apply(
+                lambda r: get_status_group(r.get('Status', 'To Do'), r.get('Milestone') == True), axis=1
+            )
+            gantt_df['Sprint_Visual'] = gantt_df['Sprint'].apply(lambda x: f"Sprint {int(x)}" if pd.notna(x) else "Unassigned")
             
-            cluster_name_full = cluster_name
-            if 'Cluster Name' in cluster_gantt_df.columns:
-                non_null_names = cluster_gantt_df['Cluster Name'].dropna()
-                non_null_names = [n for n in non_null_names if str(n).strip() != ""]
-                if non_null_names:
-                    cluster_name_full = f"{cluster_name} - {non_null_names[0]}"
+            # Inicializar estados de colapso si no existen
+            if 'collapsed_clusters' not in st.session_state:
+                st.session_state.collapsed_clusters = set()
+            if 'chart_key_counter' not in st.session_state:
+                st.session_state.chart_key_counter = 0
+    
+            unique_clusters = gantt_df['Cluster'].fillna("General").unique()
+            sorted_clusters = sorted([c for c in unique_clusters if c != "General"])
+            if "General" in unique_clusters:
+                sorted_clusters.append("General")
+    
+            # Top-level UI controls for expanding/collapsing
+            st.markdown('### 👀 Gantt View Mode')
             
-            if view_mode in ["Clusters", "All"]:
-                num_items = len(cluster_gantt_df)
-                # Split cluster text into two lines: Cluster Key/Name on top, sub-name on bottom
-                cluster_desc = ""
+            # Inject CSS specifically for the radio buttons to change their text color
+            st.markdown("""
+                <style>
+                /* Apunta a las etiquetas del radio button */
+                div.stRadio > div[role="radiogroup"] p {
+                    color: #60A5FA !important; /* Azul claro / Accent */
+                    font-weight: 600 !important;
+                    font-size: 1.05rem !important;
+                }
+                </style>
+            """, unsafe_allow_html=True)
+            
+            view_mode = st.radio(
+                "Selecciona el modo de visualización",
+                options=["Clusters", "Items", "All"],
+                index=2, # Default to "All"
+                horizontal=True,
+                label_visibility="collapsed"
+            )
+    
+            # Detect active year and determine shared X-axis range
+            años_detectados = gantt_df['Start Date'].dt.year.dropna().unique()
+            año_activo = int(años_detectados[0]) if len(años_detectados) > 0 else pd.Timestamp.today().year
+    
+            shared_xaxis_range = None
+            if quarters_sel:
+                start_dates = []
+                end_dates = []
+                for q in quarters_sel:
+                    q_date = parse_quarter_to_date(q)
+                    start_dates.append(q_date)
+                    end_dates.append(q_date + pd.DateOffset(months=3))
+                if start_dates and end_dates:
+                    shared_xaxis_range = [min(start_dates), max(end_dates)]
+            else:
+                shared_xaxis_range = [f"{año_activo}-01-01", f"{año_activo}-12-31"]
+    
+            plotting_rows = []
+            y_axis_order = []
+            epic_counter = 0
+            
+            # Build list rows to establish visual hierarchy in Gantt chart
+            for idx_c, cluster_name in enumerate(sorted_clusters):
+                cluster_gantt_df = gantt_df[gantt_df['Cluster'].fillna("General") == cluster_name]
+                if cluster_gantt_df.empty: 
+                    continue
+                
+                # Compute auto-rollup start and end dates for each Cluster
+                c_start = cluster_gantt_df['Start Date'].min()
+                c_due = cluster_gantt_df['Due Date'].max()
+                if pd.isna(c_start): c_start = pd.Timestamp.today()
+                if pd.isna(c_due): c_due = pd.Timestamp.today() + pd.DateOffset(days=30)
+                
+                cluster_name_full = cluster_name
                 if 'Cluster Name' in cluster_gantt_df.columns:
                     non_null_names = cluster_gantt_df['Cluster Name'].dropna()
                     non_null_names = [n for n in non_null_names if str(n).strip() != ""]
                     if non_null_names:
-                        cluster_desc = f"<br><span style='font-size:10px; color:#94A3B8;'>{non_null_names[0]}</span>"
+                        cluster_name_full = f"{cluster_name} - {non_null_names[0]}"
                 
-                cluster_y_label = f"📁 <b>{cluster_name.upper()}</b> ({num_items}){cluster_desc}"
-                cluster_id = f"C_{idx_c}"
-                
-                # Fila del Header del Cluster
-                plotting_rows.append({
-                    'Key': f"CLUSTER_{cluster_name}",
-                    'Epic Name': f"Cluster: {cluster_name_full}",
-                    'Status': 'N/A',
-                    'Quarter': 'N/A',
-                    'Sprint_Visual': 'N/A',
-                    'Cluster': cluster_name,
-                    'Start Date': c_start,
-                    'Due Date': c_due,
-                    'Gantt_Status': 'Cluster Header',
-                    'Y_Axis_Label': cluster_id,
-                    'Display_Label': cluster_y_label,
-                    'Is_Cluster_Header': True,
-                    'Y_Index': epic_counter
-                })
-                y_axis_order.append(cluster_id)
-                epic_counter += 1
-            
-            # Si el modo no es solo Clusters, inyectamos las épicas
-            if view_mode in ["Items", "All"]:
-                for idx_r, row in cluster_gantt_df.iterrows():
-                    prefix = "💎 [MILESTONE] " if row.get('Milestone') == True else f"[{row.get('Key', 'N/A')}]"
+                if view_mode in ["Clusters", "All"]:
+                    num_items = len(cluster_gantt_df)
+                    # Split cluster text into two lines: Cluster Key/Name on top, sub-name on bottom
+                    cluster_desc = ""
+                    if 'Cluster Name' in cluster_gantt_df.columns:
+                        non_null_names = cluster_gantt_df['Cluster Name'].dropna()
+                        non_null_names = [n for n in non_null_names if str(n).strip() != ""]
+                        if non_null_names:
+                            cluster_desc = f"<br><span style='font-size:10px; color:#94A3B8;'>{non_null_names[0]}</span>"
                     
-                    epic_name_trunc = truncate_text(row['Epic Name'])
-                    # Two-line format for epic
-                    if view_mode == "Items":
-                        epic_y_label = f"<b>{prefix}</b><br><span style='font-size:10px; color:#CBD5E1;'>{epic_name_trunc}</span>"
-                    else:
-                        epic_y_label = f"&nbsp;&nbsp;&nbsp;&nbsp;↳ <b>{prefix}</b><br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style='font-size:10px; color:#CBD5E1;'>{epic_name_trunc}</span>"
+                    cluster_y_label = f"📁 <b>{cluster_name.upper()}</b> ({num_items}){cluster_desc}"
+                    cluster_id = f"C_{idx_c}"
                     
-                    epic_id = f"E_{epic_counter}"
-                        
-                    r_dict = row.to_dict()
-                    r_dict['Y_Axis_Label'] = epic_id
-                    r_dict['Display_Label'] = epic_y_label
-                    r_dict['Is_Cluster_Header'] = False
-                    r_dict['Y_Index'] = epic_counter
-                    plotting_rows.append(r_dict)
-                    y_axis_order.append(epic_id)
+                    # Append the Cluster summary row
+                    plotting_rows.append({
+                        'Key': f"CLUSTER_{cluster_name}",
+                        'Epic Name': f"Cluster: {cluster_name_full}",
+                        'Status': 'N/A',
+                        'Quarter': 'N/A',
+                        'Sprint_Visual': 'N/A',
+                        'Cluster': cluster_name,
+                        'Start Date': c_start,
+                        'Due Date': c_due,
+                        'Gantt_Status': 'Cluster Header',
+                        'Y_Axis_Label': cluster_id,
+                        'Display_Label': cluster_y_label,
+                        'Is_Cluster_Header': True,
+                        'Y_Index': epic_counter
+                    })
+                    y_axis_order.append(cluster_id)
                     epic_counter += 1
-                    
-        if plotting_rows:
-            plot_df = pd.DataFrame(plotting_rows)
-            
-            # Dibujar el gráfico unificado con el Eje Y NUMÉRICO
-            fig = px.timeline(
-                plot_df,
-                x_start="Start Date",
-                x_end="Due Date",
-                y="Y_Index", # NUMERIC AXIS ensures absolute placement
-                color="Gantt_Status",
-                color_discrete_map=status_colors,
-                category_orders={
-                    "Gantt_Status": ["To Do", "In Progress", "Done", "Blocked", "Milestone", "Cluster Header"]
-                },
-                custom_data=["Key", "Epic Name", "Status", "Quarter", "Sprint_Visual", "Cluster", "Start Date", "Due Date", "Is_Cluster_Header"]
-            )
-            
-            # Configuración limpia del eje Y: Ocultamos los ticks nativos para usar anotaciones alineadas
-            # Altura ampliada por tener dos filas por item
-            dynamic_height = max(280, 100 + len(plot_df) * 55)
-            fig.update_yaxes(
-                autorange="reversed", 
-                title_text="", 
-                showticklabels=False,
-                tickmode="array",
-                tickvals=plot_df['Y_Index'].tolist()
-            )
-            fig.update_xaxes(title_text="", tickfont=dict(color="#94A3B8"), range=shared_xaxis_range)
-            
-            # Añadir línea roja vertical de "Today"
-            today_dt = pd.Timestamp.today()
-            fig.add_vline(x=today_dt, line_width=2, line_dash="dash", line_color="#EF4444")
-            fig.add_annotation(x=today_dt, y=1.0, yref="paper", text="<b>📍 Today</b>", showarrow=False, font=dict(color="#EF4444", size=11), xanchor="center", yanchor="bottom")
-            
-            # Líneas divisorias de Quarters (si se visualiza el año completo)
-           
-            if not quarters_sel:
-                for q_month, q_name in [(4, "Q2"), (7, "Q3"), (10, "Q4")]:
-                    q_date = pd.Timestamp(year=año_activo, month=q_month, day=1)
-                    fig.add_vline(x=q_date, line_width=1.5, line_dash="dot", line_color="#475569")
-                    fig.add_annotation(x=q_date, y=1.01, yref="paper", text=f"<b>{q_name}</b>", showarrow=False, font=dict(color="#94A3B8", size=10), xanchor="left")
-
-            # Estilo del Tooltip interactivo y forzado de grosor de barras
-            fig.update_traces(
-                width=0.7,  # Fuerza el mismo grosor para TODAS las barras, evitando solapamientos
-                hovertemplate=(
-                    "<b>🏷️ Epic/US:</b> [%{customdata[0]}] <b>%{customdata[1]}</b><br>"
-                    "<b>📌 Status:</b> %{customdata[2]}<br>"
-                    "<b>📅 Planning:</b> %{customdata[3]} | %{customdata[4]}<br>"
-                    "<b>💼 Cluster:</b> %{customdata[5]}<br>"
-                    "<b>🕒 Dates:</b> %{customdata[6]|%d-%m-%Y} to %{customdata[7]|%d-%m-%Y}<extra></extra>"
-                ),
-                marker_line_width=1.5, marker_line_color="white", opacity=0.95
-            )
-            
-            # Recuperar y estilizar la leyenda interactiva nativa de colores de Plotly
-            fig.update_layout(
-                barmode="overlay", # Centra estrictamente la barra en su Y_Index sin desplazamientos de grupo
-                barcornerradius=8, clickmode="event+select",
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                height=dynamic_height,
-                margin=dict(l=450, r=10, t=35, b=10), # Margen restaurado (t=35) para eliminar el hueco extra
-                xaxis=dict(showgrid=True, gridcolor="#334155"),
-                yaxis=dict(showgrid=False),
-                showlegend=True, 
-                legend_title_text="",
-                # Movido a la parte superior izquierda extrema (x=-0.4) para alinearse con los textos
-                legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=-0.4, font=dict(color="#E2E8F0"))
-            )
-            
-            # Dibujar anotaciones alineadas a la izquierda para funcionar como un listado real
-            for idx, row in plot_df.iterrows():
-                fig.add_annotation(
-                    xref="paper",
-                    x=0,
-                    xshift=-440,  # Posicionado a la izquierda dentro del margen
-                    y=row['Y_Index'], # Usamos el índice numérico para anclar la anotación
-                    yref="y",
-                    text=row['Display_Label'],
-                    showarrow=False,
-                    xanchor="left",
-                    align="left",
-                    font=dict(color="#F8FAFC", size=11, family="Inter, sans-serif")
-                )
-            
-            # Renderizado seguro con clave dinámica para forzar la actualización de selección instantánea
-            chart_key = f"gantt_chart_main_{st.session_state.chart_key_counter}"
-            select_event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key=chart_key)
-            
-            # Manejo de clics nativos de Streamlit 1.35+ sobre las barras
-            if select_event and "selection" in select_event and select_event["selection"]:
-                points = select_event["selection"].get("points", [])
-                if len(points) > 0:
-                    c_data = points[0].get("customdata")
-                    if c_data:
-                        clicked_key = c_data[0]
-                        cluster_nm = c_data[5]
-                        is_header = c_data[8]
+                
+                # If view mode includes items, inject the individual epics
+                if view_mode in ["Items", "All"]:
+                    for idx_r, row in cluster_gantt_df.iterrows():
+                        prefix = "💎 [MILESTONE] " if row.get('Milestone') == True else f"[{row.get('Key', 'N/A')}]"
                         
-                        if is_header:
-                            # Ignoramos clics en los headers ya que ahora se controlan desde el Multiselect superior
-                            st.session_state.chart_key_counter += 1
-                            st.rerun()
+                        epic_name_trunc = truncate_text(row['Epic Name'])
+                        # Two-line format for epic
+                        if view_mode == "Items":
+                            epic_y_label = f"<b>{prefix}</b><br><span style='font-size:10px; color:#CBD5E1;'>{epic_name_trunc}</span>"
                         else:
-                            # Si es una épica real, actualiza la sección de detalles inferior
-                            if clicked_key != st.session_state.selected_epic_key:
-                                st.session_state.selected_epic_key = clicked_key
-                                epic_name = c_data[1]
-                                st.session_state["selectbox_selected_epic"] = f"[{clicked_key}] {epic_name}"
+                            epic_y_label = f"&nbsp;&nbsp;&nbsp;&nbsp;↳ <b>{prefix}</b><br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style='font-size:10px; color:#CBD5E1;'>{epic_name_trunc}</span>"
+                        
+                        epic_id = f"E_{epic_counter}"
+                            
+                        r_dict = row.to_dict()
+                        r_dict['Y_Axis_Label'] = epic_id
+                        r_dict['Display_Label'] = epic_y_label
+                        r_dict['Is_Cluster_Header'] = False
+                        r_dict['Y_Index'] = epic_counter
+                        plotting_rows.append(r_dict)
+                        y_axis_order.append(epic_id)
+                        epic_counter += 1
+                        
+            if plotting_rows:
+                plot_df = pd.DataFrame(plotting_rows)
+                
+                # Render Plotly timeline using numeric Y axis to prevent auto-grouping
+                fig = px.timeline(
+                    plot_df,
+                    x_start="Start Date",
+                    x_end="Due Date",
+                    y="Y_Index", # NUMERIC AXIS ensures absolute placement
+                    color="Gantt_Status",
+                    color_discrete_map=status_colors,
+                    category_orders={
+                        "Gantt_Status": ["To Do", "In Progress", "Done", "Blocked", "Milestone", "Cluster Header"]
+                    },
+                    custom_data=["Key", "Epic Name", "Status", "Quarter", "Sprint_Visual", "Cluster", "Start Date", "Due Date", "Is_Cluster_Header"]
+                )
+                
+                # Configure Y-axis: hide native ticks and use left-aligned annotations
+                # Altura ampliada por tener dos filas por item
+                dynamic_height = max(280, 100 + len(plot_df) * 55)
+                fig.update_yaxes(
+                    autorange="reversed", 
+                    title_text="", 
+                    showticklabels=False,
+                    tickmode="array",
+                    tickvals=plot_df['Y_Index'].tolist()
+                )
+                fig.update_xaxes(title_text="", tickfont=dict(color="#94A3B8"), range=shared_xaxis_range)
+                
+                # Add vertical indicator line for today's date
+                today_dt = pd.Timestamp.today()
+                fig.add_vline(x=today_dt, line_width=2, line_dash="dash", line_color="#EF4444")
+                fig.add_annotation(x=today_dt, y=1.0, yref="paper", text="<b>📍 Today</b>", showarrow=False, font=dict(color="#EF4444", size=11), xanchor="center", yanchor="bottom")
+                
+                # Draw vertical lines indicating Quarter boundaries
+               
+                if not quarters_sel:
+                    for q_month, q_name in [(4, "Q2"), (7, "Q3"), (10, "Q4")]:
+                        q_date = pd.Timestamp(year=año_activo, month=q_month, day=1)
+                        fig.add_vline(x=q_date, line_width=1.5, line_dash="dot", line_color="#475569")
+                        fig.add_annotation(x=q_date, y=1.01, yref="paper", text=f"<b>{q_name}</b>", showarrow=False, font=dict(color="#94A3B8", size=10), xanchor="left")
+    
+                # Set custom tooltip values and constant bar widths
+                fig.update_traces(
+                    width=0.7,  # Unify bar widths to prevent overlapping
+                    hovertemplate=(
+                        "<b>🏷️ Epic/US:</b> [%{customdata[0]}] <b>%{customdata[1]}</b><br>"
+                        "<b>📌 Status:</b> %{customdata[2]}<br>"
+                        "<b>📅 Planning:</b> %{customdata[3]} | %{customdata[4]}<br>"
+                        "<b>💼 Cluster:</b> %{customdata[5]}<br>"
+                        "<b>🕒 Dates:</b> %{customdata[6]|%d-%m-%Y} to %{customdata[7]|%d-%m-%Y}<extra></extra>"
+                    ),
+                    marker_line_width=1.5, marker_line_color="white", opacity=0.95
+                )
+                
+                # Customize Plotly chart layout, gridlines, and backgrounds
+                fig.update_layout(
+                    barmode="overlay", # Center bars precisely on their Y-indices
+                    barcornerradius=8, clickmode="event+select",
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    height=dynamic_height,
+                    margin=dict(l=450, r=10, t=35, b=10), # Configure chart borders and dimensions
+                    xaxis=dict(showgrid=True, gridcolor="#334155"),
+                    yaxis=dict(showgrid=False),
+                    showlegend=True, 
+                    legend_title_text="",
+                    # Position interactive legend inline at top-left
+                    legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=-0.4, font=dict(color="#E2E8F0"))
+                )
+                
+                # Draw left-aligned visual text labels mimicking a desktop tree list
+                for idx, row in plot_df.iterrows():
+                    fig.add_annotation(
+                        xref="paper",
+                        x=0,
+                        xshift=-440,  # Align label leftwards within the margin
+                        y=row['Y_Index'], # Anchor the text annotation vertically to the row index
+                        yref="y",
+                        text=row['Display_Label'],
+                        showarrow=False,
+                        xanchor="left",
+                        align="left",
+                        font=dict(color="#F8FAFC", size=11, family="Inter, sans-serif")
+                    )
+                
+                # Render chart with unique key to guarantee reactivity
+                chart_key = f"gantt_chart_main_{st.session_state.chart_key_counter}"
+                select_event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key=chart_key)
+                
+                # Handle selection events on bar clicks
+                if select_event and "selection" in select_event and select_event["selection"]:
+                    points = select_event["selection"].get("points", [])
+                    if len(points) > 0:
+                        c_data = points[0].get("customdata")
+                        if c_data:
+                            clicked_key = c_data[0]
+                            cluster_nm = c_data[5]
+                            is_header = c_data[8]
+                            
+                            if is_header:
+                                # Ignore selection events on Cluster headers
                                 st.session_state.chart_key_counter += 1
                                 st.rerun()
+                            else:
+                                # Sync selection if an individual Epic bar is clicked
+                                if clicked_key != st.session_state.selected_epic_key:
+                                    st.session_state.selected_epic_key = clicked_key
+                                    epic_name = c_data[1]
+                                    st.session_state["selectbox_selected_epic"] = f"[{clicked_key}] {epic_name}"
+                                    st.session_state.chart_key_counter += 1
+                                    st.rerun()
+            else:
+                st.info("⚠️ No epics match the selected filters.")
         else:
             st.info("⚠️ No epics match the selected filters.")
-    else:
-        st.info("⚠️ No epics match the selected filters.")
 
     # 8. Expanded Selected Epic Details card
     st.divider()
@@ -867,18 +901,6 @@ if uploaded_file:
     with st.expander("🔍 Check Items details", expanded=detail_expanded):
         st.markdown('<div class="epic-details-accent"></div>', unsafe_allow_html=True)
         if not filtered_df.empty:
-            # Safe value clean helper to prevent nan or empty display fields
-            def clean_val(val, fallback="N/A"):
-                if pd.isna(val) or val == "" or str(val).strip().lower() == "nan":
-                    return fallback
-                return str(val)
-
-            # Build standard select option representation safely
-            def make_select_option(r):
-                k = clean_val(r.get('Key'), 'N/A')
-                n = clean_val(r.get('Epic Name'), 'Unnamed Epic')
-                return f"[{k}] {n}"
-                
             filtered_df['Select_Option'] = filtered_df.apply(make_select_option, axis=1)
             options_list = sorted(list(filtered_df["Select_Option"].unique()))
             
@@ -917,21 +939,6 @@ if uploaded_file:
             # Dynamic Status Accent Color Mapping for Selected Epic Details
             status_val_raw = clean_val(epic_data.get('Status'), 'To Do')
             
-            # Status groups mapping helper
-            def get_status_group(status_str, is_milestone=False):
-                if is_milestone:
-                    return "Milestone"
-                s = str(status_str).strip().lower()
-                if s in ["to do", "open", "backlog", "pending", "por hacer", "abierto"]:
-                    return "To Do"
-                elif s in ["in progress", "en progreso", "desarrollo", "testing", "in_progress"]:
-                    return "In Progress"
-                elif s in ["done", "completado", "listo", "closed", "cerrado", "finalizado", "terminado"]:
-                    return "Done"
-                elif s in ["blocked", "bloqueado", "impedimento", "pausado"]:
-                    return "Blocked"
-                return "To Do"
-                
             status_group = get_status_group(status_val_raw, epic_data.get('Milestone') == True)
             
             status_colors_accent = {
@@ -952,17 +959,17 @@ if uploaded_file:
             st.markdown(f"""
                 <style>
                     div[data-testid="stExpander"]:has(.epic-details-accent) {{
-                        background-color: #111827 !important;
-                        border: 2px solid {status_color} !important;
-                        box-shadow: 0 10px 30px -5px {status_color}33 !important;
+                        background-color: #18181D !important;
+                        border: 1px solid #3E3E4A !important;
+                        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4) !important;
                         transition: all 0.3s ease-in-out !important;
                     }}
                     div[data-testid="stExpander"]:has(.epic-details-accent) > details,
                     div[data-testid="stExpander"]:has(.epic-details-accent) summary {{
-                        background-color: #111827 !important;
+                        background-color: #18181D !important;
                     }}
                     div[data-testid="stExpander"]:has(.epic-details-accent) summary:hover {{
-                        background-color: #1F2937 !important;
+                        background-color: #2D2D38 !important;
                     }}
                 </style>
             """, unsafe_allow_html=True)
@@ -1018,7 +1025,8 @@ else:
     st.write("We have created a realistic mock file with simulated data so you can test the application with one click:")
     
     try:
-        with open("/Users/fc0kewc/Desktop/PO_Tools/jira_mock.csv", "r") as f:
+        mock_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jira_mock.csv")
+        with open(mock_path, "r") as f:
             mock_csv = f.read()
         st.download_button(
             label="⬇️ Download a Template", 

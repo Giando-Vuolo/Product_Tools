@@ -30,15 +30,55 @@ Visualize team performance over time with automated Sprint bar charts that contr
 
 ## 🛠️ Installation & Usage
 
-1. **Prerequisites**: Ensure you have Python 3.9+ installed along with `pip`.
-2. **Setup Virtual Environment**:
+To get PO Tools up and running on your desktop, you can use the automated quick-start scripts or run it manually.
+
+### 🖥️ Desktop Quick Start (Recommended)
+
+The easiest way to run the application is to use the provided automated startup scripts. These will automatically check for a local virtual environment (`.venv`), create it if missing, install/upgrade the required dependencies (`streamlit`, `pandas`, `plotly`), and launch the server.
+
+> [!NOTE]
+> Once the server starts, a browser window will automatically open at `http://localhost:8501`. If it does not, you can manually open that address in your browser.
+
+#### 🍏 macOS & 🐧 Linux Desktop
+1. Open your **Terminal** app.
+2. Run the automated script:
    ```bash
+   # Give execution permission to the script (only needed the first time)
+   chmod +x run.sh
+   
+   # Run the script
+   ./run.sh
+   ```
+
+#### 🪟 Windows Desktop
+1. Open **Command Prompt** (`cmd`) or **PowerShell**.
+2. Run the batch script:
+   ```cmd
+   run.bat
+   ```
+   *(Or simply double-click the `run.bat` file in your Windows File Explorer!)*
+
+---
+
+### ⚙️ Manual Installation & Launch (Advanced)
+
+If you prefer to configure the environment step-by-step manually, use the following commands:
+
+1. **Prerequisites**: Ensure you have Python 3.9+ and `pip` installed.
+2. **Setup and Activate a Virtual Environment**:
+   ```bash
+   # Create the virtual environment
    python -m venv .venv
+   
+   # Activate on macOS/Linux
    source .venv/bin/activate
+   
+   # Activate on Windows
+   .venv\Scripts\activate
    ```
 3. **Install Dependencies**:
-   Ensure you have installed the required libraries (Streamlit, Pandas, Plotly):
    ```bash
+   pip install --upgrade pip
    pip install streamlit pandas plotly
    ```
 4. **Run the Application**:
