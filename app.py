@@ -144,16 +144,16 @@ def show_home():
             /* Hide page link icon completely to match clean text style of other buttons */
             div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] img,
             div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] svg,
-            div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] span,
+            div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] [data-testid="stIcon"],
             div[data-testid="column"]:has(.hub-card) .stPageLink img,
             div[data-testid="column"]:has(.hub-card) .stPageLink svg,
-            div[data-testid="column"]:has(.hub-card) .stPageLink span,
+            div[data-testid="column"]:has(.hub-card) .stPageLink [data-testid="stIcon"],
             [data-testid="stPageLink"] img,
             [data-testid="stPageLink"] svg,
-            [data-testid="stPageLink"] span,
+            [data-testid="stPageLink"] [data-testid="stIcon"],
             .stPageLink img,
             .stPageLink svg,
-            .stPageLink span {
+            .stPageLink [data-testid="stIcon"] {
                 display: none !important;
             }
             
