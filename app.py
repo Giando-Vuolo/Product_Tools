@@ -97,12 +97,15 @@ def show_home():
                 transition: all 0.2s ease-in-out !important;
                 margin-top: 15px !important;
                 width: fit-content !important;
+                height: 2.25rem !important; /* Force standard height matching other buttons */
+                box-sizing: border-box !important;
             }
             div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a:hover {
                 background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%) !important;
                 color: #FFFFFF !important;
-                transform: scale(1.02) !important;
-                box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important;
+                border: none !important;
+                transform: translateY(-1px) !important;
+                box-shadow: none !important;
             }
             
             /* Force the inner page link text to be white and bold */
@@ -112,14 +115,14 @@ def show_home():
                 padding: 0 !important;
                 font-weight: 600 !important;
                 font-size: 14px !important;
+                line-height: 1 !important;
             }
             
-            /* Align icon beautifully if present */
+            /* Hide page link icon completely to match clean text style of other buttons */
             div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a img,
             div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a svg,
             div[data-testid="column"]:has(.hub-card) div[data-testid="stPageLink"] a span {
-                filter: brightness(0) invert(1) !important; /* Make icon white */
-                margin-right: 8px !important;
+                display: none !important;
             }
             
             /* Premium button styles without box-shadow */
