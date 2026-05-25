@@ -116,9 +116,9 @@ with col_card:
         <div class="hub-card">
             <span class="hub-badge">ACTIVE 🚀</span>
             <h3>🎯 Quarterly Planner</h3>
-            <p>Visualize backlog exports, track sprint velocities, edit dates interactively, and view detailed hierarchical roadmap timelines using a customized Gantt chart.</p>
+            <p>Create and customize high-level, interactive Gantt charts from your backlog data or Jira CSV exports.</p>
         </div>
     """, unsafe_allow_html=True)
     
     # Clickable Native Page Link to open the Quarterly Planner tool instantly
-    st.page_link("pages/1_🎯_Quarterly_Planner.py", label="Launch Quarterly Planner", icon="🎯")
+    st.page_link("pages/1_Quarterly_Planner.py", label="Launch Quarterly Planner", icon="🎯")
