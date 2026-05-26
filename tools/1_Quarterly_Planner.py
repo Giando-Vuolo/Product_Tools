@@ -278,6 +278,8 @@ if uploaded_file:
             rename_mapping[col] = 'Description'
         elif col_lower in ['sprint', 'sprint number']:
             rename_mapping[col] = 'Sprint'
+        elif col_lower in ['size', 'epic size', 'epic_size', 'talla', 'estimacion', 'estimación']:
+            rename_mapping[col] = 'Size'
         elif col_lower in ['quarter', 'period']:
             rename_mapping[col] = 'Quarter'
         elif col_lower in ['cluster name', 'cluster_name', 'cluster-name']:
@@ -296,6 +298,7 @@ if uploaded_file:
         'Epic Name': 'New Epic',
         'Status': 'To Do',
         'Sprint': pd.NA,
+        'Size': 'M',
         'Quarter': 'Q1 - 26',
         'Cluster': 'General',
         'Labels': '',
@@ -310,17 +313,122 @@ if uploaded_file:
                 df_raw[col] = df_raw[col].fillna(False).astype(bool)
             elif col == 'Sprint':
                 df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce')
+            elif col == 'Size':
+                df_raw[col] = df_raw[col].fillna('M').astype(str).str.strip().str.upper()
+                df_raw[col] = df_raw[col].apply(lambda x: x if x in ['S', 'M', 'L', 'XL'] else 'M')
             elif col in ['Key', 'Epic Name', 'Status', 'Quarter', 'Cluster', 'Description', 'Labels']:
                 df_raw[col] = df_raw[col].fillna(default_val)
                 
     if 'Cluster Name' in df_raw.columns:
         df_raw['Cluster Name'] = df_raw['Cluster Name'].fillna("")
             
-    # Default durations configuration in Sidebar
-    st.sidebar.header("⚙️ Default Durations")
-    sprint_duration = st.sidebar.number_input("Sprint Duration (days):", min_value=1, max_value=90, value=15)
-    default_epic_duration = st.sidebar.number_input("Epic Duration without Sprint (days):", min_value=1, max_value=365, value=30)
+    # 2. Sidebar: Gantt Filters (AND)
+    st.sidebar.header("🔍 Gantt Filters")
     
+    search_query = st.sidebar.text_input("Search by Name or Key:", value="")
+    
+    df_for_filters = st.session_state.main_df if 'main_df' in st.session_state else df_raw
+    
+    # Dynamic filter by Quarter
+    quarters_sel = []
+    if 'Quarter' in df_for_filters.columns:
+        all_quarters = sorted(df_for_filters['Quarter'].dropna().unique())
+        quarters_sel = st.sidebar.multiselect("Filter by Quarter:", all_quarters)
+        
+    # Dynamic filter by Cluster
+    clusters_sel = []
+    if 'Cluster' in df_for_filters.columns:
+        all_clusters = sorted(df_for_filters['Cluster'].dropna().unique())
+        clusters_sel = st.sidebar.multiselect("Filter by Cluster:", all_clusters)
+
+    # Dynamic filter by Labels
+    labels_sel = []
+    if 'Labels' in df_for_filters.columns:
+        all_labels = set()
+        for row in df_for_filters['Labels'].dropna(): 
+            all_labels.update(str(row).split())
+        labels_sel = st.sidebar.multiselect("Filter by Labels:", sorted(list(all_labels)))
+
+    # Filter by Status
+    status_sel = []
+    if 'Status' in df_for_filters.columns:
+        all_statuses = sorted(df_for_filters['Status'].dropna().unique())
+        status_sel = st.sidebar.multiselect("Filter by Status:", all_statuses)
+
+    # Sidebar: Collapsible Settings
+    st.sidebar.divider()
+    st.sidebar.header("⚙️ Settings")
+
+    with st.sidebar.expander("⚙️ Sprint Duration", expanded=False):
+        sprint_duration = st.number_input("Days:", min_value=1, max_value=90, value=15)
+        
+    with st.sidebar.expander("📐 Sizes to Sprints Equivalence", expanded=False):
+        size_s_sprints = st.number_input("S Size:", min_value=1, max_value=20, value=1)
+        size_m_sprints = st.number_input("M Size:", min_value=1, max_value=20, value=2)
+        size_l_sprints = st.number_input("L Size:", min_value=1, max_value=20, value=3)
+        size_xl_sprints = st.number_input("XL Size:", min_value=1, max_value=20, value=4)
+        
+    size_mapping = {
+        'S': int(size_s_sprints),
+        'M': int(size_m_sprints),
+        'L': int(size_l_sprints),
+        'XL': int(size_xl_sprints)
+    }
+
+    # Function to calculate sequential/dynamic dates for a row
+    def calculate_sequential_dates(row):
+        is_milestone = row.get('Milestone', False)
+        
+        epic_size = row.get('Size', 'M')
+        if pd.isna(epic_size) or not isinstance(epic_size, str) or epic_size.upper() not in size_mapping:
+            epic_size = 'M'
+        else:
+            epic_size = epic_size.upper()
+            
+        num_sprints = size_mapping[epic_size]
+        
+        # If it is a Milestone, the default duration is 1 day, otherwise calculated in sprints
+        duration = 1 if is_milestone else (num_sprints * sprint_duration)
+        
+        sprint_val = row.get('Sprint')
+        q_field = row.get('Quarter')
+        base_date = parse_quarter_to_date(q_field)
+        
+        try:
+            if pd.notna(sprint_val):
+                sprint_num = int(float(sprint_val))
+                if is_milestone:
+                    cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == sprint_num]
+                    if not cal_row.empty:
+                        start_date = pd.to_datetime(cal_row.iloc[0]['Start Date'])
+                        due_date = start_date + pd.Timedelta(days=1)
+                    else:
+                        start_date = base_date + pd.Timedelta(days=(sprint_num - 1) * sprint_duration)
+                        due_date = start_date + pd.Timedelta(days=1)
+                else:
+                    end_sprint_num = sprint_num + num_sprints - 1
+                    
+                    start_cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == sprint_num]
+                    end_cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == end_sprint_num]
+                    
+                    if not start_cal_row.empty:
+                        start_date = pd.to_datetime(start_cal_row.iloc[0]['Start Date'])
+                        if not end_cal_row.empty:
+                            due_date = pd.to_datetime(end_cal_row.iloc[0]['Due Date'])
+                        else:
+                            due_date = start_date + pd.Timedelta(days=duration)
+                    else:
+                        start_date = base_date + pd.Timedelta(days=(sprint_num - 1) * sprint_duration)
+                        due_date = start_date + pd.Timedelta(days=duration)
+            else:
+                start_date = base_date
+                due_date = start_date + pd.Timedelta(days=duration)
+        except Exception as e:
+            start_date = base_date
+            due_date = start_date + pd.Timedelta(days=duration)
+            
+        return pd.Series([start_date, due_date], index=['Start Date', 'Due Date'])
+
     # Initialize the Sprint Calendar in Session State if it doesn't exist
     if 'sprint_calendar' not in st.session_state:
         q_sample = "Q1 - 26"
@@ -357,10 +465,7 @@ if uploaded_file:
             })
         st.session_state.sprint_calendar = pd.DataFrame(updated_sprints)
 
-    # 2. Render Sprint Calendar Editor in Sidebar
-    st.sidebar.divider()
-    st.sidebar.subheader("📅 Sprint Calendar")
-    with st.sidebar.expander("Edit Sprint Dates", expanded=False):
+    with st.sidebar.expander("📅 Sprints Dates", expanded=False):
         sprint_calendar_edited = st.data_editor(
             st.session_state.sprint_calendar,
             num_rows="fixed",
@@ -385,43 +490,20 @@ if uploaded_file:
                             s_num = int(float(sprint_val))
                             cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == s_num]
                             if not cal_row.empty:
-                                st.session_state.main_df.at[idx, 'Start Date'] = pd.to_datetime(cal_row.iloc[0]['Start Date'])
-                                st.session_state.main_df.at[idx, 'Due Date'] = pd.to_datetime(cal_row.iloc[0]['Due Date'])
+                                calculated = calculate_sequential_dates(row)
+                                st.session_state.main_df.at[idx, 'Start Date'] = calculated[0]
+                                st.session_state.main_df.at[idx, 'Due Date'] = calculated[1]
                         except:
                             pass
                 st.rerun()
 
-    # Function to calculate sequential/dynamic dates for a row
-    def calculate_sequential_dates(row):
-        is_milestone = row.get('Milestone', False)
-        
-        # If it is a Milestone, the default duration is 1 day
-        duration = 1 if is_milestone else default_epic_duration
-        
-        sprint_val = row.get('Sprint')
-        q_field = row.get('Quarter')
-        base_date = parse_quarter_to_date(q_field)
-        
-        try:
-            if pd.notna(sprint_val):
-                sprint_num = int(float(sprint_val))
-                # Search in the Dynamic Sprint Calendar
-                cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == sprint_num]
-                if not cal_row.empty:
-                    start_date = pd.to_datetime(cal_row.iloc[0]['Start Date'])
-                    due_date = start_date + pd.Timedelta(days=1) if is_milestone else pd.to_datetime(cal_row.iloc[0]['Due Date'])
-                else:
-                    # Classic sequential fallback
-                    start_date = base_date + pd.Timedelta(days=(sprint_num - 1) * sprint_duration)
-                    due_date = start_date + pd.Timedelta(days=1 if is_milestone else sprint_duration)
-            else:
-                start_date = base_date
-                due_date = start_date + pd.Timedelta(days=duration)
-        except Exception as e:
-            start_date = base_date
-            due_date = start_date + pd.Timedelta(days=duration)
-            
-        return pd.Series([start_date, due_date], index=['Start Date', 'Due Date'])
+    # Expander 4: Actions (Recalculate)
+    with st.sidebar.expander("🔄 Actions", expanded=False):
+        if st.button("Recalculate All Dates", use_container_width=True):
+            calculated = st.session_state.main_df.apply(calculate_sequential_dates, axis=1, result_type='expand')
+            st.session_state.main_df[['Start Date', 'Due Date']] = calculated
+            st.success("Dates synchronized with default settings!")
+            st.rerun()
 
     # Initialize the main dataframe in Session State
     if 'main_df' not in st.session_state or st.session_state.get('last_uploaded_name') != uploaded_file.name:
@@ -444,52 +526,13 @@ if uploaded_file:
                 
         st.session_state.main_df = df_raw
 
-    # 3. Sidebar: Advanced Filters (AND)
-    st.sidebar.divider()
-    st.sidebar.header("🔍 Advanced Filters")
-    
-    search_query = st.sidebar.text_input("Search by Name or Key:", value="")
-    
-    # Dynamic filter by Quarter
-    quarters_sel = []
-    if 'Quarter' in st.session_state.main_df.columns:
-        all_quarters = sorted(st.session_state.main_df['Quarter'].dropna().unique())
-        quarters_sel = st.sidebar.multiselect("Filter by Quarter:", all_quarters)
-        
-    # Dynamic filter by Cluster
-    clusters_sel = []
-    if 'Cluster' in st.session_state.main_df.columns:
-        all_clusters = sorted(st.session_state.main_df['Cluster'].dropna().unique())
-        clusters_sel = st.sidebar.multiselect("Filter by Cluster:", all_clusters)
-
-    # Dynamic filter by Labels
-    labels_sel = []
-    if 'Labels' in st.session_state.main_df.columns:
-        all_labels = set()
-        for row in st.session_state.main_df['Labels'].dropna(): 
-            all_labels.update(str(row).split())
-        labels_sel = st.sidebar.multiselect("Filter by Labels:", sorted(list(all_labels)))
-
-    # Filter by Status
-    status_sel = []
-    if 'Status' in st.session_state.main_df.columns:
-        all_statuses = sorted(st.session_state.main_df['Status'].dropna().unique())
-        status_sel = st.sidebar.multiselect("Filter by Status:", all_statuses)
-
-    # Sidebar button to force recalculation
-    st.sidebar.divider()
-    if st.sidebar.button("🔄 Recalculate All Dates"):
-        calculated = st.session_state.main_df.apply(calculate_sequential_dates, axis=1, result_type='expand')
-        st.session_state.main_df[['Start Date', 'Due Date']] = calculated
-        st.success("Dates synchronized with default settings!")
-        st.rerun()
-
     # 4. Collapsible Backlog Editor
     column_config = {
         "Key": st.column_config.TextColumn("id", width="medium"),
         "Epic Name": st.column_config.TextColumn("Epic Name", width="large"),
         "Status": st.column_config.SelectboxColumn("Status", options=["To Do", "In Progress", "Done", "Blocked", "Open", "Closed"]),
         "Sprint": st.column_config.NumberColumn("Sprint", min_value=1, max_value=20, step=1),
+        "Size": st.column_config.SelectboxColumn("Size", options=["S", "M", "L", "XL"], default="M", width="small"),
         "Quarter": st.column_config.TextColumn("Quarter"),
         "Cluster": st.column_config.TextColumn("Cluster"),
         "Cluster Name": st.column_config.TextColumn("Cluster Name"),
@@ -519,12 +562,45 @@ if uploaded_file:
                     sprint_changed = val_changed(old_row.get('Sprint'), new_row.get('Sprint'))
                     quarter_changed = val_changed(old_row.get('Quarter'), new_row.get('Quarter'))
                     milestone_changed = val_changed(old_row.get('Milestone'), new_row.get('Milestone'))
+                    size_changed = val_changed(old_row.get('Size'), new_row.get('Size'))
+                    start_date_changed = val_changed(old_row.get('Start Date'), new_row.get('Start Date'))
+                    due_date_changed = val_changed(old_row.get('Due Date'), new_row.get('Due Date'))
                     dates_null = bool(pd.isna(new_row.get('Start Date')) or pd.isna(new_row.get('Due Date')))
                     
-                    if sprint_changed or quarter_changed or milestone_changed or dates_null:
+                    if sprint_changed or quarter_changed or milestone_changed or size_changed or dates_null:
                         calculated = calculate_sequential_dates(new_row)
                         edited_df.at[idx, 'Start Date'] = calculated[0]
                         edited_df.at[idx, 'Due Date'] = calculated[1]
+                    elif start_date_changed or due_date_changed:
+                        # Manual date changes -> Reverse calculate Sprint and Size
+                        new_start = new_row.get('Start Date')
+                        new_due = new_row.get('Due Date')
+                        
+                        if pd.notna(new_start):
+                            new_start_dt = pd.to_datetime(new_start)
+                            matching_sprint = pd.NA
+                            for _, cal_row in st.session_state.sprint_calendar.iterrows():
+                                cal_start = pd.to_datetime(cal_row['Start Date'])
+                                cal_due = pd.to_datetime(cal_row['Due Date'])
+                                if cal_start <= new_start_dt < cal_due:
+                                    matching_sprint = int(cal_row['Sprint'])
+                                    break
+                            edited_df.at[idx, 'Sprint'] = matching_sprint
+                            
+                        if pd.notna(new_start) and pd.notna(new_due):
+                            new_start_dt = pd.to_datetime(new_start)
+                            new_due_dt = pd.to_datetime(new_due)
+                            duration_days = (new_due_dt - new_start_dt).days
+                            approx_sprints = max(1, round(duration_days / sprint_duration))
+                            
+                            best_size = 'M'
+                            min_diff = 999
+                            for sz, sz_sprints in size_mapping.items():
+                                diff = abs(sz_sprints - approx_sprints)
+                                if diff < min_diff:
+                                    min_diff = diff
+                                    best_size = sz
+                            edited_df.at[idx, 'Size'] = best_size
                 else:
                     # New row
                     calculated = calculate_sequential_dates(edited_df.loc[idx])
@@ -750,7 +826,8 @@ if uploaded_file:
                         'Y_Axis_Label': cluster_id,
                         'Display_Label': cluster_y_label,
                         'Is_Cluster_Header': True,
-                        'Y_Index': epic_counter
+                        'Y_Index': epic_counter,
+                        'Size': 'N/A'
                     })
                     y_axis_order.append(cluster_id)
                     epic_counter += 1
@@ -792,7 +869,7 @@ if uploaded_file:
                     category_orders={
                         "Gantt_Status": ["To Do", "In Progress", "Done", "Blocked", "Milestone", "Cluster Header"]
                     },
-                    custom_data=["Key", "Epic Name", "Status", "Quarter", "Sprint_Visual", "Cluster", "Start Date", "Due Date", "Is_Cluster_Header"]
+                    custom_data=["Key", "Epic Name", "Status", "Quarter", "Sprint_Visual", "Cluster", "Start Date", "Due Date", "Is_Cluster_Header", "Size"]
                 )
                 
                 # Configure Y-axis: hide native ticks and use left-aligned annotations
@@ -825,6 +902,7 @@ if uploaded_file:
                     width=0.7,  # Unify bar widths to prevent overlapping
                     hovertemplate=(
                         "<b>🏷️ Epic/US:</b> [%{customdata[0]}] <b>%{customdata[1]}</b><br>"
+                        "<b>📏 Size:</b> %{customdata[9]}<br>"
                         "<b>📌 Status:</b> %{customdata[2]}<br>"
                         "<b>📅 Planning:</b> %{customdata[3]} | %{customdata[4]}<br>"
                         "<b>💼 Cluster:</b> %{customdata[5]}<br>"
@@ -986,6 +1064,8 @@ if uploaded_file:
                     except:
                         sprint_display = str(sprint_raw)
                 st.markdown(f"**Sprint:** {sprint_display}")
+                epic_sz = clean_val(epic_data.get('Size'), 'M')
+                st.markdown(f"**Size:** <span style='background-color: #60A5FA22; color: #60A5FA; border: 1px solid #60A5FA; padding: 2px 8px; border-radius: 8px; font-size: 12px; font-weight: 600; display: inline-block;'>{epic_sz}</span>", unsafe_allow_html=True)
                 st.markdown(f"**Cluster:** {clean_val(epic_data.get('Cluster'), 'N/A')}")
             with col3:
                 start_str = epic_data['Start Date'].strftime('%d %b %Y') if pd.notna(epic_data.get('Start Date')) else "Unassigned"
