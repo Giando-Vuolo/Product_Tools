@@ -3,6 +3,7 @@ import os
 
 # 1. Define the page objects first so they are globally accessible
 planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner", icon="🎯")
+review_page = st.Page("tools/2_Sprint_Review_Release_Notes.py", title="Sprint & Release Reports", icon="📋")
 
 # 2. Define the Home Page rendering function
 def show_home():
@@ -186,9 +187,9 @@ def show_home():
     # Active Tools Section
     st.subheader("🛠️ Available Tools")
 
-    col_card, _ = st.columns([2, 1])
+    col1, col2 = st.columns(2)
 
-    with col_card:
+    with col1:
         st.markdown("""
             <div class="hub-card">
                 <span class="hub-badge">ACTIVE 🚀</span>
@@ -196,15 +197,23 @@ def show_home():
                 <p>Create and customize high-level, interactive Gantt charts from your backlog data or Jira CSV exports.</p>
             </div>
         """, unsafe_allow_html=True)
-        
-        # Native Page Link styled as the premium blue button
-        st.page_link(planner_page, label="Open", icon="⤴")
+        st.page_link(planner_page, label="Open Planner", icon="🎯")
+
+    with col2:
+        st.markdown("""
+            <div class="hub-card">
+                <span class="hub-badge">ACTIVE 🚀</span>
+                <h3>📋 Sprint & Release Reports</h3>
+                <p>Extract Jira sprint data, edit items in a worktable, apply custom branding, and export PDF Sprint Reviews & Release Notes.</p>
+            </div>
+        """, unsafe_allow_html=True)
+        st.page_link(review_page, label="Open Reports", icon="📋")
 
 
 # 3. Define the page listing for navigation
 home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
 
 # 4. Setup and run navigation
-pg = st.navigation([home_page, planner_page])
+pg = st.navigation([home_page, planner_page, review_page])
 st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
 pg.run()

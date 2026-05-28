@@ -1104,7 +1104,9 @@ else:
     st.write("We have created a realistic mock file with simulated data so you can test the application with one click:")
     
     try:
-        mock_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jira_mock.csv")
+        mock_path_parent = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "jira_mock.csv")
+        mock_path_tools = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jira_mock.csv")
+        mock_path = mock_path_parent if os.path.exists(mock_path_parent) else mock_path_tools
         with open(mock_path, "r") as f:
             mock_csv = f.read()
         st.download_button(

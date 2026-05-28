@@ -18,3 +18,8 @@ __pycache__/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Environment variables and local credentials
+.env
+.env.*
+!.env.example

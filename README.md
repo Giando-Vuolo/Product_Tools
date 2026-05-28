@@ -50,6 +50,15 @@ The easiest way to run the application is to use the provided automated startup 
    ./run.sh
    ```
 
+   # 1. Navigate to your project directory
+cd /path/to/your/project
+# 2. Activate the pre-existing virtual environment
+source .venv/bin/activate
+# 3. Ensure the required packages are installed
+pip install streamlit pandas plotly
+# 4. Run the Streamlit application
+streamlit run app.py
+
 #### 🪟 Windows Desktop
 1. Open **Command Prompt** (`cmd`) or **PowerShell**.
 2. Run the batch script:
