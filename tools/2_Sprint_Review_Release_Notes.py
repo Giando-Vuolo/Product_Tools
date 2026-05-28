@@ -18,7 +18,7 @@ from reportlab.pdfgen import canvas
 # ---------------------------------------------------------
 # 1. Environment Loading & Session Setup
 # ---------------------------------------------------------
-load_dotenv()
+load_dotenv(override=True)
 
 # Read default environment variables if provided
 default_jira_server = os.getenv("JIRA_SERVER", "")
@@ -101,8 +101,9 @@ if 'next_release_df' not in st.session_state:
             "Comments": "Major central dashboard UI redesign, EKS migration, and compliance preparations."
         }
     ])
-if 'primary_color' not in st.session_state:
+if 'primary_color' not in st.session_state or st.session_state.get('prev_env_color') != default_primary_color:
     st.session_state.primary_color = default_primary_color
+    st.session_state.prev_env_color = default_primary_color
 if 'release_notes_intro' not in st.session_state:
     st.session_state.release_notes_intro = default_release_notes_intro
 
@@ -133,152 +134,153 @@ if 'ot_sprint_num' not in st.session_state:
 # ---------------------------------------------------------
 # 2. Custom CSS styling (Premium dark SaaS UI)
 # ---------------------------------------------------------
+
 st.markdown("""
     <style>
-        /* General dark theme override */
-        .main, .block-container, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
-            background-color: #27272E !important;
-            color: #F8FAFC !important;
-        }
-        
-        /* High visibility and premium SaaS styling for file uploader */
-        [data-testid="stFileUploadDropzone"] {
-            background-color: #18181D !important;
-            border: 1px dashed #60A5FA !important;
-            border-radius: 12px !important;
-        }
-        [data-testid="stFileUploadDropzone"] * {
-            color: #F8FAFC !important;
-        }
-        [data-testid="stFileUploaderFileName"], 
-        .stFileUploaderFileName, 
-        .uploadedFileName {
-            color: #FFFFFF !important;
-            font-weight: 600 !important;
-        }
-        [data-testid="stFileUploader"] section {
-            background-color: #18181D !important;
-            border: 1px solid #3E3E4A !important;
-            border-radius: 12px !important;
-        }
-        [data-testid="stFileUploader"] section * {
-            color: #FFFFFF !important;
-        }
-        
-        /* Typography high-contrast styles */
-        h1, h2, h3, h4, h5, h6 {
-            color: #FFFFFF !important;
-            font-weight: 700 !important;
-        }
-        .stMarkdown p, .stMarkdown li, .stMarkdown span {
-            color: #F8FAFC !important;
-        }
-        label, .stWidgetLabel {
-            color: #FFFFFF !important;
-            font-weight: 600 !important;
-        }
-        
-        /* Sidebar Toggle Button */
-        button[data-testid="collapsedControl"], button[kind="header"] {
-            color: #60A5FA !important;
-        }
-        button[data-testid="collapsedControl"] svg, button[kind="header"] svg {
-            fill: #60A5FA !important;
-        }
-        
-        /* File Uploader small limit text */
-        [data-testid="stFileUploadDropzone"] small {
-            color: #94A3B8 !important;
-            font-weight: 500 !important;
-        }
-        
-        /* Sidebar dark theme label improvements */
-        section[data-testid="stSidebar"] {
-            background-color: #18181D !important;
-            border-right: 1px solid #3E3E4A !important;
-        }
-        section[data-testid="stSidebar"] h1,
-        section[data-testid="stSidebar"] h2,
-        section[data-testid="stSidebar"] h3,
-        section[data-testid="stSidebar"] h4,
-        section[data-testid="stSidebar"] label,
-        section[data-testid="stSidebar"] .stMarkdown {
-            color: #FFFFFF !important;
-        }
-        
-        /* Rounded borders and shadows for dataframes and tables */
-        div[data-testid="stDataFrame"] { 
-            border-radius: 12px; 
-            overflow: hidden; 
-            border: 1px solid #3E3E4A !important;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
-            background-color: #18181D;
-        }
-        div[data-testid="stExpander"] { 
-            border-radius: 12px !important; 
-            border: 1px solid #3E3E4A !important; 
-            background-color: #18181D !important;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
-            margin-bottom: 1rem;
-            overflow: hidden;
-        }
-        div[data-testid="stExpander"] > details {
-            background-color: #18181D !important;
-        }
-        div[data-testid="stExpander"] summary {
-            background-color: #18181D !important;
-            color: #FFFFFF !important;
-            font-weight: 600;
-        }
-        div[data-testid="stExpander"] summary:hover {
-            background-color: #2D2D38 !important;
-        }
-        div[data-testid="stExpander"] .stMarkdown {
-            color: #F8FAFC !important;
-        }
-        
-        /* General bordered container style */
-        div[data-testid="stVerticalBlockBorderWrapper"],
-        div.stVerticalBlockBorder {
-            border: 1px solid #3E3E4A !important;
-            border-radius: 12px !important;
-            background-color: #18181D !important;
-            padding: 1.5rem !important;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5) !important;
-        }
-        
-        /* Premium button styles with interactive glow and forced high-contrast text */
-        .stButton>button, .stDownloadButton>button, button[data-testid="stBaseButton-secondary"] { 
-            border-radius: 24px; 
-            border: none; 
-            background: linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%) !important; 
-            color: #FFFFFF !important; 
-            padding: 0.5rem 1.5rem; 
-            font-weight: 600;
-            box-shadow: none !important;
-            transition: all 0.2s ease-in-out;
-        }
-        .stButton>button:hover, .stDownloadButton>button:hover, button[data-testid="stBaseButton-secondary"]:hover { 
-            background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%) !important;
-            color: #FFFFFF !important;
-            box-shadow: none !important;
-            transform: translateY(-1px);
-        }
-        
-        /* Custom card layouts for exports */
-        .export-card {
-            background-color: #18181D !important;
-            border: 1px solid #3E3E4A !important;
-            border-radius: 12px !important;
-            padding: 1.2rem !important;
-            margin-bottom: 0.8rem;
-            transition: all 0.2s ease-in-out;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
-        }
-        .export-card h3 {
-            margin-top: 0 !important;
-            color: #FFFFFF !important;
-        }
+         /* General dark theme override */
+         .main, .block-container, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+             background-color: #27272E !important;
+             color: #F8FAFC !important;
+         }
+         
+         /* High visibility and premium SaaS styling for file uploader */
+         [data-testid="stFileUploadDropzone"] {
+             background-color: #18181D !important;
+             border: 1px dashed #60A5FA !important;
+             border-radius: 12px !important;
+         }
+         [data-testid="stFileUploadDropzone"] * {
+             color: #F8FAFC !important;
+         }
+         [data-testid="stFileUploaderFileName"], 
+         .stFileUploaderFileName, 
+         .uploadedFileName {
+             color: #FFFFFF !important;
+             font-weight: 600 !important;
+         }
+         [data-testid="stFileUploader"] section {
+             background-color: #18181D !important;
+             border: 1px solid #3E3E4A !important;
+             border-radius: 12px !important;
+         }
+         [data-testid="stFileUploader"] section * {
+             color: #FFFFFF !important;
+         }
+         
+         /* Typography high-contrast styles */
+         h1, h2, h3, h4, h5, h6 {
+             color: #FFFFFF !important;
+             font-weight: 700 !important;
+         }
+         .stMarkdown p, .stMarkdown li, .stMarkdown span {
+             color: #F8FAFC !important;
+         }
+         label, .stWidgetLabel {
+             color: #FFFFFF !important;
+             font-weight: 600 !important;
+         }
+         
+         /* Sidebar Toggle Button */
+         button[data-testid="collapsedControl"], button[kind="header"] {
+             color: #60A5FA !important;
+         }
+         button[data-testid="collapsedControl"] svg, button[kind="header"] svg {
+             fill: #60A5FA !important;
+         }
+         
+         /* File Uploader small limit text */
+         [data-testid="stFileUploadDropzone"] small {
+             color: #94A3B8 !important;
+             font-weight: 500 !important;
+         }
+         
+         /* Sidebar dark theme label improvements */
+         section[data-testid="stSidebar"] {
+             background-color: #18181D !important;
+             border-right: 1px solid #3E3E4A !important;
+         }
+         section[data-testid="stSidebar"] h1,
+         section[data-testid="stSidebar"] h2,
+         section[data-testid="stSidebar"] h3,
+         section[data-testid="stSidebar"] h4,
+         section[data-testid="stSidebar"] label,
+         section[data-testid="stSidebar"] .stMarkdown {
+             color: #FFFFFF !important;
+         }
+         
+         /* Rounded borders and shadows for dataframes and tables */
+         div[data-testid="stDataFrame"] { 
+             border-radius: 12px; 
+             overflow: hidden; 
+             border: 1px solid #3E3E4A !important;
+             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+             background-color: #18181D;
+         }
+         div[data-testid="stExpander"] { 
+             border-radius: 12px !important; 
+             border: 1px solid #3E3E4A !important; 
+             background-color: #18181D !important;
+             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+             margin-bottom: 1rem;
+             overflow: hidden;
+         }
+         div[data-testid="stExpander"] > details {
+             background-color: #18181D !important;
+         }
+         div[data-testid="stExpander"] summary {
+             background-color: #18181D !important;
+             color: #FFFFFF !important;
+             font-weight: 600;
+         }
+         div[data-testid="stExpander"] summary:hover {
+             background-color: #2D2D38 !important;
+         }
+         div[data-testid="stExpander"] .stMarkdown {
+             color: #F8FAFC !important;
+         }
+         
+         /* General bordered container style */
+         div[data-testid="stVerticalBlockBorderWrapper"],
+         div.stVerticalBlockBorder {
+             border: 1px solid #3E3E4A !important;
+             border-radius: 12px !important;
+             background-color: #18181D !important;
+             padding: 1.5rem !important;
+             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5) !important;
+         }
+         
+         /* Premium button styles with interactive glow and forced high-contrast text */
+         .stButton>button, .stDownloadButton>button, button[data-testid="stBaseButton-secondary"] { 
+             border-radius: 24px; 
+             border: none; 
+             background: linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%) !important; 
+             color: #FFFFFF !important; 
+             padding: 0.5rem 1.5rem; 
+             font-weight: 600;
+             box-shadow: none !important;
+             transition: all 0.2s ease-in-out;
+         }
+         .stButton>button:hover, .stDownloadButton>button:hover, button[data-testid="stBaseButton-secondary"]:hover { 
+             background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%) !important;
+             color: #FFFFFF !important;
+             box-shadow: none !important;
+             transform: translateY(-1px);
+         }
+         
+         /* Custom card layouts for exports */
+         .export-card {
+             background-color: #18181D !important;
+             border: 1px solid #3E3E4A !important;
+             border-radius: 12px !important;
+             padding: 1.2rem !important;
+             margin-bottom: 0.8rem;
+             transition: all 0.2s ease-in-out;
+             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+         }
+         .export-card h3 {
+             margin-top: 0 !important;
+             color: #FFFFFF !important;
+         }
     </style>
 """, unsafe_allow_html=True)
 
@@ -917,10 +919,10 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None):
     
     # Table layout
     table_data = [[
-        Paragraph("Reference", cell_header_style),
-        Paragraph("Feature / Deliverable to Demo", cell_header_style),
-        Paragraph("Associated Initiative (Epic)", cell_header_style),
-        Paragraph("Demo Owner (Presenter) 👤", cell_header_style)
+        Paragraph("Key", cell_header_style),
+        Paragraph("Summary", cell_header_style),
+        Paragraph("Epic", cell_header_style),
+        Paragraph("Presenter 👤", cell_header_style)
     ]]
     
     for _, row in demo_items.iterrows():
@@ -1234,12 +1236,11 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     
     if not topics_ov.empty:
         # Col Widths: Total = 504pt
-        # Ref Key: 50pt, Epic: 90pt, Type: 75pt, Summary: 154pt, Status: 65pt, Fix Version: 70pt
+        # Ref Key: 50pt, Epic: 90pt, Summary: 229pt, Status: 65pt, Fix Version: 70pt
         table_data = [[
-            Paragraph("Ref Key", cell_header_style),
-            Paragraph("Epic Initiative", cell_header_style),
-            Paragraph("Type", cell_header_style),
-            Paragraph("Delivered Topic (Commercial Description)", cell_header_style),
+            Paragraph("Key", cell_header_style),
+            Paragraph("Epic", cell_header_style),
+            Paragraph("Summary", cell_header_style),
             Paragraph("Status", cell_header_style),
             Paragraph("Fix Version", cell_header_style)
         ]]
@@ -1250,7 +1251,6 @@ def build_sprint_review_pdf(overview_df, outlook_df):
             table_data.append([
                 Paragraph(str(row['Key']), cell_body_bold_style),
                 Paragraph(str(row['Epic']), cell_body_style),
-                Paragraph(str(row.get('Type', 'User Story')), cell_body_bold_style),
                 Paragraph(str(row['Summary']), cell_body_style),
                 Paragraph(str(row['Status']), cell_body_style),
                 Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
@@ -1258,7 +1258,7 @@ def build_sprint_review_pdf(overview_df, outlook_df):
             
         topics_table = Table(
             table_data,
-            colWidths=[50, 90, 75, 154, 65, 70]
+            colWidths=[50, 90, 229, 65, 70]
         )
         topics_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
@@ -1282,9 +1282,9 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     story.append(Paragraph("Resolved Bugs", sub_section_title_style))
     if not bugs_ov.empty:
         bug_data = [[
-            Paragraph("Ref Key", cell_header_style),
-            Paragraph("Epic Initiative", cell_header_style),
-            Paragraph("Resolved Bug (Commercial Description)", cell_header_style),
+            Paragraph("Key", cell_header_style),
+            Paragraph("Epic", cell_header_style),
+            Paragraph("Summary", cell_header_style),
             Paragraph("Status", cell_header_style),
             Paragraph("Fix Version", cell_header_style)
         ]]
@@ -1340,11 +1340,10 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     
     if not topics_ot.empty:
         table_data_outlook = [[
-            Paragraph("Ref Key", cell_header_style),
-            Paragraph("Epic Initiative", cell_header_style),
-            Paragraph("Type", cell_header_style),
-            Paragraph("Planned Feature Description", cell_header_style),
-            Paragraph("Target Status", cell_header_style),
+            Paragraph("Key", cell_header_style),
+            Paragraph("Epic", cell_header_style),
+            Paragraph("Summary", cell_header_style),
+            Paragraph("Current Status", cell_header_style),
             Paragraph("Fix Version", cell_header_style)
         ]]
         
@@ -1354,7 +1353,6 @@ def build_sprint_review_pdf(overview_df, outlook_df):
             table_data_outlook.append([
                 Paragraph(str(row['Key']), cell_body_bold_style),
                 Paragraph(str(row['Epic']), cell_body_style),
-                Paragraph(str(row.get('Type', 'User Story')), cell_body_bold_style),
                 Paragraph(str(row['Summary']), cell_body_style),
                 Paragraph(str(row['Status']), cell_body_style),
                 Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
@@ -1362,7 +1360,7 @@ def build_sprint_review_pdf(overview_df, outlook_df):
             
         outlook_table = Table(
             table_data_outlook,
-            colWidths=[50, 90, 75, 154, 65, 70]
+            colWidths=[50, 90, 229, 65, 70]
         )
         outlook_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
@@ -1386,10 +1384,10 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     story.append(Paragraph("Planned Bugs", sub_section_title_style))
     if not bugs_ot.empty:
         bug_data_outlook = [[
-            Paragraph("Ref Key", cell_header_style),
-            Paragraph("Epic Initiative", cell_header_style),
-            Paragraph("Planned Bug Fix Description", cell_header_style),
-            Paragraph("Target Status", cell_header_style),
+            Paragraph("Key", cell_header_style),
+            Paragraph("Epic", cell_header_style),
+            Paragraph("Summary", cell_header_style),
+            Paragraph("Status", cell_header_style),
             Paragraph("Fix Version", cell_header_style)
         ]]
         
@@ -1639,13 +1637,12 @@ def build_release_notes_pdf(overview_df, outlook_df):
     
     if not topics_ov.empty:
         # Col Widths: Total = 504pt
-        # Reference: 60pt, Epic Theme: 90pt, Type: 70pt, Delivered Capability: 204pt, Release Version: 80pt
+        # Reference: 60pt, Epic Theme: 90pt, Delivered Capability: 274pt, Release Version: 80pt
         table_data = [[
-            Paragraph("Reference", cell_header_style),
-            Paragraph("Epic Theme", cell_header_style),
-            Paragraph("Type", cell_header_style),
-            Paragraph("Delivered Topic (Commercial Summary)", cell_header_style),
-            Paragraph("Release Version", cell_header_style)
+            Paragraph("Key", cell_header_style),
+            Paragraph("Epic", cell_header_style),
+            Paragraph("Summary", cell_header_style),
+            Paragraph("Fix Version", cell_header_style)
         ]]
         
         sorted_topics = sort_items_by_type_and_epic(topics_ov)
@@ -1654,14 +1651,13 @@ def build_release_notes_pdf(overview_df, outlook_df):
             table_data.append([
                 Paragraph(str(row['Key']), cell_body_bold_style),
                 Paragraph(str(row['Epic']), cell_body_style),
-                Paragraph(str(row.get('Type', 'User Story')), cell_body_bold_style),
                 Paragraph(str(row['Summary']), cell_body_style),
                 Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "General", cell_body_style)
             ])
             
         changelog_table = Table(
             table_data,
-            colWidths=[60, 90, 70, 204, 80]
+            colWidths=[60, 90, 274, 80]
         )
         changelog_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
@@ -1685,10 +1681,10 @@ def build_release_notes_pdf(overview_df, outlook_df):
     story.append(Paragraph("Resolved Bugs", sub_section_title_style))
     if not bugs_ov.empty:
         bug_data = [[
-            Paragraph("Reference", cell_header_style),
-            Paragraph("Epic Theme", cell_header_style),
-            Paragraph("Resolved Bug (Commercial Capability)", cell_header_style),
-            Paragraph("Release Version", cell_header_style)
+            Paragraph("Key", cell_header_style),
+            Paragraph("Epic", cell_header_style),
+            Paragraph("Summary", cell_header_style),
+            Paragraph("Fix Version", cell_header_style)
         ]]
         
         sorted_bugs = bugs_ov.sort_values("Epic")
@@ -1734,13 +1730,12 @@ def build_release_notes_pdf(overview_df, outlook_df):
     
     if not topics_ot.empty:
         # Col Widths: Total = 504pt
-        # Reference: 60pt, Epic Theme: 90pt, Type: 70pt, Delivered Capability: 204pt, Release Version: 80pt
+        # Reference: 60pt, Epic Theme: 90pt, Upcoming Improvement: 274pt, Target Version: 80pt
         table_data_upcoming = [[
-            Paragraph("Reference", cell_header_style),
-            Paragraph("Epic Theme", cell_header_style),
-            Paragraph("Type", cell_header_style),
-            Paragraph("Upcoming Improvement Description", cell_header_style),
-            Paragraph("Target Version", cell_header_style)
+            Paragraph("Key", cell_header_style),
+            Paragraph("Epic", cell_header_style),
+            Paragraph("Summary", cell_header_style),
+            Paragraph("Fix Version", cell_header_style)
         ]]
         
         sorted_outlook = sort_items_by_type_and_epic(topics_ot)
@@ -1749,14 +1744,13 @@ def build_release_notes_pdf(overview_df, outlook_df):
             table_data_upcoming.append([
                 Paragraph(str(row['Key']), cell_body_bold_style),
                 Paragraph(str(row['Epic']), cell_body_style),
-                Paragraph(str(row.get('Type', 'User Story')), cell_body_bold_style),
                 Paragraph(str(row['Summary']), cell_body_style),
                 Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
             ])
             
         upcoming_table = Table(
             table_data_upcoming,
-            colWidths=[60, 90, 70, 204, 80]
+            colWidths=[60, 90, 274, 80]
         )
         upcoming_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
@@ -1780,10 +1774,10 @@ def build_release_notes_pdf(overview_df, outlook_df):
     story.append(Paragraph("Upcoming Bugs", sub_section_title_style))
     if not bugs_ot.empty:
         bug_data_upcoming = [[
-            Paragraph("Reference", cell_header_style),
-            Paragraph("Epic Theme", cell_header_style),
-            Paragraph("Planned Bug (Commercial Description)", cell_header_style),
-            Paragraph("Target Version", cell_header_style)
+            Paragraph("Key", cell_header_style),
+            Paragraph("Epic", cell_header_style),
+            Paragraph("Summary", cell_header_style),
+            Paragraph("Fix Version", cell_header_style)
         ]]
         
         sorted_outlook_bugs = bugs_ot.sort_values("Epic")
@@ -2068,6 +2062,12 @@ elif st.session_state.active_tab == "✍️ Workbook":
             "🔮 Outlook Dataset (What We Will Do next)"
         ])
         
+        # Ensure 'Select' column is initialized
+        if st.session_state.overview_df is not None and 'Select' not in st.session_state.overview_df.columns:
+            st.session_state.overview_df.insert(0, 'Select', False)
+        if st.session_state.outlook_df is not None and 'Select' not in st.session_state.outlook_df.columns:
+            st.session_state.outlook_df.insert(0, 'Select', False)
+        
         # Overview Dataset Workspace
         with work_subtab_ov:
             st.markdown("#### 🚀 Delivered Sprint Deliverables (Overview)")
@@ -2077,24 +2077,52 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 st.warning("Overview dataset is empty. Load it from Step 1.")
             else:
                 col_cfg_ov = {
-                    "Key": st.column_config.TextColumn("Ref Key 🔑", disabled=True),
+                    "Select": st.column_config.CheckboxColumn("Select 🗑️", default=False, width="small"),
+                    "Key": st.column_config.TextColumn("Key 🔑", disabled=False),
                     "Type": st.column_config.SelectboxColumn("Type 🏷️", options=["User Story", "Task", "Technical Task", "Bug"], width="medium", default="User Story"),
-                    "Summary": st.column_config.TextColumn("Delivered Item (Commercial Summary) ✍️", width="large"),
-                    "Epic": st.column_config.TextColumn("Epic Initiative 🎯", width="medium"),
+                    "Summary": st.column_config.TextColumn("Summary ✍️", width="large"),
+                    "Epic": st.column_config.TextColumn("Epic 🎯", width="medium"),
                     "Status": st.column_config.SelectboxColumn("Status 🚥", options=["To Do", "In Progress", "Done", "Blocked", "Open", "Closed"], width="small"),
-                    "Fix Version": st.column_config.TextColumn("Version 📦", width="small"),
-                    "Assignee": st.column_config.TextColumn("Demo Presenter 👤", width="medium"),
+                    "Fix Version": st.column_config.TextColumn("Fix Version 📦", width="small"),
+                    "Assignee": st.column_config.TextColumn("Responsible 👤", width="medium"),
                     "Demo": st.column_config.CheckboxColumn("Demo 📌", default=False, width="small"),
                     "Outlook": st.column_config.TextColumn("Item Outlook / Comments 🔮", width="large"),
                     "Sprint Review": st.column_config.CheckboxColumn("Sprint Review 📋", default=True, width="small"),
                     "Release Notes": st.column_config.CheckboxColumn("Release Notes 📣", default=True, width="small")
                 }
                 
-                st.info("💡 **Tip:** To delete a row from the table, select it by clicking the checkbox on the far left (next to the row number) and press the **Delete** or **Backspace** key on your keyboard.")
-
+                # Check selection state dynamically
+                has_selected_ov = bool(st.session_state.overview_df["Select"].any())
                 
-                edited_ov = st.data_editor(
+                # Compact controls
+                ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([1.5, 9, 1.5])
+                with ctrl_col1:
+                    if st.button("🗑️ Delete", key="btn_del_ov", use_container_width=True, disabled=not has_selected_ov):
+                        st.session_state.overview_df = st.session_state.overview_df[
+                            st.session_state.overview_df["Select"] == False
+                        ].reset_index(drop=True)
+                        st.toast("Deleted selected rows!", icon="🗑️")
+                        st.rerun()
+                
+                with ctrl_col2:
+                    sc_col1, sc_col2 = st.columns(2)
+                    with sc_col1:
+                        sort_col = st.selectbox("Sort by:", ["🔍 Sort by...", "Key", "Epic", "Status", "Type", "Fix Version"], key="sort_ov_col", label_visibility="collapsed")
+                    with sc_col2:
+                        sort_dir = st.selectbox("Order:", ["Ascending", "Descending"], key="sort_ov_dir", label_visibility="collapsed")
+                
+                with ctrl_col3:
+                    if st.button("🔄 Sort", key="btn_sort_ov", use_container_width=True, disabled=(sort_col == "🔍 Sort by...")):
+                        ascending = (sort_dir == "Ascending")
+                        st.session_state.overview_df = st.session_state.overview_df.sort_values(
+                            by=sort_col, ascending=ascending
+                        ).reset_index(drop=True)
+                        # Reset selection state
+                        st.session_state.overview_df["Select"] = False
+                        st.toast("Workbook Sorted!", icon="🔄")
+                        st.rerun()
 
+                edited_ov = st.data_editor(
                     st.session_state.overview_df,
                     num_rows="dynamic",
                     use_container_width=True,
@@ -2116,22 +2144,50 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 st.warning("Outlook dataset is empty. Load it from Step 1.")
             else:
                 col_cfg_ot = {
-                    "Key": st.column_config.TextColumn("Ref Key 🔑", disabled=True),
+                    "Select": st.column_config.CheckboxColumn("Select 🗑️", default=False, width="small"),
+                    "Key": st.column_config.TextColumn("Key 🔑", disabled=False),
                     "Type": st.column_config.SelectboxColumn("Type 🏷️", options=["User Story", "Task", "Technical Task", "Bug"], width="medium", default="User Story"),
-                    "Summary": st.column_config.TextColumn("Planned Future Item (Commercial Summary) ✍️", width="large"),
-                    "Epic": st.column_config.TextColumn("Epic Initiative 🎯", width="medium"),
+                    "Summary": st.column_config.TextColumn("Summary ✍️", width="large"),
+                    "Epic": st.column_config.TextColumn("Epic 🎯", width="medium"),
                     "Status": st.column_config.SelectboxColumn("Status 🚥", options=["To Do", "In Progress", "Done", "Blocked", "Open", "Closed"], width="small"),
-                    "Fix Version": st.column_config.TextColumn("Target Version 📦", width="small"),
-                    "Assignee": st.column_config.TextColumn("Assignee Owner 👤", width="medium"),
+                    "Fix Version": st.column_config.TextColumn("Fix Version 📦", width="small"),
+                    "Assignee": st.column_config.TextColumn("Responsible 👤", width="medium"),
                     "Sprint Review": st.column_config.CheckboxColumn("Sprint Review 📋", default=True, width="small"),
                     "Release Notes": st.column_config.CheckboxColumn("Release Notes 📣", default=True, width="small")
                 }
                 
-                st.info("💡 **Tip:** To delete a row from the table, select it by clicking the checkbox on the far left (next to the row number) and press the **Delete** or **Backspace** key on your keyboard.")
-
+                # Check selection state dynamically
+                has_selected_ot = bool(st.session_state.outlook_df["Select"].any())
                 
-                edited_ot = st.data_editor(
+                # Compact controls
+                ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([1.5, 9, 1.5])
+                with ctrl_col1:
+                    if st.button("🗑️ Delete", key="btn_del_ot", use_container_width=True, disabled=not has_selected_ot):
+                        st.session_state.outlook_df = st.session_state.outlook_df[
+                            st.session_state.outlook_df["Select"] == False
+                        ].reset_index(drop=True)
+                        st.toast("Deleted selected rows!", icon="🗑️")
+                        st.rerun()
+                
+                with ctrl_col2:
+                    sc_col1_ot, sc_col2_ot = st.columns(2)
+                    with sc_col1_ot:
+                        sort_col = st.selectbox("Sort by:", ["🔍 Sort by...", "Key", "Epic", "Status", "Type", "Fix Version"], key="sort_ot_col", label_visibility="collapsed")
+                    with sc_col2_ot:
+                        sort_dir = st.selectbox("Order:", ["Ascending", "Descending"], key="sort_ot_dir", label_visibility="collapsed")
+                
+                with ctrl_col3:
+                    if st.button("🔄 Sort", key="btn_sort_ot", use_container_width=True, disabled=(sort_col == "🔍 Sort by...")):
+                        ascending = (sort_dir == "Ascending")
+                        st.session_state.outlook_df = st.session_state.outlook_df.sort_values(
+                            by=sort_col, ascending=ascending
+                        ).reset_index(drop=True)
+                        # Reset selection state
+                        st.session_state.outlook_df["Select"] = False
+                        st.toast("Workbook Sorted!", icon="🔄")
+                        st.rerun()
 
+                edited_ot = st.data_editor(
                     st.session_state.outlook_df,
                     num_rows="dynamic",
                     use_container_width=True,
@@ -2190,7 +2246,7 @@ elif st.session_state.active_tab == "🎨 Branding":
             num_rows="dynamic",
             use_container_width=True,
             column_config={
-                "Version": st.column_config.TextColumn("Release Version 📦", width="small", default="v1.3.0"),
+                "Version": st.column_config.TextColumn("Fix Version 📦", width="small", default="v1.3.0"),
                 "Target Date": st.column_config.TextColumn("Target Date 📅", width="small", default="2026-06-30"),
                 "Comments": st.column_config.TextColumn("Highlights / Comments 💬", width="large")
             },

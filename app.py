@@ -1,5 +1,13 @@
 import streamlit as st
 import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv(override=True)
+default_primary_color = os.getenv("PRIMARY_COLOR", "#3B82F6")
+if 'primary_color' not in st.session_state or st.session_state.get('prev_env_color') != default_primary_color:
+    st.session_state.primary_color = default_primary_color
+    st.session_state.prev_env_color = default_primary_color
 
 # 1. Define the page objects first so they are globally accessible
 planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner", icon="🎯")
@@ -7,6 +15,7 @@ review_page = st.Page("tools/2_Sprint_Review_Release_Notes.py", title="Sprint & 
 
 # 2. Define the Home Page rendering function
 def show_home():
+
     # Custom CSS for Premium Dark Mode Theme matching all tools
     st.markdown("""
         <style>
@@ -81,7 +90,7 @@ def show_home():
                 margin-bottom: 10px;
             }
             
-            /* Style st.page_link to be a premium blue pill button inside the card container */
+            /* Style st.page_link to be a premium pill button inside the card container */
             div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"],
             div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] a,
             div[data-testid="column"]:has(.hub-card) .stPageLink,

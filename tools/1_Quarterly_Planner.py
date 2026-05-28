@@ -3,7 +3,14 @@ import pandas as pd
 import plotly.express as px
 import re
 import os
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv(override=True)
+default_primary_color = os.getenv("PRIMARY_COLOR", "#3B82F6")
+if 'primary_color' not in st.session_state or st.session_state.get('prev_env_color') != default_primary_color:
+    st.session_state.primary_color = default_primary_color
+    st.session_state.prev_env_color = default_primary_color
 
 if 'selected_epic_key' not in st.session_state:
     st.session_state.selected_epic_key = None
@@ -740,14 +747,14 @@ if uploaded_file:
             st.markdown('### 👀 Gantt View Mode')
             
             # Inject CSS specifically for the radio buttons to change their text color
-            st.markdown("""
+            st.markdown(f"""
                 <style>
                 /* Apunta a las etiquetas del radio button */
-                div.stRadio > div[role="radiogroup"] p {
-                    color: #60A5FA !important; /* Azul claro / Accent */
+                div.stRadio > div[role="radiogroup"] p {{
+                    color: {primary_color} !important; /* Accent */
                     font-weight: 600 !important;
                     font-size: 1.05rem !important;
-                }
+                }}
                 </style>
             """, unsafe_allow_html=True)
             
