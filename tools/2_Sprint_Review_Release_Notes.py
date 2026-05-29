@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from PIL import Image as PILImage
 
 # ReportLab imports for beautiful PDF generation
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -129,6 +129,11 @@ if 'ov_sprint_num' not in st.session_state:
     st.session_state.ov_sprint_num = default_ov_sprint_num
 if 'ot_sprint_num' not in st.session_state:
     st.session_state.ot_sprint_num = default_ot_sprint_num
+
+if 'extra_table_df' not in st.session_state:
+    st.session_state.extra_table_df = None
+if 'extra_table_title' not in st.session_state:
+    st.session_state.extra_table_title = ""
 
 
 # ---------------------------------------------------------
@@ -783,8 +788,43 @@ def sort_items_by_type_and_epic(df):
     return df_copy
 
 # ---------------------------------------------------------
-# 5. PDF Generation Custom Canvas (Header, Footer, Branding)
+# 5. PDF Generation Custom Canvas & Background Callbacks (Header, Footer, Branding)
 # ---------------------------------------------------------
+def draw_background_landscape(canvas_obj, doc_obj):
+    primary_color_hex = st.session_state.primary_color
+    primary_color = hex_to_reportlab_color(primary_color_hex)
+    
+    canvas_obj.saveState()
+    width, height = doc_obj.pagesize
+    
+    # Subtle corporate background color fill
+    canvas_obj.setFillColor(colors.HexColor("#F8FAFC"))
+    canvas_obj.rect(0, 0, width, height, stroke=0, fill=1)
+    
+    # Solid vertical branding accent band on the far left edge
+    canvas_obj.setFillColor(primary_color)
+    canvas_obj.rect(0, 0, 8, height, stroke=0, fill=1)
+    
+    if doc_obj.page == 1:
+        # Cover page background frame:
+        # Top banner of primary color
+        canvas_obj.setFillColor(primary_color)
+        canvas_obj.rect(8, height - 20, width - 8, 20, stroke=0, fill=1)
+        
+        # Dark gray bottom bar for footer metadata
+        canvas_obj.setFillColor(colors.HexColor("#E2E8F0"))
+        canvas_obj.rect(8, 0, width - 8, 30, stroke=0, fill=1)
+    else:
+        # Content slide top header banner background
+        canvas_obj.setFillColor(colors.white)
+        canvas_obj.rect(8, height - 48, width - 8, 48, stroke=0, fill=1)
+        
+        canvas_obj.setStrokeColor(colors.HexColor("#E2E8F0"))
+        canvas_obj.setLineWidth(1)
+        canvas_obj.line(8, height - 48, width, height - 48)
+        
+    canvas_obj.restoreState()
+
 class NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -803,10 +843,6 @@ class NumberedCanvas(canvas.Canvas):
         super().save()
 
     def draw_page_decorations(self, page_count):
-        if self._pageNumber == 1:
-            # Page 1 is the starting cover page. Skip standard headers/footers drawing!
-            return
-            
         primary_color_hex = st.session_state.primary_color
         primary_color = hex_to_reportlab_color(primary_color_hex)
         project_name = st.session_state.project_name
@@ -814,57 +850,88 @@ class NumberedCanvas(canvas.Canvas):
         
         self.saveState()
         
-        # 1. Header (Common to all pages)
-        self.setFont("Helvetica-Bold", 10)
+        # Get dynamic page dimensions
+        width, height = self._pagesize
+        is_landscape = width > height
+        
+        if is_landscape:
+            # --- LANDSCAPE SLIDES SETUP ---
+            if self._pageNumber == 1:
+                # Page 1 is the starting cover page.
+                self.restoreState()
+                return
+                
+            right_margin = width - 54
+            top_header_y = height - 28
+            logo_y = height - 36
+            logo_x = right_margin - 68
+            
+        else:
+            # --- STANDARD PORTRAIT PORTRAIT SETUP ---
+            if self._pageNumber == 1:
+                self.restoreState()
+                return
+                
+            right_margin = width - 54
+            top_header_y = height - 42
+            line_header_y = height - 52
+            logo_y = height - 35
+            logo_x = right_margin - 68
+            
+            # Horizontal branding separator line
+            self.setStrokeColor(primary_color)
+            self.setLineWidth(1)
+            self.line(54, line_header_y, right_margin, line_header_y)
+            
+        # 2. Draw Header Content
+        self.setFont("Helvetica-Bold", 9.5)
         self.setFillColor(primary_color)
-        self.drawString(54, 755, project_name.upper())
+        self.drawString(54, top_header_y, project_name.upper())
         
-        self.setFont("Helvetica", 9)
+        self.setFont("Helvetica", 8.5)
         self.setFillColor(colors.HexColor("#64748B"))
-        
-        # Date on the right
-        from datetime import datetime
-        current_date = datetime.now().strftime("%d-%m-%Y")
-        self.drawRightString(558, 755, f"Date: {current_date}")
-        
-        # Horizontal branding separator line
-        self.setStrokeColor(primary_color)
-        self.setLineWidth(1)
-        self.line(54, 745, 558, 745)
         
         # Draw logo image in header if loaded
         if logo_path and os.path.exists(logo_path):
             try:
-                self.drawImage(logo_path, 490, 762, width=68, height=22, mask='auto', preserveAspectRatio=True)
+                self.drawImage(logo_path, logo_x, logo_y, width=68, height=22, mask='auto', preserveAspectRatio=True)
             except Exception:
                 pass
                 
-        # 2. Footer (Common to all pages)
+        # 3. Draw Footer Content
         self.setStrokeColor(colors.HexColor("#CBD5E1"))
         self.setLineWidth(0.5)
-        self.line(54, 50, 558, 50)
+        self.line(54, 50, right_margin, 50)
         
-        self.setFont("Helvetica", 8)
+        self.setFont("Helvetica", 8.5)
         self.setFillColor(colors.HexColor("#94A3B8"))
-        self.drawRightString(558, 38, f"Page {self._pageNumber} of {page_count}")
+        self.drawRightString(right_margin, 36, f"Page {self._pageNumber} of {page_count}")
+        
+        # Date in the footer on the left
+        from datetime import datetime
+        current_date = datetime.now().strftime("%d-%m-%Y")
+        self.drawString(54, 36, f"Date: {current_date}")
         
         self.restoreState()
 
 # Helper to build "Apartado de Demos" block (common to both PDFs if items are selected)
-def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None):
+def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None, is_landscape=False):
     demo_items = df[df["Demo"] == True] if "Demo" in df.columns else pd.DataFrame()
     if demo_items.empty:
         return []
-        
     block_elements = []
-    
     # Custom styling
+    # Let's adjust sizes for landscape presentation grade view
+    font_size_header = 10 if is_landscape else 9
+    font_size_body = 9.5 if is_landscape else 8.5
+    padding_val = 9 if is_landscape else 6
+    
     section_title_style = ParagraphStyle(
         'DemoSecTitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=13,
-        leading=16,
+        fontSize=16 if is_landscape else 13,
+        leading=20 if is_landscape else 16,
         textColor=primary_color,
         spaceBefore=18,
         spaceAfter=6
@@ -874,8 +941,8 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None):
         'DemoIntro',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=8.5,
-        leading=12,
+        fontSize=10 if is_landscape else 8.5,
+        leading=14 if is_landscape else 12,
         textColor=colors.HexColor("#475569"),
         spaceAfter=10
     )
@@ -884,8 +951,8 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None):
         'DemoCellHeader',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=9,
-        leading=11,
+        fontSize=font_size_header,
+        leading=font_size_header + 3,
         textColor=colors.white
     )
     
@@ -893,8 +960,8 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None):
         'DemoCellBody',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=8.5,
-        leading=11.5,
+        fontSize=font_size_body,
+        leading=font_size_body + 3,
         textColor=colors.HexColor("#1E293B")
     )
     
@@ -902,8 +969,8 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None):
         'DemoCellBodyBold',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=8.5,
-        leading=11.5,
+        fontSize=font_size_body,
+        leading=font_size_body + 3,
         textColor=colors.HexColor("#1E293B")
     )
     
@@ -911,7 +978,7 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None):
         block_elements.append(Paragraph("Product Demos", sub_section_style))
     else:
         block_elements.append(Paragraph("Product Demos", section_title_style))
-
+ 
     block_elements.append(Paragraph(
         "The following live product demonstrations have been scheduled. The listed feature owners will present these deliverables:",
         intro_style
@@ -934,11 +1001,15 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None):
             Paragraph(presenter, cell_body_bold_style)
         ])
         
-    # Col Widths: Total = 504pt
-    # Ref: 64pt, Funcionalidad: 200pt, Epic: 120pt, Presentador: 120pt
+    # Col Widths: Total = 504pt (Portrait) or 684pt (Landscape)
+    if is_landscape:
+        col_widths = [64, 300, 160, 160]
+    else:
+        col_widths = [64, 200, 120, 120]
+        
     demo_table = Table(
         table_data,
-        colWidths=[64, 200, 120, 120]
+        colWidths=col_widths
     )
     
     demo_table.setStyle(TableStyle([
@@ -946,12 +1017,12 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None):
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ('LEFTPADDING', (0, 0), (-1, -1), 7),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 7),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F1F5F9")]),
+        ('TOPPADDING', (0, 0), (-1, -1), padding_val),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), padding_val),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.8 if is_landscape else 0.5, colors.HexColor("#E2E8F0") if is_landscape else colors.HexColor("#CBD5E1")),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
     ]))
     
     block_elements.append(demo_table)
@@ -960,18 +1031,22 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None):
     return [KeepTogether(block_elements)]
 
 # Helper to build Target Release versions table block in PDFs (NEW requested table)
-def build_next_releases_pdf_block(df, primary_color, styles):
+def build_next_releases_pdf_block(df, primary_color, styles, is_landscape=False):
     if df is None or df.empty:
         return []
         
     block_elements = []
     
+    font_size_header = 10 if is_landscape else 8.5
+    font_size_body = 9.5 if is_landscape else 8.0
+    padding_val = 9 if is_landscape else 5
+    
     cell_header_style = ParagraphStyle(
         'RelCellHeader',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=8.5,
-        leading=11,
+        fontSize=font_size_header,
+        leading=font_size_header + 3,
         textColor=colors.white
     )
     
@@ -979,8 +1054,8 @@ def build_next_releases_pdf_block(df, primary_color, styles):
         'RelCellBody',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=8,
-        leading=11,
+        fontSize=font_size_body,
+        leading=font_size_body + 3,
         textColor=colors.HexColor("#1E293B")
     )
     
@@ -988,8 +1063,8 @@ def build_next_releases_pdf_block(df, primary_color, styles):
         'RelCellBodyBold',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=8.0,
-        leading=11,
+        fontSize=font_size_body,
+        leading=font_size_body + 3,
         textColor=colors.HexColor("#1E293B")
     )
     
@@ -1010,11 +1085,16 @@ def build_next_releases_pdf_block(df, primary_color, styles):
             Paragraph(comments, cell_body_style)
         ])
         
-    # Col Widths: Total = 504pt
-    # Version: 80pt, Date: 80pt, Comments: 344pt
+    # Col Widths: Total = 504pt (Portrait) or 684pt (Landscape)
+    # Version: 80pt/100pt, Date: 80pt/100pt, Comments: 344pt/484pt
+    if is_landscape:
+        col_widths = [100, 100, 484]
+    else:
+        col_widths = [80, 80, 344]
+        
     rel_table = Table(
         table_data,
-        colWidths=[80, 80, 344]
+        colWidths=col_widths
     )
     
     rel_table.setStyle(TableStyle([
@@ -1022,11 +1102,11 @@ def build_next_releases_pdf_block(df, primary_color, styles):
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-        ('LEFTPADDING', (0, 0), (-1, -1), 6),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+        ('TOPPADDING', (0, 0), (-1, -1), padding_val),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), padding_val),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.8 if is_landscape else 0.5, colors.HexColor("#E2E8F0") if is_landscape else colors.HexColor("#CBD5E1")),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
     ]))
     
@@ -1035,33 +1115,119 @@ def build_next_releases_pdf_block(df, primary_color, styles):
     
     return block_elements
 
+# Helper function to map Jira status strings to clean color-coded status bullets (PDF safe)
+def format_status_with_emoji(status_str):
+    if not status_str or not isinstance(status_str, str):
+        return '<font color="#3B82F6">●</font>'
+        
+    st_clean = status_str.strip().lower()
+    
+    if st_clean in ['done', 'closed', 'resolved', 'complete']:
+        return '<font color="#22C55E">●</font>'
+    elif st_clean in ['in progress', 'development', 'testing', 'review', 'in dev', 'dev', 'qa']:
+        return '<font color="#F59E0B">●</font>'
+    elif st_clean in ['blocked', 'on hold', 'impediment', 'delayed', 'hold']:
+        return '<font color="#EF4444">●</font>'
+    elif st_clean in ['to do', 'open', 'backlog', 'selected for development', 'new']:
+        return '<font color="#3B82F6">●</font>'
+    else:
+        return '<font color="#3B82F6">●</font>'
+
+# Helper function to dynamically build and format an uploaded custom table (non-Jira) in both landscape and portrait PDFs
+def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=False):
+    if df is None or df.empty:
+        return []
+        
+    block_elements = []
+    
+    # Dynamic styling matching the presentation grade
+    font_size_header = 10 if is_landscape else 8.5
+    font_size_body = 9.5 if is_landscape else 8.0
+    padding_val = 9 if is_landscape else 5
+    
+    cell_header_style = ParagraphStyle(
+        'ExtraHeader',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=font_size_header,
+        leading=font_size_header + 3,
+        textColor=colors.white
+    )
+    
+    cell_body_style = ParagraphStyle(
+        'ExtraBody',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=font_size_body,
+        leading=font_size_body + 3,
+        textColor=colors.HexColor("#1E293B")
+    )
+    
+    table_data = []
+    
+    # Column names as header
+    header_row = [Paragraph(str(col), cell_header_style) for col in df.columns]
+    table_data.append(header_row)
+    
+    # Data rows
+    for _, row in df.iterrows():
+        row_data = [Paragraph(str(val), cell_body_style) for val in row]
+        table_data.append(row_data)
+        
+    # Compute columns widths dynamically to fill the page printable width
+    total_width = 684 if is_landscape else 504
+    num_cols = len(df.columns)
+    col_widths = [total_width / num_cols] * num_cols
+    
+    extra_table = Table(
+        table_data,
+        colWidths=col_widths
+    )
+    
+    extra_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), primary_color),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), padding_val),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), padding_val),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.8 if is_landscape else 0.5, colors.HexColor("#E2E8F0") if is_landscape else colors.HexColor("#CBD5E1")),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+    ]))
+    
+    block_elements.append(extra_table)
+    block_elements.append(Spacer(1, 15))
+    return block_elements
+
 # ---------------------------------------------------------
 # 6. PDF Builder: Sprint Review PDF (Consolidated Single Table)
 # ---------------------------------------------------------
 def build_sprint_review_pdf(overview_df, outlook_df):
     pdf_buffer = io.BytesIO()
     
-    # Setup document geometry (standard letter size, 0.75" margins)
+    # Setup document geometry for landscape presentation slide format
     doc = SimpleDocTemplate(
         pdf_buffer,
-        pagesize=letter,
+        pagesize=landscape(letter),
         leftMargin=54,
         rightMargin=54,
-        topMargin=72,
-        bottomMargin=72
+        topMargin=54,
+        bottomMargin=54
     )
     
     styles = getSampleStyleSheet()
     primary_color_hex = st.session_state.primary_color
     primary_color = hex_to_reportlab_color(primary_color_hex)
     
-    # Custom styles
+    # Custom styles (optimized for large, presentation-grade text size)
     title_style = ParagraphStyle(
         'DocTitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=24,
-        leading=28,
+        fontSize=28,
+        leading=32,
         textColor=primary_color,
         spaceAfter=12
     )
@@ -1070,8 +1236,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'DocSubtitle',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=11,
-        leading=15,
+        fontSize=12,
+        leading=16,
         textColor=colors.HexColor("#475569"),
         spaceAfter=25
     )
@@ -1080,8 +1246,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'SecTitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=14,
-        leading=18,
+        fontSize=16,
+        leading=20,
         textColor=primary_color,
         spaceBefore=15,
         spaceAfter=8
@@ -1091,8 +1257,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'CellHeader',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=8.5,
-        leading=11,
+        fontSize=10,
+        leading=13,
         textColor=colors.white
     )
     
@@ -1100,8 +1266,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'CellBody',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=8,
-        leading=10.5,
+        fontSize=9.5,
+        leading=12.5,
         textColor=colors.HexColor("#1E293B")
     )
     
@@ -1109,8 +1275,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'CellBodyBold',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=8,
-        leading=10.5,
+        fontSize=9.5,
+        leading=12.5,
         textColor=colors.HexColor("#1E293B")
     )
     
@@ -1118,14 +1284,38 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'SubSecTitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=11,
-        leading=14,
+        fontSize=13,
+        leading=17,
         textColor=colors.HexColor("#475569"),
         spaceBefore=12,
         spaceAfter=5
     )
 
-    # Cover Page Styles
+    cell_header_center_style = ParagraphStyle(
+        'CellHeaderCenter',
+        parent=cell_header_style,
+        alignment=1 # Center
+    )
+    
+    cell_body_center_style = ParagraphStyle(
+        'CellBodyCenter',
+        parent=cell_body_style,
+        alignment=1 # Center
+    )
+    
+    legend_style = ParagraphStyle(
+        'LegendStyle',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=8.5,
+        leading=11,
+        textColor=colors.HexColor("#64748B"),
+        alignment=2, # Right
+        spaceBefore=2,
+        spaceAfter=10
+    )
+
+    # Cover Page Styles (optimized for landscape presentation)
     cover_project_style = ParagraphStyle(
         'CoverProject',
         parent=styles['Normal'],
@@ -1134,52 +1324,52 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         leading=16,
         textColor=colors.HexColor("#64748B"),
         alignment=1, # Center
-        spaceAfter=15
+        spaceAfter=8
     )
     
     cover_title_style = ParagraphStyle(
         'CoverTitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=32,
-        leading=38,
+        fontSize=30,
+        leading=34,
         textColor=primary_color,
         alignment=1, # Center
-        spaceAfter=10
+        spaceAfter=6
     )
     
     cover_subtitle_style = ParagraphStyle(
         'CoverSubtitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=18,
-        leading=22,
+        fontSize=16,
+        leading=20,
         textColor=colors.HexColor("#334155"),
         alignment=1, # Center
-        spaceAfter=25
+        spaceAfter=15
     )
     
     cover_date_style = ParagraphStyle(
         'CoverDate',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=10,
-        leading=14,
+        fontSize=9,
+        leading=13,
         textColor=colors.HexColor("#64748B"),
         alignment=1, # Center
-        spaceAfter=30
+        spaceAfter=15
     )
     
     cover_welcome_style = ParagraphStyle(
         'CoverWelcome',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=11,
-        leading=17,
+        fontSize=10,
+        leading=15,
         textColor=colors.HexColor("#475569"),
         alignment=1, # Center
-        spaceBefore=25,
-        spaceAfter=25
+        spaceBefore=15,
+        spaceAfter=15
     )
 
     story = []
@@ -1192,25 +1382,25 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     from datetime import datetime
     current_date = datetime.now().strftime("%d-%m-%Y")
     
-    story.append(Spacer(1, 40))
+    story.append(Spacer(1, 15))
     story.append(Paragraph(st.session_state.project_name.upper(), cover_project_style))
     story.append(Paragraph("Sprint Review", cover_title_style))
     story.append(Paragraph(f"Sprint: {sprint_num}", cover_subtitle_style))
     story.append(Paragraph(f"Date: {current_date}", cover_date_style))
-    story.append(Spacer(1, 15))
+    story.append(Spacer(1, 5))
     
     cover_image_path = st.session_state.cover_temp_path
     if cover_image_path and os.path.exists(cover_image_path):
         try:
             pil_img = PILImage.open(cover_image_path)
             orig_w, orig_h = pil_img.size
-            max_w = 400  # max width in points
-            max_h = 300  # max height in points
+            max_w = 320  # Optimized landscape cover width
+            max_h = 160  # Optimized landscape cover height
             scale = min(max_w / orig_w, max_h / orig_h)
             img = Image(cover_image_path, width=orig_w * scale, height=orig_h * scale)
             img.hAlign = 'CENTER'
             story.append(img)
-            story.append(Spacer(1, 15))
+            story.append(Spacer(1, 10))
         except Exception:
             pass
             
@@ -1221,13 +1411,9 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     story.append(PageBreak())
     # --- END OF COVER PAGE ---
     
-    # 1. Document Title
-    story.append(Paragraph("Sprint Review", title_style))
-    story.append(Paragraph("Delivered features and upcoming roadmap.", subtitle_style))
-    story.append(Spacer(1, 5))
-    
     # 2. Section 1: Overview
     story.append(Paragraph("Overview:", section_title_style))
+    story.append(Paragraph('<font color="#22C55E">●</font> Done &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#F59E0B">●</font> In Progress &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#EF4444">●</font> Blocked &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#3B82F6">●</font> To Do', legend_style))
     
     # 2a. Delivered Topics Sub-section
     story.append(Paragraph("Delivered Topics", sub_section_title_style))
@@ -1235,13 +1421,13 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     topics_ov, bugs_ov = split_bugs_and_topics(overview_df)
     
     if not topics_ov.empty:
-        # Col Widths: Total = 504pt
-        # Ref Key: 50pt, Epic: 90pt, Summary: 229pt, Status: 65pt, Fix Version: 70pt
+        # Col Widths: Total = 684pt (Landscape)
+        # Key: 60pt, Epic: 120pt, Summary: 359pt, Status: 50pt, Fix Version: 95pt
         table_data = [[
             Paragraph("Key", cell_header_style),
             Paragraph("Epic", cell_header_style),
             Paragraph("Summary", cell_header_style),
-            Paragraph("Status", cell_header_style),
+            Paragraph("Status", cell_header_center_style),
             Paragraph("Fix Version", cell_header_style)
         ]]
         
@@ -1252,24 +1438,25 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                 Paragraph(str(row['Key']), cell_body_bold_style),
                 Paragraph(str(row['Epic']), cell_body_style),
                 Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(str(row['Status']), cell_body_style),
+                Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
                 Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
             ])
             
         topics_table = Table(
             table_data,
-            colWidths=[50, 90, 229, 65, 70]
+            colWidths=[60, 120, 359, 50, 95]
         )
         topics_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (3, 0), (3, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('LEFTPADDING', (0, 0), (-1, -1), 6),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+            ('TOPPADDING', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 9),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
         ]))
         story.append(topics_table)
@@ -1281,11 +1468,13 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     # 2b. Resolved Bugs Sub-section
     story.append(Paragraph("Resolved Bugs", sub_section_title_style))
     if not bugs_ov.empty:
+        # Col Widths: Total = 684pt (Landscape)
+        # Key: 65pt, Epic: 140pt, Summary: 334pt, Status: 50pt, Fix Version: 95pt
         bug_data = [[
             Paragraph("Key", cell_header_style),
             Paragraph("Epic", cell_header_style),
             Paragraph("Summary", cell_header_style),
-            Paragraph("Status", cell_header_style),
+            Paragraph("Status", cell_header_center_style),
             Paragraph("Fix Version", cell_header_style)
         ]]
         
@@ -1296,24 +1485,25 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                 Paragraph(str(row['Key']), cell_body_bold_style),
                 Paragraph(str(row['Epic']), cell_body_style),
                 Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(str(row['Status']), cell_body_style),
+                Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
                 Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
             ])
             
         bugs_table = Table(
             bug_data,
-            colWidths=[55, 110, 194, 75, 70]
+            colWidths=[65, 140, 334, 50, 95]
         )
         bugs_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (3, 0), (3, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('LEFTPADDING', (0, 0), (-1, -1), 6),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+            ('TOPPADDING', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 9),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
         ]))
         story.append(bugs_table)
@@ -1324,14 +1514,24 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     
     # 2c. Product Demos Presenters (Moved before Outlook!)
     if overview_df is not None and not overview_df.empty:
-        demo_blocks = build_demos_pdf_block(overview_df, primary_color, styles, sub_section_style=sub_section_title_style)
+        demo_blocks = build_demos_pdf_block(overview_df, primary_color, styles, sub_section_style=sub_section_title_style, is_landscape=True)
         if demo_blocks:
             story.extend(demo_blocks)
             story.append(Spacer(1, 15))
-    
+    # Render custom extra table if loaded (before Outlook section)
+    if st.session_state.extra_table_df is not None:
+        story.append(PageBreak())
+        extra_title = st.session_state.extra_table_title if st.session_state.extra_table_title.strip() != "" else "Special Metrics Overview"
+        story.append(Paragraph(extra_title, section_title_style))
+        story.append(Spacer(1, 10))
+        extra_blocks = build_custom_extra_table_pdf_block(st.session_state.extra_table_df, primary_color, styles, is_landscape=True)
+        if extra_blocks:
+            story.extend(extra_blocks)
+            
     # 3. Section 2: Outlook (Page Break isolation)
     story.append(PageBreak())
     story.append(Paragraph("Outlook:", section_title_style))
+    story.append(Paragraph('<font color="#22C55E">●</font> Done &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#F59E0B">●</font> In Progress &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#EF4444">●</font> Blocked &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#3B82F6">●</font> To Do', legend_style))
     
     # 3a. Planned Topics Sub-section
     story.append(Paragraph("Planned Topics", sub_section_title_style))
@@ -1339,11 +1539,13 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     topics_ot, bugs_ot = split_bugs_and_topics(outlook_df)
     
     if not topics_ot.empty:
+        # Col Widths: Total = 684pt (Landscape)
+        # Key: 60pt, Epic: 120pt, Summary: 359pt, Status: 50pt, Fix Version: 95pt
         table_data_outlook = [[
             Paragraph("Key", cell_header_style),
             Paragraph("Epic", cell_header_style),
             Paragraph("Summary", cell_header_style),
-            Paragraph("Current Status", cell_header_style),
+            Paragraph("Status", cell_header_center_style),
             Paragraph("Fix Version", cell_header_style)
         ]]
         
@@ -1354,24 +1556,25 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                 Paragraph(str(row['Key']), cell_body_bold_style),
                 Paragraph(str(row['Epic']), cell_body_style),
                 Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(str(row['Status']), cell_body_style),
+                Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
                 Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
             ])
             
         outlook_table = Table(
             table_data_outlook,
-            colWidths=[50, 90, 229, 65, 70]
+            colWidths=[60, 120, 359, 50, 95]
         )
         outlook_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (3, 0), (3, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('LEFTPADDING', (0, 0), (-1, -1), 6),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+            ('TOPPADDING', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 9),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
         ]))
         story.append(outlook_table)
@@ -1383,11 +1586,13 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     # 3b. Planned Bugs Sub-section
     story.append(Paragraph("Planned Bugs", sub_section_title_style))
     if not bugs_ot.empty:
+        # Col Widths: Total = 684pt (Landscape)
+        # Key: 65pt, Epic: 140pt, Summary: 334pt, Status: 50pt, Fix Version: 95pt
         bug_data_outlook = [[
             Paragraph("Key", cell_header_style),
             Paragraph("Epic", cell_header_style),
             Paragraph("Summary", cell_header_style),
-            Paragraph("Status", cell_header_style),
+            Paragraph("Status", cell_header_center_style),
             Paragraph("Fix Version", cell_header_style)
         ]]
         
@@ -1398,24 +1603,25 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                 Paragraph(str(row['Key']), cell_body_bold_style),
                 Paragraph(str(row['Epic']), cell_body_style),
                 Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(str(row['Status']), cell_body_style),
+                Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
                 Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
             ])
             
         bugs_outlook_table = Table(
             bug_data_outlook,
-            colWidths=[55, 110, 194, 75, 70]
+            colWidths=[65, 140, 334, 50, 95]
         )
         bugs_outlook_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (3, 0), (3, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('LEFTPADDING', (0, 0), (-1, -1), 6),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+            ('TOPPADDING', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 9),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
         ]))
         story.append(bugs_outlook_table)
@@ -1423,15 +1629,15 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         story.append(Paragraph("No upcoming bugs planned.", cell_body_style))
         
     story.append(Spacer(1, 10))
-
+ 
     # 3c. Target Releases Sub-section (Moved inside Outlook!)
     story.append(Paragraph("Target Releases", sub_section_title_style))
-    rel_blocks = build_next_releases_pdf_block(st.session_state.next_release_df, primary_color, styles)
+    rel_blocks = build_next_releases_pdf_block(st.session_state.next_release_df, primary_color, styles, is_landscape=True)
     if rel_blocks:
         story.extend(rel_blocks)
         story.append(Spacer(1, 10))
         
-    doc.build(story, canvasmaker=NumberedCanvas)
+    doc.build(story, canvasmaker=NumberedCanvas, onFirstPage=draw_background_landscape, onLaterPages=draw_background_landscape)
     pdf_buffer.seek(0)
     return pdf_buffer
 
@@ -1717,8 +1923,16 @@ def build_release_notes_pdf(overview_df, outlook_df):
     else:
         story.append(Paragraph("No resolved bugs in this release.", cell_body_style))
         
-    story.append(Spacer(1, 15))
-    
+    # Render custom extra table if loaded (before Outlook section)
+    if st.session_state.extra_table_df is not None:
+        story.append(PageBreak())
+        extra_title = st.session_state.extra_table_title if st.session_state.extra_table_title.strip() != "" else "Special Metrics Overview"
+        story.append(Paragraph(extra_title, section_title_style))
+        story.append(Spacer(1, 10))
+        extra_blocks = build_custom_extra_table_pdf_block(st.session_state.extra_table_df, primary_color, styles, is_landscape=False)
+        if extra_blocks:
+            story.extend(extra_blocks)
+            
     # 4. Outlook Section (Page Break isolation)
     story.append(PageBreak())
     story.append(Paragraph("Outlook:", section_title_style))
@@ -2045,6 +2259,32 @@ if st.session_state.active_tab == "🔌 Ingestion":
                 st.rerun()
             except Exception as e:
                 st.error(f"Error parsing Outlook CSV: {str(e)}")
+
+    st.divider()
+    
+    # Ingestion of Additional Custom Report Tables (Not from Jira)
+    st.subheader("📊 Ingestion of Additional Custom Table (Optional)")
+    st.write("Upload an additional CSV file to render a custom table in a dedicated section/page of the document before Outlook.")
+    
+    col_add_t1, col_add_t2 = st.columns([1, 1])
+    with col_add_t1:
+        st.text_input("Additional Table Title:", value="Special Project Metrics", key="extra_table_title")
+    with col_add_t2:
+        up_extra = st.file_uploader("Upload Additional Table CSV File:", type=["csv"], key="uploader_extra")
+        if up_extra:
+            try:
+                extra_df = pd.read_csv(up_extra)
+                st.session_state.extra_table_df = extra_df
+                st.success("Additional custom table uploaded successfully!")
+            except Exception as e:
+                st.error(f"Error parsing Additional CSV: {str(e)}")
+                
+    if st.session_state.extra_table_df is not None:
+        st.markdown("##### 🔍 Uploaded Custom Table Preview")
+        st.dataframe(st.session_state.extra_table_df.head(5), use_container_width=True)
+        if st.button("🗑️ Remove Custom Table"):
+            st.session_state.extra_table_df = None
+            st.rerun()
 
 # ---------------------------------------------------------
 # STEP 2: Worktable Workspace (Tabbed Data Editor)
