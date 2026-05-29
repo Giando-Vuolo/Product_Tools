@@ -99,4 +99,4 @@ If you don't connect to a live Jira server and want to use the offline sandbox, 
 * `Milestone`: Set to `TRUE` to render a timeline milestone diamond.
 
 ---
-*Built with ❤️ to empower Product Teams.*
+*Built with ❤️ by Giando*
