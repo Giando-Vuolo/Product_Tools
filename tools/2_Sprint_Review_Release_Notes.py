@@ -35,6 +35,9 @@ default_conf_page = os.getenv("CONFLUENCE_PAGE", "Release Notes")
 default_project_name = os.getenv("PROJECT_NAME", "PO Tools Enterprise")
 default_primary_color = os.getenv("PRIMARY_COLOR", "#3B82F6")
 
+default_filename_sr = os.getenv("DEFAULT_FILENAME_SPRINT_REVIEW", "Sprint_Review_Report")
+default_filename_rn = os.getenv("DEFAULT_FILENAME_RELEASE_NOTES", "Release_Notes")
+
 default_release_notes_intro = os.getenv("RELEASE_NOTES_INTRO", """### Dear Users & Partners,
 
 We are excited to share the **Release Notes** for our latest development cycle. In this iteration, our engineering team focused on bolstering platform security, optimizing database transaction queries, and releasing crucial merchant billing integrations.
@@ -93,6 +96,10 @@ if 'outlook_df' not in st.session_state:
 
 if 'project_name' not in st.session_state:
     st.session_state.project_name = default_project_name
+if 'filename_sr' not in st.session_state:
+    st.session_state.filename_sr = default_filename_sr
+if 'filename_rn' not in st.session_state:
+    st.session_state.filename_rn = default_filename_rn
 if 'next_release_df' not in st.session_state:
     st.session_state.next_release_df = pd.DataFrame([
         {
@@ -2727,6 +2734,27 @@ elif st.session_state.active_tab == "🎨 Branding":
                             pass
                 st.session_state.cover_temp_path = None
 
+        # Document Export File Names Configuration (NEW requested configuration)
+        st.markdown("**📄 Document Export File Names Base**")
+        st.write("Customize default download file names (spaces will automatically be replaced by underscores):")
+        col_fn1, col_fn2 = st.columns(2)
+        with col_fn1:
+            fn_sr = st.text_input(
+                "Sprint Review Filename Base:",
+                value=st.session_state.filename_sr,
+                placeholder="Sprint_Review_Report"
+            )
+            if fn_sr != st.session_state.filename_sr:
+                st.session_state.filename_sr = fn_sr
+        with col_fn2:
+            fn_rn = st.text_input(
+                "Release Notes Filename Base:",
+                value=st.session_state.filename_rn,
+                placeholder="Release_Notes"
+            )
+            if fn_rn != st.session_state.filename_rn:
+                st.session_state.filename_rn = fn_rn
+
                 
         with col_br_right:
             st.markdown("**2. Release Notes Introduction (Rich Text / Markdown)**")
@@ -2798,10 +2826,12 @@ elif st.session_state.active_tab == "💾 Exporter":
             
             try:
                 sr_pdf = build_sprint_review_pdf(sr_ov_df, sr_ot_df)
+                clean_project_name = st.session_state.project_name.replace(' ', '_')
+                sr_filename = f"{st.session_state.filename_sr.strip().replace(' ', '_')}_{clean_project_name}.pdf" if st.session_state.filename_sr.strip() != "" else f"Sprint_Review_Report_{clean_project_name}.pdf"
                 st.download_button(
                     label="⬇️ Download PDF Sprint Review",
                     data=sr_pdf,
-                    file_name=f"Sprint_Review_Report_{st.session_state.project_name.replace(' ', '_')}.pdf",
+                    file_name=sr_filename,
                     mime="application/pdf",
                     use_container_width=True
                 )
@@ -2826,10 +2856,12 @@ elif st.session_state.active_tab == "💾 Exporter":
             
             try:
                 rn_pdf = build_release_notes_pdf(rn_ov_df, rn_ot_df)
+                clean_project_name = st.session_state.project_name.replace(' ', '_')
+                rn_filename = f"{st.session_state.filename_rn.strip().replace(' ', '_')}_{clean_project_name}.pdf" if st.session_state.filename_rn.strip() != "" else f"Release_Notes_{clean_project_name}.pdf"
                 st.download_button(
                     label="⬇️ Download PDF Release Notes",
                     data=rn_pdf,
-                    file_name=f"Release_Notes_{st.session_state.project_name.replace(' ', '_')}.pdf",
+                    file_name=rn_filename,
                     mime="application/pdf",
                     use_container_width=True
                 )
@@ -2901,10 +2933,12 @@ elif st.session_state.active_tab == "💾 Exporter":
                         # Compile selected PDF
                         if "Sprint Review" in target_doc:
                             pdf_data = build_sprint_review_pdf(sr_ov_df, sr_ot_df)
-                            filename = f"Sprint_Review_Report_{st.session_state.project_name.replace(' ', '_')}.pdf"
+                            clean_project_name = st.session_state.project_name.replace(' ', '_')
+                            filename = f"{st.session_state.filename_sr.strip().replace(' ', '_')}_{clean_project_name}.pdf" if st.session_state.filename_sr.strip() != "" else f"Sprint_Review_Report_{clean_project_name}.pdf"
                         else:
                             pdf_data = build_release_notes_pdf(rn_ov_df, rn_ot_df)
-                            filename = f"Release_Notes_{st.session_state.project_name.replace(' ', '_')}.pdf"
+                            clean_project_name = st.session_state.project_name.replace(' ', '_')
+                            filename = f"{st.session_state.filename_rn.strip().replace(' ', '_')}_{clean_project_name}.pdf" if st.session_state.filename_rn.strip() != "" else f"Release_Notes_{clean_project_name}.pdf"
                             
                         # Call helper
                         pdf_bytes = pdf_data.getvalue()
