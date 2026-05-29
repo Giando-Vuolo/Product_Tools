@@ -1,112 +1,102 @@
-# Product Owner Tools (PO Tools)
+# 🎯 Product Owner Tools (PO Tools)
 
-PO Tools is a Streamlit-based application designed to help Product Owners and Project Managers visualize, manage, and analyze Jira Epic and Task data interactively. 
+PO Tools is an intuitive, visual application designed specifically for **Product Owners, Product Managers, and Project Leaders** to visualize, manage, and analyze product backlogs and release roadmap datasets beautifully. 
 
-The application reads exports from Jira (or any standardized CSV) and transforms them into an intuitive, powerful dashboard featuring dynamic KPIs, Sprint Velocity tracking, and an advanced hierarchical Gantt chart.
-
-## 🚀 Key Features
-
-### 1. Advanced Interactive Gantt Chart
-A meticulously designed Gantt chart powered by Plotly that allows you to see the big picture without losing the details:
-- **Three Viewing Modes**:
-  - `Clusters`: High-level view showing only the summarized grouping layers.
-  - `Items`: Flat view showing all Epics individually without group headers.
-  - `All`: Full hierarchical tree view with Epics properly indented under their respective Clusters.
-- **Hierarchical Layout**: Clean left-aligned tree structure mimicking native desktop applications, showing the Jira Key, Epic Name, Cluster grouping, and the total item count.
-- **Milestone Support**: Automatically formats and visually distinguishes 0-day milestones on the timeline.
-- **Interactive Details**: Clicking any bar on the timeline automatically updates the "Epic Details" panel below to show full Jira context, descriptions, and metadata.
-
-### 2. Comprehensive Filtering
-Easily slice and dice your product backlog:
-- Filter by Quarters and Sprints.
-- Filter by Epics, Specific Jira Statuses, or Assignees.
-- Dynamic KPIs update in real-time based on your active filters.
-
-### 3. Sprint Velocity & Forecasting
-Visualize team performance over time with automated Sprint bar charts that contrast:
-- Completed Story Points
-- Incomplete / Rollover Points
-- Blocked items
-
-## 🛠️ Installation & Usage
-
-To get PO Tools up and running on your desktop, you can use the automated quick-start scripts or run it manually.
-
-### 🖥️ Desktop Quick Start (Recommended)
-
-The easiest way to run the application is to use the provided automated startup scripts. These will automatically check for a local virtual environment (`.venv`), create it if missing, install/upgrade the required dependencies (`streamlit`, `pandas`, `plotly`), and launch the server.
-
-> [!NOTE]
-> Once the server starts, a browser window will automatically open at `http://localhost:8501`. If it does not, you can manually open that address in your browser.
-
-#### 🍏 macOS & 🐧 Linux Desktop
-1. Open your **Terminal** app.
-2. Run the automated script:
-   ```bash
-   # Give execution permission to the script (only needed the first time)
-   chmod +x run.sh
-   
-   # Run the script
-   ./run.sh
-   ```
-
-   # 1. Navigate to your project directory
-cd /path/to/your/project
-# 2. Activate the pre-existing virtual environment
-source .venv/bin/activate
-# 3. Ensure the required packages are installed
-pip install streamlit pandas plotly
-# 4. Run the Streamlit application
-streamlit run app.py
-
-#### 🪟 Windows Desktop
-1. Open **Command Prompt** (`cmd`) or **PowerShell**.
-2. Run the batch script:
-   ```cmd
-   run.bat
-   ```
-   *(Or simply double-click the `run.bat` file in your Windows File Explorer!)*
+You can connect directly to your corporate **Jira Server / Cloud** to automatically extract delivered capabilities and upcoming features, customize branding theme colors, edit ticket roadmaps interactively in a high-fidelity workspace workbook, and export stunning presentation-grade **Release Notes PDFs** and **Sprint Review slide decks**.
 
 ---
 
-### ⚙️ Manual Installation & Launch (Advanced)
+## 🚀 Key Features
 
-If you prefer to configure the environment step-by-step manually, use the following commands:
+* **🔌 Dual Jira Backlog Ingestion**: Securely connect to your company Jira server using secure tokens to fetch live sprint roadmaps (or drag-and-drop local CSV files).
+* **✍️ Commercial Workspace Workbook**: Refine technical Jira summaries into elegant commercial feature descriptions, schedule live product demos with presenters, and toggle report targets.
+* **🎨 Visual Branding**: Customize document primary theme colors with premium corporate presets, upload corporate logos, and add custom welcome intros.
+* **💾 Export Presentation Slide Decks & PDFs**: Export compact, high-density, beautifully styled landscape slide presentation decks and portrait documents.
+* **📊 Interactive Gantt Chart & Velocity Reports**: Track delivery speed, complete/rollover story points, and visualize hierarchical timelines at a glance.
 
-1. **Prerequisites**: Ensure you have Python 3.9+ and `pip` installed.
-2. **Setup and Activate a Virtual Environment**:
+---
+
+## 🛠️ Easiest Setup & Launch (Zero Dev Knowledge Required)
+
+You do **not** need any coding skills or terminal experience to run PO Tools. Just follow these simple steps:
+
+### 1️⃣ Step 1: Install Python (If you don't have it)
+PO Tools requires Python to run. Installing it is quick and free:
+* **Windows**: Download the installer from the [official website](https://www.python.org/downloads/). 
+  > [!IMPORTANT]
+  > When installing on Windows, **make sure to check the box that says "Add Python.exe to PATH"** at the bottom of the installer window!
+* **macOS**: Python is usually pre-installed. If not, download and run the installer from the [official website](https://www.python.org/downloads/).
+
+### 2️⃣ Step 2: Configure Your Connection Settings (`.env`)
+Before launching, configure your corporate server details:
+1. Open the project folder on your computer.
+2. Find the file named `.env.example`.
+3. Make a copy of that file and rename the copy to `.env` (just `.env` with a dot at the beginning).
+4. Open the new `.env` file with any text editor (like **Notepad** on Windows or **TextEdit** on Mac).
+5. Edit the values to insert your actual company URLs and JIRA API token, then **save and close the file**.
+   > [!NOTE]
+   > The `.env` file is secure and ignored by Git so that your passwords and personal tokens are never saved publicly.
+
+### 3️⃣ Step 3: Run the Application!
+
+Choose the simple launch instructions below depending on your operating system:
+
+#### 🪟 If you are on Windows
+1. Locate the file named `run.bat` in the project folder.
+2. **Double-click** on `run.bat` to launch the application!
+3. A terminal window will open and automatically handle setting up the environment, installing dependencies, and launching the application.
+4. Once loaded, it will automatically open your web browser to the application page at `http://localhost:8501`.
+
+#### 🍏 If you are on macOS
+1. Open your **Terminal** app (press `Cmd + Space`, type "Terminal", and press Enter).
+2. Drag and drop the `run.sh` file from your project folder directly into the Terminal window.
+3. Press **Enter**.
+4. *Tip for the very first launch:* If you get a permission error on your Mac, copy-paste this line into the Terminal first, press Enter, and then drag-and-drop the file again:
    ```bash
-   # Create the virtual environment
+   chmod +x run.sh
+   ```
+5. Once loaded, it will automatically launch the app in your default web browser at `http://localhost:8501`.
+
+---
+
+## ⚙️ Manual/Advanced Installation
+
+If you are a developer and prefer to configure the virtual environment and run the application manually from the CLI:
+
+1. **Clone/Navigate** to your project directory.
+2. **Create and Activate a Virtual Environment**:
+   ```bash
+   # Windows
    python -m venv .venv
-   
-   # Activate on macOS/Linux
-   source .venv/bin/activate
-   
-   # Activate on Windows
    .venv\Scripts\activate
+
+   # macOS/Linux
+   python3 -m venv .venv
+   source .venv/bin/activate
    ```
 3. **Install Dependencies**:
    ```bash
    pip install --upgrade pip
    pip install streamlit pandas plotly
    ```
-4. **Run the Application**:
+4. **Launch Streamlit**:
    ```bash
    streamlit run app.py
    ```
 
-## 📁 Data Format Requirements (`jira_mock.csv`)
+---
 
-To get the most out of the Gantt chart and features, your CSV should ideally contain the following columns (as seen in the provided `jira_mock.csv`):
+## 📁 Local Data Format Requirements (`jira_mock.csv`)
 
-- `Key`: The Jira ticket ID (e.g., PROJ-123).
-- `Epic Name` (or `Summary`): The title of the epic/ticket.
-- `Status`: Current state (To Do, In Progress, Done, Blocked).
-- `Sprint` / `Quarter`: For timeline filtering.
-- `Start Date` & `Due Date`: (Format YYYY-MM-DD) Required to plot the length of the Gantt bars.
-- `Cluster`: The overarching group, theme, or initiative.
-- `Cluster Name`: (Optional) A descriptive subtitle for the cluster.
-- `Milestone`: (Optional) `TRUE` or `FALSE`. If TRUE, the item is rendered as a diamond milestone marker on the Gantt chart.
+If you don't connect to a live Jira server and want to use the offline sandbox, you can drag and drop any local CSV backlog. For full visualization capability, ensure your CSV contains the following standard headers:
+
+* `Key`: The Jira ticket reference ID (e.g., `PROJ-123`).
+* `Epic Name` (or `Summary`): The title of the epic/task.
+* `Status`: Current state (e.g., `To Do`, `In Progress`, `Done`, `Blocked`).
+* `Sprint` / `Quarter`: For timeline/velocity filtering.
+* `Start Date` & `Due Date`: Required to plot timelines (`YYYY-MM-DD`).
+* `Cluster`: The overarching group theme or initiative.
+* `Milestone`: Set to `TRUE` to render a timeline milestone diamond.
 
 ---
-*Built with ❤️ using Streamlit and Plotly.*
+*Built with ❤️ to empower Product Teams.*

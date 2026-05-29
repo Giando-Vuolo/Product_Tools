@@ -409,14 +409,30 @@ def generate_mock_outlook_data():
         }
     ])
 
+# Helper to extract only the numeric part of a version string (e.g., "1.3.0" from "v1.3.0")
+def extract_numeric_version(v_val):
+    if pd.isna(v_val):
+        return ""
+    v_str = str(v_val).strip()
+    if not v_str or v_str.lower() in ["n/a", "none", "-", "nan", "general"]:
+        return ""
+    import re
+    matches = re.findall(r'\d+(?:[\.\-]\d+)*', v_str)
+    if matches:
+        return ", ".join(matches)
+    return ""
+
 # Callback to load mock sprint datasets securely before widget instantiation
 def load_mock_sprint_data():
     st.session_state.overview_df = generate_mock_overview_data()
     st.session_state.outlook_df = generate_mock_outlook_data()
+    if 'Fix Version' in st.session_state.overview_df.columns:
+        st.session_state.overview_df['Fix Version'] = st.session_state.overview_df['Fix Version'].apply(extract_numeric_version)
+    if 'Fix Version' in st.session_state.outlook_df.columns:
+        st.session_state.outlook_df['Fix Version'] = st.session_state.outlook_df['Fix Version'].apply(extract_numeric_version)
     st.session_state.ov_sprint_num = "12"
     st.session_state.ot_sprint_num = "13"
     st.session_state.active_tab = "✍️ Workbook"
-    st.session_state.nav_step_selection = "✍️ Workbook"
     st.toast("🚀 Loaded mock datasets successfully!", icon="🔥")
 
 # ---------------------------------------------------------
@@ -502,18 +518,19 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
             
             # Fix Version
             fix_versions = fields.get("fixVersions", [])
-            fix_version = ", ".join([v.get("name", "") for v in fix_versions]) if fix_versions else ""
+            raw_fix_version = ", ".join([v.get("name", "") for v in fix_versions]) if fix_versions else ""
+            fix_version = extract_numeric_version(raw_fix_version)
             
             # Assignee
             assignee_obj = fields.get("assignee")
             assignee = assignee_obj.get("displayName", "Unassigned") if assignee_obj else "Unassigned"
             
             # Epic detection
-            epic = "No Epic"
+            epic = "-"
             parent = fields.get("parent")
             if parent:
                 parent_fields = parent.get("fields") or {}
-                epic = parent_fields.get("summary") or parent.get("key", "No Epic")
+                epic = parent_fields.get("summary") or parent.get("key", "-")
             else:
                 for custom_field in ["customfield_10008", "customfield_10009"]:
                     cf_val = fields.get(custom_field)
@@ -922,9 +939,9 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None, is_
     block_elements = []
     # Custom styling
     # Let's adjust sizes for landscape presentation grade view
-    font_size_header = 10 if is_landscape else 9
-    font_size_body = 9.5 if is_landscape else 8.5
-    padding_val = 9 if is_landscape else 6
+    font_size_header = 9 if is_landscape else 8
+    font_size_body = 8.5 if is_landscape else 7.5
+    padding_val = 4 if is_landscape else 3
     
     section_title_style = ParagraphStyle(
         'DemoSecTitle',
@@ -1003,9 +1020,9 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None, is_
         
     # Col Widths: Total = 504pt (Portrait) or 684pt (Landscape)
     if is_landscape:
-        col_widths = [64, 300, 160, 160]
+        col_widths = [95, 269, 160, 160]
     else:
-        col_widths = [64, 200, 120, 120]
+        col_widths = [95, 169, 120, 120]
         
     demo_table = Table(
         table_data,
@@ -1037,9 +1054,9 @@ def build_next_releases_pdf_block(df, primary_color, styles, is_landscape=False)
         
     block_elements = []
     
-    font_size_header = 10 if is_landscape else 8.5
-    font_size_body = 9.5 if is_landscape else 8.0
-    padding_val = 9 if is_landscape else 5
+    font_size_header = 9 if is_landscape else 8
+    font_size_body = 8.5 if is_landscape else 7.5
+    padding_val = 4 if is_landscape else 3
     
     cell_header_style = ParagraphStyle(
         'RelCellHeader',
@@ -1141,9 +1158,9 @@ def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=F
     block_elements = []
     
     # Dynamic styling matching the presentation grade
-    font_size_header = 10 if is_landscape else 8.5
-    font_size_body = 9.5 if is_landscape else 8.0
-    padding_val = 9 if is_landscape else 5
+    font_size_header = 9 if is_landscape else 8
+    font_size_body = 8.5 if is_landscape else 7.5
+    padding_val = 4 if is_landscape else 3
     
     cell_header_style = ParagraphStyle(
         'ExtraHeader',
@@ -1226,8 +1243,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'DocTitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=28,
-        leading=32,
+        fontSize=32,
+        leading=36,
         textColor=primary_color,
         spaceAfter=12
     )
@@ -1236,8 +1253,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'DocSubtitle',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=12,
-        leading=16,
+        fontSize=13.5,
+        leading=18,
         textColor=colors.HexColor("#475569"),
         spaceAfter=25
     )
@@ -1246,8 +1263,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'SecTitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=16,
-        leading=20,
+        fontSize=18,
+        leading=22,
         textColor=primary_color,
         spaceBefore=15,
         spaceAfter=8
@@ -1257,8 +1274,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'CellHeader',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=10,
-        leading=13,
+        fontSize=8.5,
+        leading=11,
         textColor=colors.white
     )
     
@@ -1266,8 +1283,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'CellBody',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=9.5,
-        leading=12.5,
+        fontSize=8.0,
+        leading=10.5,
         textColor=colors.HexColor("#1E293B")
     )
     
@@ -1275,8 +1292,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'CellBodyBold',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=9.5,
-        leading=12.5,
+        fontSize=8.0,
+        leading=10.5,
         textColor=colors.HexColor("#1E293B")
     )
     
@@ -1284,8 +1301,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'SubSecTitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=13,
-        leading=17,
+        fontSize=14.5,
+        leading=18.5,
         textColor=colors.HexColor("#475569"),
         spaceBefore=12,
         spaceAfter=5
@@ -1331,7 +1348,7 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'CoverTitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=30,
+        fontSize=40,
         leading=34,
         textColor=primary_color,
         alignment=1, # Center
@@ -1342,7 +1359,7 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         'CoverSubtitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=16,
+        fontSize=24,
         leading=20,
         textColor=colors.HexColor("#334155"),
         alignment=1, # Center
@@ -1375,9 +1392,11 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     story = []
 
     # --- STARTING COVER PAGE ---
-    sprint_num = "12"
-    if 'ov_sprint_num' in st.session_state and str(st.session_state.ov_sprint_num).strip() != "":
-        sprint_num = str(st.session_state.ov_sprint_num).strip()
+    sprint_num = "Sprint 14"
+    if 'sprint_number' in st.session_state and str(st.session_state.sprint_number).strip() != "":
+        sprint_num = str(st.session_state.sprint_number).strip()
+    elif 'ov_sprint_num' in st.session_state and str(st.session_state.ov_sprint_num).strip() != "":
+        sprint_num = f"Sprint {st.session_state.ov_sprint_num}"
         
     from datetime import datetime
     current_date = datetime.now().strftime("%d-%m-%Y")
@@ -1385,6 +1404,7 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     story.append(Spacer(1, 15))
     story.append(Paragraph(st.session_state.project_name.upper(), cover_project_style))
     story.append(Paragraph("Sprint Review", cover_title_style))
+    story.append(Spacer(1, 15))
     story.append(Paragraph(f"Sprint: {sprint_num}", cover_subtitle_style))
     story.append(Paragraph(f"Date: {current_date}", cover_date_style))
     story.append(Spacer(1, 5))
@@ -1434,17 +1454,23 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         sorted_topics = sort_items_by_type_and_epic(topics_ov)
         
         for _, row in sorted_topics.iterrows():
+            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+            if epic_val in ["", "No Epic", "nan"]:
+                epic_val = "-"
+            fv_val = extract_numeric_version(row['Fix Version'])
+            if not fv_val:
+                fv_val = "-"
             table_data.append([
                 Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(str(row['Epic']), cell_body_style),
+                Paragraph(epic_val, cell_body_style),
                 Paragraph(str(row['Summary']), cell_body_style),
                 Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
+                Paragraph(fv_val, cell_body_style)
             ])
             
         topics_table = Table(
             table_data,
-            colWidths=[60, 120, 359, 50, 95]
+            colWidths=[95, 135, 349, 50, 55]
         )
         topics_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
@@ -1452,8 +1478,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('ALIGN', (3, 0), (3, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 9),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
             ('LEFTPADDING', (0, 0), (-1, -1), 8),
             ('RIGHTPADDING', (0, 0), (-1, -1), 8),
             ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
@@ -1481,17 +1507,23 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         sorted_bugs = bugs_ov.sort_values("Epic")
         
         for _, row in sorted_bugs.iterrows():
+            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+            if epic_val in ["", "No Epic", "nan"]:
+                epic_val = "-"
+            fv_val = extract_numeric_version(row['Fix Version'])
+            if not fv_val:
+                fv_val = "-"
             bug_data.append([
                 Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(str(row['Epic']), cell_body_style),
+                Paragraph(epic_val, cell_body_style),
                 Paragraph(str(row['Summary']), cell_body_style),
                 Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
+                Paragraph(fv_val, cell_body_style)
             ])
             
         bugs_table = Table(
             bug_data,
-            colWidths=[65, 140, 334, 50, 95]
+            colWidths=[95, 155, 329, 50, 55]
         )
         bugs_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
@@ -1499,8 +1531,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('ALIGN', (3, 0), (3, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 9),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
             ('LEFTPADDING', (0, 0), (-1, -1), 8),
             ('RIGHTPADDING', (0, 0), (-1, -1), 8),
             ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
@@ -1552,17 +1584,23 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         sorted_outlook = sort_items_by_type_and_epic(topics_ot)
         
         for _, row in sorted_outlook.iterrows():
+            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+            if epic_val in ["", "No Epic", "nan"]:
+                epic_val = "-"
+            fv_val = extract_numeric_version(row['Fix Version'])
+            if not fv_val:
+                fv_val = "-"
             table_data_outlook.append([
                 Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(str(row['Epic']), cell_body_style),
+                Paragraph(epic_val, cell_body_style),
                 Paragraph(str(row['Summary']), cell_body_style),
                 Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
+                Paragraph(fv_val, cell_body_style)
             ])
             
         outlook_table = Table(
             table_data_outlook,
-            colWidths=[60, 120, 359, 50, 95]
+            colWidths=[95, 135, 349, 50, 55]
         )
         outlook_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
@@ -1570,8 +1608,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('ALIGN', (3, 0), (3, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 9),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
             ('LEFTPADDING', (0, 0), (-1, -1), 8),
             ('RIGHTPADDING', (0, 0), (-1, -1), 8),
             ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
@@ -1599,17 +1637,23 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         sorted_outlook_bugs = bugs_ot.sort_values("Epic")
         
         for _, row in sorted_outlook_bugs.iterrows():
+            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+            if epic_val in ["", "No Epic", "nan"]:
+                epic_val = "-"
+            fv_val = extract_numeric_version(row['Fix Version'])
+            if not fv_val:
+                fv_val = "-"
             bug_data_outlook.append([
                 Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(str(row['Epic']), cell_body_style),
+                Paragraph(epic_val, cell_body_style),
                 Paragraph(str(row['Summary']), cell_body_style),
                 Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
+                Paragraph(fv_val, cell_body_style)
             ])
             
         bugs_outlook_table = Table(
             bug_data_outlook,
-            colWidths=[65, 140, 334, 50, 95]
+            colWidths=[95, 155, 329, 50, 55]
         )
         bugs_outlook_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
@@ -1617,8 +1661,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('ALIGN', (3, 0), (3, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 9),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
             ('LEFTPADDING', (0, 0), (-1, -1), 8),
             ('RIGHTPADDING', (0, 0), (-1, -1), 8),
             ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
@@ -1667,8 +1711,8 @@ def build_release_notes_pdf(overview_df, outlook_df):
         'DocTitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=24,
-        leading=28,
+        fontSize=28,
+        leading=32,
         textColor=primary_color,
         spaceAfter=12
     )
@@ -1677,8 +1721,8 @@ def build_release_notes_pdf(overview_df, outlook_df):
         'DocSubtitle',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=11,
-        leading=15,
+        fontSize=12.5,
+        leading=17,
         textColor=colors.HexColor("#475569"),
         spaceAfter=20
     )
@@ -1687,8 +1731,8 @@ def build_release_notes_pdf(overview_df, outlook_df):
         'DocIntro',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=9.5,
-        leading=14.5,
+        fontSize=11.0,
+        leading=16.5,
         textColor=colors.HexColor("#334155"),
         spaceAfter=20
     )
@@ -1697,8 +1741,8 @@ def build_release_notes_pdf(overview_df, outlook_df):
         'SecTitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=13,
-        leading=17,
+        fontSize=15,
+        leading=19,
         textColor=primary_color,
         spaceBefore=15,
         spaceAfter=8
@@ -1708,8 +1752,8 @@ def build_release_notes_pdf(overview_df, outlook_df):
         'CellHeader',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=9,
-        leading=11,
+        fontSize=8.0,
+        leading=10,
         textColor=colors.white
     )
     
@@ -1717,8 +1761,8 @@ def build_release_notes_pdf(overview_df, outlook_df):
         'CellBody',
         parent=styles['Normal'],
         fontName='Helvetica',
-        fontSize=8.5,
-        leading=11.5,
+        fontSize=7.5,
+        leading=9.5,
         textColor=colors.HexColor("#1E293B")
     )
     
@@ -1726,8 +1770,8 @@ def build_release_notes_pdf(overview_df, outlook_df):
         'CellBodyBold',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=8.5,
-        leading=11.5,
+        fontSize=7.5,
+        leading=9.5,
         textColor=colors.HexColor("#1E293B")
     )
     
@@ -1735,8 +1779,8 @@ def build_release_notes_pdf(overview_df, outlook_df):
         'SubSecTitle',
         parent=styles['Normal'],
         fontName='Helvetica-Bold',
-        fontSize=11,
-        leading=14,
+        fontSize=12.5,
+        leading=16,
         textColor=colors.HexColor("#475569"),
         spaceBefore=12,
         spaceAfter=5
@@ -1790,9 +1834,11 @@ def build_release_notes_pdf(overview_df, outlook_df):
     story = []
 
     # --- STARTING COVER PAGE ---
-    sprint_num = "12"
-    if 'ov_sprint_num' in st.session_state and str(st.session_state.ov_sprint_num).strip() != "":
-        sprint_num = str(st.session_state.ov_sprint_num).strip()
+    sprint_num = "Sprint 14"
+    if 'sprint_number' in st.session_state and str(st.session_state.sprint_number).strip() != "":
+        sprint_num = str(st.session_state.sprint_number).strip()
+    elif 'ov_sprint_num' in st.session_state and str(st.session_state.ov_sprint_num).strip() != "":
+        sprint_num = f"Sprint {st.session_state.ov_sprint_num}"
         
     from datetime import datetime
     current_date = datetime.now().strftime("%d-%m-%Y")
@@ -1854,24 +1900,30 @@ def build_release_notes_pdf(overview_df, outlook_df):
         sorted_topics = sort_items_by_type_and_epic(topics_ov)
         
         for _, row in sorted_topics.iterrows():
+            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+            if epic_val in ["", "No Epic", "nan"]:
+                epic_val = "-"
+            fv_val = extract_numeric_version(row['Fix Version'])
+            if not fv_val:
+                fv_val = "-"
             table_data.append([
                 Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(str(row['Epic']), cell_body_style),
+                Paragraph(epic_val, cell_body_style),
                 Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "General", cell_body_style)
+                Paragraph(fv_val, cell_body_style)
             ])
             
         changelog_table = Table(
             table_data,
-            colWidths=[60, 90, 274, 80]
+            colWidths=[95, 105, 254, 50]
         )
         changelog_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
             ('LEFTPADDING', (0, 0), (-1, -1), 7),
             ('RIGHTPADDING', (0, 0), (-1, -1), 7),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
@@ -1896,24 +1948,30 @@ def build_release_notes_pdf(overview_df, outlook_df):
         sorted_bugs = bugs_ov.sort_values("Epic")
         
         for _, row in sorted_bugs.iterrows():
+            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+            if epic_val in ["", "No Epic", "nan"]:
+                epic_val = "-"
+            fv_val = extract_numeric_version(row['Fix Version'])
+            if not fv_val:
+                fv_val = "-"
             bug_data.append([
                 Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(str(row['Epic']), cell_body_style),
+                Paragraph(epic_val, cell_body_style),
                 Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "General", cell_body_style)
+                Paragraph(fv_val, cell_body_style)
             ])
             
         bugs_table = Table(
             bug_data,
-            colWidths=[70, 110, 244, 80]
+            colWidths=[95, 115, 244, 50]
         )
         bugs_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
             ('LEFTPADDING', (0, 0), (-1, -1), 7),
             ('RIGHTPADDING', (0, 0), (-1, -1), 7),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
@@ -1955,24 +2013,30 @@ def build_release_notes_pdf(overview_df, outlook_df):
         sorted_outlook = sort_items_by_type_and_epic(topics_ot)
         
         for _, row in sorted_outlook.iterrows():
+            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+            if epic_val in ["", "No Epic", "nan"]:
+                epic_val = "-"
+            fv_val = extract_numeric_version(row['Fix Version'])
+            if not fv_val:
+                fv_val = "-"
             table_data_upcoming.append([
                 Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(str(row['Epic']), cell_body_style),
+                Paragraph(epic_val, cell_body_style),
                 Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
+                Paragraph(fv_val, cell_body_style)
             ])
             
         upcoming_table = Table(
             table_data_upcoming,
-            colWidths=[60, 90, 274, 80]
+            colWidths=[95, 105, 254, 50]
         )
         upcoming_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
             ('LEFTPADDING', (0, 0), (-1, -1), 7),
             ('RIGHTPADDING', (0, 0), (-1, -1), 7),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
@@ -1997,24 +2061,30 @@ def build_release_notes_pdf(overview_df, outlook_df):
         sorted_outlook_bugs = bugs_ot.sort_values("Epic")
         
         for _, row in sorted_outlook_bugs.iterrows():
+            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+            if epic_val in ["", "No Epic", "nan"]:
+                epic_val = "-"
+            fv_val = extract_numeric_version(row['Fix Version'])
+            if not fv_val:
+                fv_val = "-"
             bug_data_upcoming.append([
                 Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(str(row['Epic']), cell_body_style),
+                Paragraph(epic_val, cell_body_style),
                 Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(str(row['Fix Version']) if pd.notna(row['Fix Version']) and str(row['Fix Version']).strip() != "" else "-", cell_body_style)
+                Paragraph(fv_val, cell_body_style)
             ])
             
         bugs_upcoming_table = Table(
             bug_data_upcoming,
-            colWidths=[70, 110, 244, 80]
+            colWidths=[95, 115, 244, 50]
         )
         bugs_upcoming_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
             ('LEFTPADDING', (0, 0), (-1, -1), 7),
             ('RIGHTPADDING', (0, 0), (-1, -1), 7),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
@@ -2051,21 +2121,16 @@ options_en = ["🔌 Ingestion", "✍️ Workbook", "🎨 Branding", "💾 Export
 
 if 'active_tab' not in st.session_state or st.session_state.active_tab not in options_en:
     st.session_state.active_tab = "🔌 Ingestion"
-    st.session_state.nav_step_selection = "🔌 Ingestion"
 
-if 'nav_step_selection' not in st.session_state or st.session_state.nav_step_selection not in options_en:
-    st.session_state.nav_step_selection = st.session_state.active_tab
-
-def on_nav_change():
-    st.session_state.active_tab = st.session_state.nav_step_selection
-
-st.sidebar.radio(
+selected_nav = st.sidebar.radio(
     "Select current step:",
     options=options_en,
-    index=options_en.index(st.session_state.active_tab),
-    key="nav_step_selection",
-    on_change=on_nav_change
+    index=options_en.index(st.session_state.active_tab)
 )
+
+if selected_nav != st.session_state.active_tab:
+    st.session_state.active_tab = selected_nav
+    st.rerun()
 
 
 
@@ -2144,7 +2209,6 @@ if st.session_state.active_tab == "🔌 Ingestion":
                         st.session_state.overview_df = res_df
                         st.success(f"Success! Loaded {len(res_df)} Overview tickets.")
                         st.session_state.active_tab = "✍️ Workbook"
-                        st.session_state.nav_step_selection = "✍️ Workbook"
                         st.rerun()
         
     with col_ot_query:
@@ -2180,7 +2244,6 @@ if st.session_state.active_tab == "🔌 Ingestion":
                         st.session_state.outlook_df = res_df
                         st.success(f"Success! Loaded {len(res_df)} Outlook tickets.")
                         st.session_state.active_tab = "✍️ Workbook"
-                        st.session_state.nav_step_selection = "✍️ Workbook"
                         st.rerun()
         
     st.divider()
@@ -2224,6 +2287,10 @@ if st.session_state.active_tab == "🔌 Ingestion":
                 csv_df['Sprint Review'] = True
                 csv_df['Release Notes'] = True
                 csv_df['Demo'] = False
+                if 'Fix Version' in csv_df.columns:
+                    csv_df['Fix Version'] = csv_df['Fix Version'].apply(extract_numeric_version)
+                if 'Epic' in csv_df.columns:
+                    csv_df['Epic'] = csv_df['Epic'].apply(lambda x: "-" if pd.isna(x) or str(x).strip() in ["", "No Epic", "nan"] else str(x).strip())
                 
                 st.session_state.overview_df = csv_df[['Key', 'Summary', 'Epic', 'Status', 'Fix Version', 'Outlook', 'Sprint Review', 'Release Notes', 'Assignee', 'Demo', 'Type']]
                 st.success("Overview CSV loaded.")
@@ -2251,6 +2318,10 @@ if st.session_state.active_tab == "🔌 Ingestion":
                     csv_df['Assignee'] = "Unassigned"
                 if 'Type' not in csv_df.columns:
                     csv_df['Type'] = "User Story"
+                if 'Fix Version' in csv_df.columns:
+                    csv_df['Fix Version'] = csv_df['Fix Version'].apply(extract_numeric_version)
+                if 'Epic' in csv_df.columns:
+                    csv_df['Epic'] = csv_df['Epic'].apply(lambda x: "-" if pd.isna(x) or str(x).strip() in ["", "No Epic", "nan"] else str(x).strip())
                 csv_df['Sprint Review'] = True
                 csv_df['Release Notes'] = True
                 
