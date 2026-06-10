@@ -48,14 +48,23 @@ Choose the simple launch instructions below depending on your operating system:
 4. Once loaded, it will automatically open your web browser to the application page at `http://localhost:8501`.
 
 #### 🍏 If you are on macOS
+
+You can run the app using the terminal, or create a convenient **one-click desktop app shortcut**:
+
+##### 🌟 Option A: One-Click Desktop App (Recommended)
 1. Open your **Terminal** app (press `Cmd + Space`, type "Terminal", and press Enter).
-2. Drag and drop the `run.sh` file from your project folder directly into the Terminal window.
-3. Press **Enter**.
-4. *Tip for the very first launch:* If you get a permission error on your Mac, copy-paste this line into the Terminal first, press Enter, and then drag-and-drop the file again:
+2. Drag and drop the [create_mac_shortcut.sh](file:///Users/fc0kewc/Desktop/PO_Tools/create_mac_shortcut.sh) file from your project folder directly into the Terminal window and press **Enter**.
+3. This will create a native **`PO_Tools`** application on your Desktop with a custom analytics chart icon. 
+4. From now on, you can simply **double-click** the icon on your Desktop to launch the app!
+
+##### 💻 Option B: Run via Terminal
+1. Open your **Terminal** app.
+2. Drag and drop the [run.sh](file:///Users/fc0kewc/Desktop/PO_Tools/run.sh) file from your project folder directly into the Terminal window and press **Enter**.
+3. *Tip for the very first launch:* If you get a permission error on your Mac, copy-paste this line into the Terminal first, press Enter, and then drag-and-drop the file again:
    ```bash
    chmod +x run.sh
    ```
-5. Once loaded, it will automatically launch the app in your default web browser at `http://localhost:8501`.
+4. Once loaded, it will automatically launch the app in your default web browser at `http://localhost:8501`.
 
 ---
 
