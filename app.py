@@ -11,7 +11,8 @@ if 'primary_color' not in st.session_state or st.session_state.get('prev_env_col
 
 # 1. Define the page objects first so they are globally accessible
 planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner", icon="🎯")
-review_page = st.Page("tools/2_Sprint_Review_Release_Notes.py", title="Sprint & Release Reports", icon="📋")
+sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", icon="📋")
+release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
 
 # 2. Define the Home Page rendering function
 def show_home():
@@ -196,7 +197,7 @@ def show_home():
     # Active Tools Section
     st.subheader("🛠️ Available Tools")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         st.markdown("""
@@ -212,17 +213,27 @@ def show_home():
         st.markdown("""
             <div class="hub-card">
                 <span class="hub-badge">ACTIVE 🚀</span>
-                <h3>📋 Sprint & Release Reports</h3>
-                <p>Extract Jira sprint data, edit items in a worktable, apply custom branding, and export PDF Sprint Reviews & Release Notes.</p>
+                <h3>📋 Sprint Review</h3>
+                <p>Extract Jira sprint data, edit items in a workbook, apply custom branding, and export PDF Sprint Review reports.</p>
             </div>
         """, unsafe_allow_html=True)
-        st.page_link(review_page, label="Open Reports", icon="📋")
+        st.page_link(sprint_review_page, label="Open Sprint Review", icon="📋")
+
+    with col3:
+        st.markdown("""
+            <div class="hub-card">
+                <span class="hub-badge">ACTIVE 🚀</span>
+                <h3>📣 Release Notes</h3>
+                <p>Compile completed features, write release highlight intro text, and export PDF Release Notes for customers and stakeholders.</p>
+            </div>
+        """, unsafe_allow_html=True)
+        st.page_link(release_notes_page, label="Open Release Notes", icon="📣")
 
 
 # 3. Define the page listing for navigation
 home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
 
 # 4. Setup and run navigation
-pg = st.navigation([home_page, planner_page, review_page])
+pg = st.navigation([home_page, planner_page, sprint_review_page, release_notes_page])
 st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
 pg.run()

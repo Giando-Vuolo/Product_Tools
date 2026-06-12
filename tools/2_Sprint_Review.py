@@ -14,11 +14,19 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen import canvas
+from reportlab.graphics.shapes import Drawing, Line, PolyLine
 
 # ---------------------------------------------------------
 # 1. Environment Loading & Session Setup
 # ---------------------------------------------------------
 load_dotenv(override=True)
+
+# Configuration: Presets for item types to include during ingestion
+env_types = os.getenv("DEFAULT_INCLUDED_TYPES")
+if env_types:
+    DEFAULT_INCLUDED_TYPES = [t.strip() for t in env_types.split(",") if t.strip()]
+else:
+    DEFAULT_INCLUDED_TYPES = ["User Story", "Task", "Technical Task", "Technical Sub-task", "Bug"]
 
 # Read default environment variables if provided
 default_jira_server = os.getenv("JIRA_SERVER", "")
@@ -451,6 +459,22 @@ def extract_numeric_version(v_val):
 def load_mock_sprint_data():
     st.session_state.overview_df = generate_mock_overview_data()
     st.session_state.outlook_df = generate_mock_outlook_data()
+    
+    # Filter by user checkboxes if key exists, otherwise use DEFAULT_INCLUDED_TYPES preset
+    inc_all = st.session_state.get("inc_all", False)
+    if not inc_all:
+        selected_types = []
+        if st.session_state.get("inc_story", "User Story" in DEFAULT_INCLUDED_TYPES): selected_types.append("User Story")
+        if st.session_state.get("inc_task", "Task" in DEFAULT_INCLUDED_TYPES): selected_types.append("Task")
+        if st.session_state.get("inc_tech", "Technical Task" in DEFAULT_INCLUDED_TYPES): selected_types.append("Technical Task")
+        if st.session_state.get("inc_subtask", "Technical Sub-task" in DEFAULT_INCLUDED_TYPES): selected_types.append("Technical Sub-task")
+        if st.session_state.get("inc_bug", "Bug" in DEFAULT_INCLUDED_TYPES): selected_types.append("Bug")
+        
+        if st.session_state.overview_df is not None and not st.session_state.overview_df.empty:
+            st.session_state.overview_df = st.session_state.overview_df[st.session_state.overview_df["Type"].isin(selected_types)].reset_index(drop=True)
+        if st.session_state.outlook_df is not None and not st.session_state.outlook_df.empty:
+            st.session_state.outlook_df = st.session_state.outlook_df[st.session_state.outlook_df["Type"].isin(selected_types)].reset_index(drop=True)
+
     if 'Fix Version' in st.session_state.overview_df.columns:
         st.session_state.overview_df['Fix Version'] = st.session_state.overview_df['Fix Version'].apply(extract_numeric_version)
     if 'Fix Version' in st.session_state.outlook_df.columns:
@@ -509,7 +533,7 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
     params = {
         "jql": jql,
         "maxResults": 100,
-        "fields": "key,summary,status,fixVersions,parent,customfield_10008,customfield_10009,assignee,issuetype,labels"
+        "fields": "key,summary,status,fixVersions,parent,customfield_10000,customfield_10008,customfield_10009,customfield_10014,assignee,issuetype,labels"
     }
 
     
@@ -561,27 +585,41 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
             
             # Epic detection
             epic = "-"
+            epic_key = None
+            
+            for custom_field in ["customfield_10014", "customfield_10000", "customfield_10008", "customfield_10009"]:
+                cf_val = fields.get(custom_field)
+                if cf_val:
+                    if isinstance(cf_val, dict):
+                        epic_key = cf_val.get("key") or str(cf_val)
+                    else:
+                        epic_key = str(cf_val)
+                    break
+            
+            parent_summary = None
             parent = fields.get("parent")
             if parent:
+                parent_key = parent.get("key")
                 parent_fields = parent.get("fields") or {}
-                epic = parent_fields.get("summary") or parent.get("key", "-")
-            else:
-                for custom_field in ["customfield_10008", "customfield_10009"]:
-                    cf_val = fields.get(custom_field)
-                    if cf_val:
-                        if isinstance(cf_val, dict):
-                            epic = cf_val.get("name") or cf_val.get("summary") or cf_val.get("key") or str(cf_val)
-                        elif isinstance(cf_val, str):
-                            epic = cf_val
-                        break
+                parent_summary = parent_fields.get("summary")
+                if not epic_key:
+                    epic_key = parent_key
+            
+            if epic_key:
+                if parent and epic_key == parent.get("key") and parent_summary:
+                    epic = f"{epic_key} - {parent_summary}"
+                else:
+                    epic = epic_key
                         
             # Issue Type detection & mapping
             issue_type_obj = fields.get("issuetype") or {}
             issue_type_raw = issue_type_obj.get("name", "Task")
             
-            issue_type = "Task"
             raw_lower = issue_type_raw.lower()
-            if "story" in raw_lower:
+            issue_type = None
+            if "technical sub-task" in raw_lower or "tech sub-task" in raw_lower or "technical subtask" in raw_lower or "tech subtask" in raw_lower or ("sub-task" in raw_lower and ("tech" in raw_lower or "technical" in raw_lower)):
+                issue_type = "Technical Sub-task"
+            elif "story" in raw_lower:
                 issue_type = "User Story"
             elif "bug" in raw_lower:
                 issue_type = "Bug"
@@ -590,7 +628,7 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
             elif "task" in raw_lower or "sub-task" in raw_lower:
                 issue_type = "Task"
             else:
-                issue_type = "Technical Task" # Default others to Technical Task
+                issue_type = issue_type_raw if st.session_state.get("inc_all", False) else "Technical Task"
                 
             # Labels
             labels_list = fields.get("labels", [])
@@ -611,6 +649,45 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
                 "Labels": labels_str
             })
             
+        # Bulk resolve Epic summaries from Jira
+        epic_keys_to_resolve = set()
+        for r in rows:
+            ep_val = r["Epic"]
+            if ep_val != "-" and " - " not in ep_val:
+                epic_keys_to_resolve.add(ep_val)
+                
+        if epic_keys_to_resolve:
+            try:
+                keys_str = ",".join([f"'{k}'" for k in epic_keys_to_resolve])
+                epic_jql = f"key in ({keys_str})"
+                epic_url = f"{server.rstrip('/')}/rest/api/2/search"
+                epic_params = {
+                    "jql": epic_jql,
+                    "fields": "key,summary",
+                    "maxResults": 100
+                }
+                if auth:
+                    epic_resp = requests.get(epic_url, headers=headers, params=epic_params, auth=auth, timeout=10)
+                else:
+                    epic_resp = requests.get(epic_url, headers=headers, params=epic_params, timeout=10)
+                
+                if epic_resp.status_code == 200:
+                    epic_data = epic_resp.json()
+                    epic_map = {}
+                    for epic_issue in epic_data.get("issues", []):
+                        e_key = epic_issue.get("key")
+                        e_fields = epic_issue.get("fields") or {}
+                        e_summary = e_fields.get("summary")
+                        if e_key and e_summary:
+                            epic_map[e_key] = f"{e_key} - {e_summary}"
+                            
+                    for r in rows:
+                        ep_val = r["Epic"]
+                        if ep_val in epic_map:
+                            r["Epic"] = epic_map[ep_val]
+            except Exception:
+                pass
+                
         return pd.DataFrame(rows)
     except Exception as e:
         st.error(f"Exception connecting to Jira: {str(e)}")
@@ -839,7 +916,7 @@ def sort_items_by_type_and_epic(df):
             
     df_copy = df.copy()
     df_copy['_type_sort_order'] = df_copy['Type'].apply(get_sort_order)
-    df_copy.sort_values(by=['_type_sort_order', 'Epic', 'Key'], inplace=True)
+    df_copy.sort_values(by=['Epic', '_type_sort_order', 'Key'], inplace=True)
     df_copy.drop(columns=['_type_sort_order'], inplace=True)
     return df_copy
 
@@ -1260,6 +1337,13 @@ def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=F
 # ---------------------------------------------------------
 # 6. PDF Builder: Sprint Review PDF (Consolidated Single Table)
 # ---------------------------------------------------------
+def get_arrow_drawing(color):
+    d = Drawing(10, 10)
+    # L-shape: bottom-right to bottom-left to top-left pointing up, smaller size (10x10) and black
+    d.add(PolyLine([(7, 2), (2, 2), (2, 8)], strokeColor=colors.black, strokeWidth=1.0))
+    d.add(Line(0, 6, 2, 8, strokeColor=colors.black, strokeWidth=1.0))
+    d.add(Line(4, 6, 2, 8, strokeColor=colors.black, strokeWidth=1.0))
+    return d
 def build_sprint_review_pdf(overview_df, outlook_df):
     pdf_buffer = io.BytesIO()
     
@@ -1471,115 +1555,132 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     # --- END OF COVER PAGE ---
     
     # 2. Section 1: Overview
-    story.append(Paragraph("Overview:", section_title_style))
-    story.append(Paragraph('<font color="#22C55E">●</font> Done &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#F59E0B">●</font> In Progress &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#EF4444">●</font> Blocked &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#3B82F6">●</font> To Do', legend_style))
-    
-    # 2a. Delivered Topics Sub-section
-    story.append(Paragraph("Delivered Topics", sub_section_title_style))
-    
     topics_ov, bugs_ov = split_bugs_and_topics(overview_df)
     
-    if not topics_ov.empty:
-        # Col Widths: Total = 684pt (Landscape)
-        # Key: 60pt, Epic: 120pt, Summary: 359pt, Status: 50pt, Fix Version: 95pt
-        table_data = [[
-            Paragraph("Key", cell_header_style),
-            Paragraph("Epic", cell_header_style),
-            Paragraph("Summary", cell_header_style),
-            Paragraph("Status", cell_header_center_style),
-            Paragraph("Fix Version", cell_header_style)
-        ]]
+    if not topics_ov.empty or not bugs_ov.empty:
+        story.append(Paragraph("Overview:", section_title_style))
+        story.append(Paragraph('<font color="#22C55E">●</font> Done &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#F59E0B">●</font> In Progress &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#EF4444">●</font> Blocked &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#3B82F6">●</font> To Do', legend_style))
         
-        sorted_topics = sort_items_by_type_and_epic(topics_ov)
-        
-        for _, row in sorted_topics.iterrows():
-            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
-            if epic_val in ["", "No Epic", "nan"]:
-                epic_val = "-"
-            fv_val = extract_numeric_version(row['Fix Version'])
-            if not fv_val:
-                fv_val = "-"
-            table_data.append([
-                Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(epic_val, cell_body_style),
-                Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                Paragraph(fv_val, cell_body_style)
-            ])
+        # 2a. Delivered Topics Sub-section
+        if not topics_ov.empty:
+            story.append(Paragraph("Delivered Topics", sub_section_title_style))
+            # Col Widths: Total = 684pt (Landscape)
+            table_data = [[
+                Paragraph("Epic", cell_header_style),
+                Paragraph("Key", cell_header_style),
+                Paragraph("Summary", cell_header_style),
+                Paragraph("Status", cell_header_center_style),
+                Paragraph("Fix Version", cell_header_style)
+            ]]
             
-        topics_table = Table(
-            table_data,
-            colWidths=[95, 135, 349, 50, 55]
-        )
-        topics_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('ALIGN', (3, 0), (3, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('LEFTPADDING', (0, 0), (-1, -1), 8),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-        ]))
-        story.append(topics_table)
-    else:
-        story.append(Paragraph("No delivered topics in this iteration.", cell_body_style))
-        
-    story.append(Spacer(1, 10))
-    
-    # 2b. Resolved Bugs Sub-section
-    story.append(Paragraph("Resolved Bugs", sub_section_title_style))
-    if not bugs_ov.empty:
-        # Col Widths: Total = 684pt (Landscape)
-        # Key: 65pt, Epic: 140pt, Summary: 334pt, Status: 50pt, Fix Version: 95pt
-        bug_data = [[
-            Paragraph("Key", cell_header_style),
-            Paragraph("Epic", cell_header_style),
-            Paragraph("Summary", cell_header_style),
-            Paragraph("Status", cell_header_center_style),
-            Paragraph("Fix Version", cell_header_style)
-        ]]
-        
-        sorted_bugs = bugs_ov.sort_values("Epic")
-        
-        for _, row in sorted_bugs.iterrows():
-            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
-            if epic_val in ["", "No Epic", "nan"]:
-                epic_val = "-"
-            fv_val = extract_numeric_version(row['Fix Version'])
-            if not fv_val:
-                fv_val = "-"
-            bug_data.append([
-                Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(epic_val, cell_body_style),
-                Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                Paragraph(fv_val, cell_body_style)
-            ])
+            sorted_topics = sort_items_by_type_and_epic(topics_ov)
             
-        bugs_table = Table(
-            bug_data,
-            colWidths=[95, 155, 329, 50, 55]
-        )
-        bugs_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('ALIGN', (3, 0), (3, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('LEFTPADDING', (0, 0), (-1, -1), 8),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-        ]))
-        story.append(bugs_table)
-    else:
-        story.append(Paragraph("No resolved bugs in this iteration.", cell_body_style))
+            last_epic = None
+            for _, row in sorted_topics.iterrows():
+                epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+                if epic_val in ["", "No Epic", "nan"]:
+                    epic_val = "-"
+                fv_val = extract_numeric_version(row['Fix Version'])
+                if not fv_val:
+                    fv_val = "-"
+                    
+                display_epic = epic_val
+                if display_epic == last_epic:
+                    if display_epic == "-":
+                        epic_cell = Paragraph("-", cell_body_style)
+                    else:
+                        epic_cell = get_arrow_drawing(colors.HexColor("#64748B"))
+                else:
+                    last_epic = display_epic
+                    epic_cell = Paragraph(display_epic, cell_body_style)
+                    
+                table_data.append([
+                    epic_cell,
+                    Paragraph(str(row['Key']), cell_body_bold_style),
+                    Paragraph(str(row['Summary']), cell_body_style),
+                    Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
+                    Paragraph(fv_val, cell_body_style)
+                ])
+                
+            topics_table = Table(
+                table_data,
+                colWidths=[135, 95, 349, 50, 55]
+            )
+            topics_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), primary_color),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (3, 0), (3, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+            ]))
+            story.append(topics_table)
+            story.append(Spacer(1, 10))
+            
+        # 2b. Resolved Bugs Sub-section
+        if not bugs_ov.empty:
+            story.append(Paragraph("Resolved Bugs", sub_section_title_style))
+            bug_data = [[
+                Paragraph("Epic", cell_header_style),
+                Paragraph("Key", cell_header_style),
+                Paragraph("Summary", cell_header_style),
+                Paragraph("Status", cell_header_center_style),
+                Paragraph("Fix Version", cell_header_style)
+            ]]
+            
+            sorted_bugs = bugs_ov.sort_values("Epic")
+            
+            last_epic = None
+            for _, row in sorted_bugs.iterrows():
+                epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+                if epic_val in ["", "No Epic", "nan"]:
+                    epic_val = "-"
+                fv_val = extract_numeric_version(row['Fix Version'])
+                if not fv_val:
+                    fv_val = "-"
+                    
+                display_epic = epic_val
+                if display_epic == last_epic:
+                    if display_epic == "-":
+                        epic_cell = Paragraph("-", cell_body_style)
+                    else:
+                        epic_cell = get_arrow_drawing(colors.HexColor("#64748B"))
+                else:
+                    last_epic = display_epic
+                    epic_cell = Paragraph(display_epic, cell_body_style)
+                    
+                bug_data.append([
+                    epic_cell,
+                    Paragraph(str(row['Key']), cell_body_bold_style),
+                    Paragraph(str(row['Summary']), cell_body_style),
+                    Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
+                    Paragraph(fv_val, cell_body_style)
+                ])
+                
+            bugs_table = Table(
+                bug_data,
+                colWidths=[155, 95, 329, 50, 55]
+            )
+            bugs_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), primary_color),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (3, 0), (3, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+            ]))
+            story.append(bugs_table)
+            story.append(Spacer(1, 10))
         
     story.append(Spacer(1, 10))
     
@@ -1619,562 +1720,154 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                 story.extend(extra_blocks)
             
     # 3. Section 2: Outlook (Page Break isolation)
-    story.append(PageBreak())
-    story.append(Paragraph("Outlook:", section_title_style))
-    story.append(Paragraph('<font color="#22C55E">●</font> Done &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#F59E0B">●</font> In Progress &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#EF4444">●</font> Blocked &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#3B82F6">●</font> To Do', legend_style))
-    
-    # 3a. Planned Topics Sub-section
-    story.append(Paragraph("Planned Topics", sub_section_title_style))
-    
     topics_ot, bugs_ot = split_bugs_and_topics(outlook_df)
+    next_release_df = st.session_state.next_release_df
     
-    if not topics_ot.empty:
-        # Col Widths: Total = 684pt (Landscape)
-        # Key: 60pt, Epic: 120pt, Summary: 359pt, Status: 50pt, Fix Version: 95pt
-        table_data_outlook = [[
-            Paragraph("Key", cell_header_style),
-            Paragraph("Epic", cell_header_style),
-            Paragraph("Summary", cell_header_style),
-            Paragraph("Status", cell_header_center_style),
-            Paragraph("Fix Version", cell_header_style)
-        ]]
+    has_outlook = (not topics_ot.empty) or (not bugs_ot.empty) or (next_release_df is not None and not next_release_df.empty)
+    if has_outlook:
+        story.append(PageBreak())
+        story.append(Paragraph("Outlook:", section_title_style))
+        story.append(Paragraph('<font color="#22C55E">●</font> Done &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#F59E0B">●</font> In Progress &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#EF4444">●</font> Blocked &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <font color="#3B82F6">●</font> To Do', legend_style))
         
-        sorted_outlook = sort_items_by_type_and_epic(topics_ot)
-        
-        for _, row in sorted_outlook.iterrows():
-            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
-            if epic_val in ["", "No Epic", "nan"]:
-                epic_val = "-"
-            fv_val = extract_numeric_version(row['Fix Version'])
-            if not fv_val:
-                fv_val = "-"
-            table_data_outlook.append([
-                Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(epic_val, cell_body_style),
-                Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                Paragraph(fv_val, cell_body_style)
-            ])
+        # 3a. Planned Topics Sub-section
+        if not topics_ot.empty:
+            story.append(Paragraph("Planned Topics", sub_section_title_style))
+            # Col Widths: Total = 684pt (Landscape)
+            table_data_outlook = [[
+                Paragraph("Epic", cell_header_style),
+                Paragraph("Key", cell_header_style),
+                Paragraph("Summary", cell_header_style),
+                Paragraph("Status", cell_header_center_style),
+                Paragraph("Fix Version", cell_header_style)
+            ]]
             
-        outlook_table = Table(
-            table_data_outlook,
-            colWidths=[95, 135, 349, 50, 55]
-        )
-        outlook_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('ALIGN', (3, 0), (3, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('LEFTPADDING', (0, 0), (-1, -1), 8),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-        ]))
-        story.append(outlook_table)
-    else:
-        story.append(Paragraph("No upcoming topics planned.", cell_body_style))
-        
-    story.append(Spacer(1, 10))
-    
-    # 3b. Planned Bugs Sub-section
-    story.append(Paragraph("Planned Bugs", sub_section_title_style))
-    if not bugs_ot.empty:
-        # Col Widths: Total = 684pt (Landscape)
-        # Key: 65pt, Epic: 140pt, Summary: 334pt, Status: 50pt, Fix Version: 95pt
-        bug_data_outlook = [[
-            Paragraph("Key", cell_header_style),
-            Paragraph("Epic", cell_header_style),
-            Paragraph("Summary", cell_header_style),
-            Paragraph("Status", cell_header_center_style),
-            Paragraph("Fix Version", cell_header_style)
-        ]]
-        
-        sorted_outlook_bugs = bugs_ot.sort_values("Epic")
-        
-        for _, row in sorted_outlook_bugs.iterrows():
-            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
-            if epic_val in ["", "No Epic", "nan"]:
-                epic_val = "-"
-            fv_val = extract_numeric_version(row['Fix Version'])
-            if not fv_val:
-                fv_val = "-"
-            bug_data_outlook.append([
-                Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(epic_val, cell_body_style),
-                Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                Paragraph(fv_val, cell_body_style)
-            ])
+            sorted_outlook = sort_items_by_type_and_epic(topics_ot)
             
-        bugs_outlook_table = Table(
-            bug_data_outlook,
-            colWidths=[95, 155, 329, 50, 55]
-        )
-        bugs_outlook_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('ALIGN', (3, 0), (3, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('LEFTPADDING', (0, 0), (-1, -1), 8),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-        ]))
-        story.append(bugs_outlook_table)
-    else:
-        story.append(Paragraph("No upcoming bugs planned.", cell_body_style))
-        
-    story.append(Spacer(1, 10))
- 
-    # 3c. Target Releases Sub-section (Moved inside Outlook!)
-    story.append(Paragraph("Target Releases", sub_section_title_style))
-    rel_blocks = build_next_releases_pdf_block(st.session_state.next_release_df, primary_color, styles, is_landscape=True)
-    if rel_blocks:
-        story.extend(rel_blocks)
-        story.append(Spacer(1, 10))
-        
+            last_epic = None
+            for _, row in sorted_outlook.iterrows():
+                epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+                if epic_val in ["", "No Epic", "nan"]:
+                    epic_val = "-"
+                fv_val = extract_numeric_version(row['Fix Version'])
+                if not fv_val:
+                    fv_val = "-"
+                    
+                display_epic = epic_val
+                if display_epic == last_epic:
+                    if display_epic == "-":
+                        epic_cell = Paragraph("-", cell_body_style)
+                    else:
+                        epic_cell = get_arrow_drawing(colors.HexColor("#64748B"))
+                else:
+                    last_epic = display_epic
+                    epic_cell = Paragraph(display_epic, cell_body_style)
+                    
+                table_data_outlook.append([
+                    epic_cell,
+                    Paragraph(str(row['Key']), cell_body_bold_style),
+                    Paragraph(str(row['Summary']), cell_body_style),
+                    Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
+                    Paragraph(fv_val, cell_body_style)
+                ])
+                
+            outlook_table = Table(
+                table_data_outlook,
+                colWidths=[135, 95, 349, 50, 55]
+            )
+            outlook_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), primary_color),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (3, 0), (3, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+            ]))
+            story.append(outlook_table)
+            story.append(Spacer(1, 10))
+            
+        # 3b. Planned Bugs Sub-section
+        if not bugs_ot.empty:
+            story.append(Paragraph("Planned Bugs", sub_section_title_style))
+            bug_data_outlook = [[
+                Paragraph("Epic", cell_header_style),
+                Paragraph("Key", cell_header_style),
+                Paragraph("Summary", cell_header_style),
+                Paragraph("Status", cell_header_center_style),
+                Paragraph("Fix Version", cell_header_style)
+            ]]
+            
+            sorted_outlook_bugs = bugs_ot.sort_values("Epic")
+            
+            last_epic = None
+            for _, row in sorted_outlook_bugs.iterrows():
+                epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+                if epic_val in ["", "No Epic", "nan"]:
+                    epic_val = "-"
+                fv_val = extract_numeric_version(row['Fix Version'])
+                if not fv_val:
+                    fv_val = "-"
+                    
+                display_epic = epic_val
+                if display_epic == last_epic:
+                    if display_epic == "-":
+                        epic_cell = Paragraph("-", cell_body_style)
+                    else:
+                        epic_cell = get_arrow_drawing(colors.HexColor("#64748B"))
+                else:
+                    last_epic = display_epic
+                    epic_cell = Paragraph(display_epic, cell_body_style)
+                    
+                bug_data_outlook.append([
+                    epic_cell,
+                    Paragraph(str(row['Key']), cell_body_bold_style),
+                    Paragraph(str(row['Summary']), cell_body_style),
+                    Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
+                    Paragraph(fv_val, cell_body_style)
+                ])
+                
+            bugs_outlook_table = Table(
+                bug_data_outlook,
+                colWidths=[155, 95, 329, 50, 55]
+            )
+            bugs_outlook_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), primary_color),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (3, 0), (3, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+            ]))
+            story.append(bugs_outlook_table)
+            story.append(Spacer(1, 10))
+     
+        # 3c. Target Releases Sub-section (Moved inside Outlook!)
+        if next_release_df is not None and not next_release_df.empty:
+            story.append(Paragraph("Target Releases", sub_section_title_style))
+            rel_blocks = build_next_releases_pdf_block(next_release_df, primary_color, styles, is_landscape=True)
+            if rel_blocks:
+                story.extend(rel_blocks)
+                story.append(Spacer(1, 10))
+            
     doc.build(story, canvasmaker=NumberedCanvas, onFirstPage=draw_background_landscape, onLaterPages=draw_background_landscape)
     pdf_buffer.seek(0)
     return pdf_buffer
 
 
 # ---------------------------------------------------------
-# 7. PDF Builder: Release Notes PDF (Consolidated Single Table)
-# ---------------------------------------------------------
-def build_release_notes_pdf(overview_df, outlook_df):
-    pdf_buffer = io.BytesIO()
-    
-    # Setup document
-    doc = SimpleDocTemplate(
-        pdf_buffer,
-        pagesize=letter,
-        leftMargin=54,
-        rightMargin=54,
-        topMargin=72,
-        bottomMargin=72
-    )
-    
-    styles = getSampleStyleSheet()
-    primary_color_hex = st.session_state.primary_color
-    primary_color = hex_to_reportlab_color(primary_color_hex)
-    
-    # Custom styles
-    title_style = ParagraphStyle(
-        'DocTitle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=28,
-        leading=32,
-        textColor=primary_color,
-        spaceAfter=12
-    )
-    
-    subtitle_style = ParagraphStyle(
-        'DocSubtitle',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=12.5,
-        leading=17,
-        textColor=colors.HexColor("#475569"),
-        spaceAfter=20
-    )
-    
-    intro_style = ParagraphStyle(
-        'DocIntro',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=11.0,
-        leading=16.5,
-        textColor=colors.HexColor("#334155"),
-        spaceAfter=20
-    )
-    
-    section_title_style = ParagraphStyle(
-        'SecTitle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=15,
-        leading=19,
-        textColor=primary_color,
-        spaceBefore=15,
-        spaceAfter=8
-    )
-    
-    cell_header_style = ParagraphStyle(
-        'CellHeader',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=8.0,
-        leading=10,
-        textColor=colors.white
-    )
-    
-    cell_body_style = ParagraphStyle(
-        'CellBody',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=7.5,
-        leading=9.5,
-        textColor=colors.HexColor("#1E293B")
-    )
-    
-    cell_body_bold_style = ParagraphStyle(
-        'CellBodyBold',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=7.5,
-        leading=9.5,
-        textColor=colors.HexColor("#1E293B")
-    )
-    
-    sub_section_title_style = ParagraphStyle(
-        'SubSecTitle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=12.5,
-        leading=16,
-        textColor=colors.HexColor("#475569"),
-        spaceBefore=12,
-        spaceAfter=5
-    )
-
-    # Cover Page Styles
-    cover_project_style = ParagraphStyle(
-        'CoverProject',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=12,
-        leading=16,
-        textColor=colors.HexColor("#64748B"),
-        alignment=1, # Center
-        spaceAfter=15
-    )
-    
-    cover_title_style = ParagraphStyle(
-        'CoverTitle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=32,
-        leading=38,
-        textColor=primary_color,
-        alignment=1, # Center
-        spaceAfter=10
-    )
-    
-    cover_subtitle_style = ParagraphStyle(
-        'CoverSubtitle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=18,
-        leading=22,
-        textColor=colors.HexColor("#334155"),
-        alignment=1, # Center
-        spaceAfter=25
-    )
-    
-    cover_date_style = ParagraphStyle(
-        'CoverDate',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=10,
-        leading=14,
-        textColor=colors.HexColor("#64748B"),
-        alignment=1, # Center
-        spaceAfter=30
-    )
-
-    story = []
-
-    # --- STARTING COVER PAGE ---
-    sprint_num = "Sprint 14"
-    if 'sprint_number' in st.session_state and str(st.session_state.sprint_number).strip() != "":
-        sprint_num = str(st.session_state.sprint_number).strip()
-    elif 'ov_sprint_num' in st.session_state and str(st.session_state.ov_sprint_num).strip() != "":
-        sprint_num = f"Sprint {st.session_state.ov_sprint_num}"
-        
-    from datetime import datetime
-    current_date = datetime.now().strftime("%d-%m-%Y")
-    
-    story.append(Spacer(1, 50))
-    story.append(Paragraph(st.session_state.project_name.upper(), cover_project_style))
-    story.append(Paragraph("Release Notes", cover_title_style))
-    story.append(Paragraph(f"Sprint: {sprint_num}", cover_subtitle_style))
-    story.append(Paragraph(f"Date: {current_date}", cover_date_style))
-    story.append(Spacer(1, 20))
-    
-    cover_image_path = st.session_state.cover_temp_path
-    if cover_image_path and os.path.exists(cover_image_path):
-        try:
-            pil_img = PILImage.open(cover_image_path)
-            orig_w, orig_h = pil_img.size
-            max_w = 400  # max width in points
-            max_h = 300  # max height in points
-            scale = min(max_w / orig_w, max_h / orig_h)
-            img = Image(cover_image_path, width=orig_w * scale, height=orig_h * scale)
-            img.hAlign = 'CENTER'
-            story.append(img)
-            story.append(Spacer(1, 20))
-        except Exception:
-            pass
-            
-    story.append(PageBreak())
-    # --- END OF COVER PAGE ---
-    
-    # 1. Document Title
-    story.append(Paragraph("Release Notes", title_style))
-    story.append(Paragraph("Release highlights and upcoming features.", subtitle_style))
-    story.append(Spacer(1, 5))
-    
-    # 2. Render Custom User Intro Paragraphs
-    intro_markdown = st.session_state.release_notes_intro
-    intro_html = convert_markdown_to_pdf_rich_text(intro_markdown)
-    story.append(Paragraph(intro_html, intro_style))
-    
-    # 3. Consolidated Changelog Table
-    # 3. Overview Section
-    story.append(Paragraph("Overview:", section_title_style))
-    
-    # 3a. Delivered Topics Sub-section
-    story.append(Paragraph("Delivered Topics", sub_section_title_style))
-    
-    topics_ov, bugs_ov = split_bugs_and_topics(overview_df)
-    
-    if not topics_ov.empty:
-        # Col Widths: Total = 504pt
-        # Reference: 60pt, Epic Theme: 90pt, Delivered Capability: 274pt, Release Version: 80pt
-        table_data = [[
-            Paragraph("Key", cell_header_style),
-            Paragraph("Epic", cell_header_style),
-            Paragraph("Summary", cell_header_style),
-            Paragraph("Fix Version", cell_header_style)
-        ]]
-        
-        sorted_topics = sort_items_by_type_and_epic(topics_ov)
-        
-        for _, row in sorted_topics.iterrows():
-            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
-            if epic_val in ["", "No Epic", "nan"]:
-                epic_val = "-"
-            fv_val = extract_numeric_version(row['Fix Version'])
-            if not fv_val:
-                fv_val = "-"
-            table_data.append([
-                Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(epic_val, cell_body_style),
-                Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(fv_val, cell_body_style)
-            ])
-            
-        changelog_table = Table(
-            table_data,
-            colWidths=[95, 105, 254, 50]
-        )
-        changelog_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 3),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-            ('LEFTPADDING', (0, 0), (-1, -1), 7),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 7),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-        ]))
-        story.append(changelog_table)
-    else:
-        story.append(Paragraph("No delivered topics in this release.", cell_body_style))
-        
-    story.append(Spacer(1, 10))
-    
-    # 3b. Resolved Bugs Sub-section
-    story.append(Paragraph("Resolved Bugs", sub_section_title_style))
-    if not bugs_ov.empty:
-        bug_data = [[
-            Paragraph("Key", cell_header_style),
-            Paragraph("Epic", cell_header_style),
-            Paragraph("Summary", cell_header_style),
-            Paragraph("Fix Version", cell_header_style)
-        ]]
-        
-        sorted_bugs = bugs_ov.sort_values("Epic")
-        
-        for _, row in sorted_bugs.iterrows():
-            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
-            if epic_val in ["", "No Epic", "nan"]:
-                epic_val = "-"
-            fv_val = extract_numeric_version(row['Fix Version'])
-            if not fv_val:
-                fv_val = "-"
-            bug_data.append([
-                Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(epic_val, cell_body_style),
-                Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(fv_val, cell_body_style)
-            ])
-            
-        bugs_table = Table(
-            bug_data,
-            colWidths=[95, 115, 244, 50]
-        )
-        bugs_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 3),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-            ('LEFTPADDING', (0, 0), (-1, -1), 7),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 7),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-        ]))
-        story.append(bugs_table)
-    else:
-        story.append(Paragraph("No resolved bugs in this release.", cell_body_style))
-        
-    # Render custom extra tables (Release Notes, portrait)
-    for t in st.session_state.custom_tables:
-        df_ext = t["df"]
-        if df_ext is not None and not df_ext.empty:
-            df_render = df_ext.drop(columns=["Select"]) if "Select" in df_ext.columns else df_ext
-            story.append(PageBreak())
-            extra_title = t["title"] if t["title"].strip() != "" else "Special Metrics Overview"
-            story.append(Paragraph(extra_title, section_title_style))
-            story.append(Spacer(1, 10))
-            extra_blocks = build_custom_extra_table_pdf_block(df_render, primary_color, styles, is_landscape=False)
-            if extra_blocks:
-                story.extend(extra_blocks)
-            
-    # 4. Outlook Section (Page Break isolation)
-    story.append(PageBreak())
-    story.append(Paragraph("Outlook:", section_title_style))
-    
-    # 4a. Upcoming Topics Sub-section
-    story.append(Paragraph("Upcoming Topics", sub_section_title_style))
-    
-    topics_ot, bugs_ot = split_bugs_and_topics(outlook_df)
-    
-    if not topics_ot.empty:
-        # Col Widths: Total = 504pt
-        # Reference: 60pt, Epic Theme: 90pt, Upcoming Improvement: 274pt, Target Version: 80pt
-        table_data_upcoming = [[
-            Paragraph("Key", cell_header_style),
-            Paragraph("Epic", cell_header_style),
-            Paragraph("Summary", cell_header_style),
-            Paragraph("Fix Version", cell_header_style)
-        ]]
-        
-        sorted_outlook = sort_items_by_type_and_epic(topics_ot)
-        
-        for _, row in sorted_outlook.iterrows():
-            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
-            if epic_val in ["", "No Epic", "nan"]:
-                epic_val = "-"
-            fv_val = extract_numeric_version(row['Fix Version'])
-            if not fv_val:
-                fv_val = "-"
-            table_data_upcoming.append([
-                Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(epic_val, cell_body_style),
-                Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(fv_val, cell_body_style)
-            ])
-            
-        upcoming_table = Table(
-            table_data_upcoming,
-            colWidths=[95, 105, 254, 50]
-        )
-        upcoming_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 3),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-            ('LEFTPADDING', (0, 0), (-1, -1), 7),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 7),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-        ]))
-        story.append(upcoming_table)
-    else:
-        story.append(Paragraph("No upcoming topics planned.", cell_body_style))
-        
-    story.append(Spacer(1, 10))
-    
-    # 4b. Upcoming Bugs Sub-section
-    story.append(Paragraph("Upcoming Bugs", sub_section_title_style))
-    if not bugs_ot.empty:
-        bug_data_upcoming = [[
-            Paragraph("Key", cell_header_style),
-            Paragraph("Epic", cell_header_style),
-            Paragraph("Summary", cell_header_style),
-            Paragraph("Fix Version", cell_header_style)
-        ]]
-        
-        sorted_outlook_bugs = bugs_ot.sort_values("Epic")
-        
-        for _, row in sorted_outlook_bugs.iterrows():
-            epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
-            if epic_val in ["", "No Epic", "nan"]:
-                epic_val = "-"
-            fv_val = extract_numeric_version(row['Fix Version'])
-            if not fv_val:
-                fv_val = "-"
-            bug_data_upcoming.append([
-                Paragraph(str(row['Key']), cell_body_bold_style),
-                Paragraph(epic_val, cell_body_style),
-                Paragraph(str(row['Summary']), cell_body_style),
-                Paragraph(fv_val, cell_body_style)
-            ])
-            
-        bugs_upcoming_table = Table(
-            bug_data_upcoming,
-            colWidths=[95, 115, 244, 50]
-        )
-        bugs_upcoming_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 3),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-            ('LEFTPADDING', (0, 0), (-1, -1), 7),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 7),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-        ]))
-        story.append(bugs_upcoming_table)
-    else:
-        story.append(Paragraph("No upcoming bugs planned.", cell_body_style))
-        
-    story.append(Spacer(1, 10))
-
-    # 4c. Target Releases Sub-section (Moved inside Outlook!)
-    story.append(Paragraph("Target Releases", sub_section_title_style))
-    rel_blocks = build_next_releases_pdf_block(st.session_state.next_release_df, primary_color, styles)
-    if rel_blocks:
-        story.extend(rel_blocks)
-        story.append(Spacer(1, 10))
-        
-    doc.build(story, canvasmaker=NumberedCanvas)
-    pdf_buffer.seek(0)
-    return pdf_buffer
-
-
-
-# ---------------------------------------------------------
 # 8. Main Application Interface Rendering
 # ---------------------------------------------------------
-st.title("📋 Sprint Review & Release Notes Generator")
-st.markdown("Automate and customize periodic reports securely by connecting directly to **Jira** or importing local files.")
+st.title("📋 Sprint Review Report Generator")
+st.markdown("Automate and customize Sprint Review reports securely by connecting directly to **Jira** or importing local files.")
 
 # Programmatic Navigation Sidebar
 st.sidebar.markdown("### 🧭 Navigation Panel")
@@ -2229,12 +1922,37 @@ if st.session_state.active_tab == "🔌 Ingestion":
         
     st.info("💡 **Security:** Credentials are loaded locally using secure dotenv files and are never saved publicly on git repositories.")
 
+    st.divider()
 
-    
+    # Issue Type Selection Checkboxes
+    st.markdown("**2. Filter Ingested Issue Types**")
+    st.write("Select which issue types should be loaded into the workspace:")
+    col_cb1, col_cb2, col_cb3, col_cb4, col_cb5, col_cb6 = st.columns(6)
+    with col_cb1:
+        inc_all = st.checkbox("All / Everything", value=False, key="inc_all")
+    with col_cb2:
+        inc_story = st.checkbox("User Story", value=("User Story" in DEFAULT_INCLUDED_TYPES), key="inc_story", disabled=inc_all)
+    with col_cb3:
+        inc_task = st.checkbox("Task", value=("Task" in DEFAULT_INCLUDED_TYPES), key="inc_task", disabled=inc_all)
+    with col_cb4:
+        inc_tech = st.checkbox("Technical Task", value=("Technical Task" in DEFAULT_INCLUDED_TYPES), key="inc_tech", disabled=inc_all)
+    with col_cb5:
+        inc_subtask = st.checkbox("Technical Sub-task", value=("Technical Sub-task" in DEFAULT_INCLUDED_TYPES), key="inc_subtask", disabled=inc_all)
+    with col_cb6:
+        inc_bug = st.checkbox("Bug", value=("Bug" in DEFAULT_INCLUDED_TYPES), key="inc_bug", disabled=inc_all)
+
+    selected_types = []
+    if not inc_all:
+        if inc_story: selected_types.append("User Story")
+        if inc_task: selected_types.append("Task")
+        if inc_tech: selected_types.append("Technical Task")
+        if inc_subtask: selected_types.append("Technical Sub-task")
+        if inc_bug: selected_types.append("Bug")
+
     st.divider()
     
     # Dual Query extraction panels
-    st.markdown("**2. Ingestion Query Configurations**")
+    st.markdown("**3. Ingestion Query Configurations**")
     col_ov_query, col_ot_query = st.columns([1, 1])
     
     with col_ov_query:
@@ -2267,6 +1985,8 @@ if st.session_state.active_tab == "🔌 Ingestion":
                         email=st.session_state.jira_email
                     )
                     if res_df is not None:
+                        if not res_df.empty and not inc_all:
+                            res_df = res_df[res_df["Type"].isin(selected_types)].reset_index(drop=True)
                         st.session_state.overview_df = res_df
                         st.success(f"Success! Loaded {len(res_df)} Overview tickets.")
                         st.rerun()
@@ -2301,6 +2021,8 @@ if st.session_state.active_tab == "🔌 Ingestion":
                         email=st.session_state.jira_email
                     )
                     if res_df is not None:
+                        if not res_df.empty and not inc_all:
+                            res_df = res_df[res_df["Type"].isin(selected_types)].reset_index(drop=True)
                         st.session_state.outlook_df = res_df
                         st.success(f"Success! Loaded {len(res_df)} Outlook tickets.")
                         st.rerun()
@@ -2323,24 +2045,25 @@ if st.session_state.active_tab == "🔌 Ingestion":
         )
         
     if extra_source_type == "CSV Upload":
-        up_extra = st.file_uploader("Upload Additional Table CSV File:", type=["csv"], key="uploader_extra")
+        up_extra = st.file_uploader("Upload Additional Table CSV File:", type=["csv"], key=f"uploader_extra_{len(st.session_state.custom_tables)}")
         if up_extra:
-            try:
-                extra_df = pd.read_csv(up_extra)
-                if 'Select' not in extra_df.columns:
-                    extra_df.insert(0, 'Select', False)
-                if 'Labels' not in extra_df.columns:
-                    extra_df['Labels'] = ""
-                new_table = {
-                    "title": extra_table_title if extra_table_title.strip() != "" else "Special Project Metrics",
-                    "df": extra_df,
-                    "position": extra_table_position
-                }
-                st.session_state.custom_tables.append(new_table)
-                st.toast(f"Custom table '{new_table['title']}' uploaded successfully!", icon="📊")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error parsing Additional CSV: {str(e)}")
+            if st.button("➕ Import Custom Table", use_container_width=True):
+                try:
+                    extra_df = pd.read_csv(up_extra)
+                    if 'Select' not in extra_df.columns:
+                        extra_df.insert(0, 'Select', False)
+                    if 'Labels' not in extra_df.columns:
+                        extra_df['Labels'] = ""
+                    new_table = {
+                        "title": extra_table_title if extra_table_title.strip() != "" else "Special Project Metrics",
+                        "df": extra_df,
+                        "position": extra_table_position
+                    }
+                    st.session_state.custom_tables.append(new_table)
+                    st.toast(f"Custom table '{new_table['title']}' uploaded successfully!", icon="📊")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error parsing Additional CSV: {str(e)}")
     else:
         # Jira JQL Query
         custom_jql = st.text_area("JQL Query for Custom Table:", value="project = 'PROJ' AND status = 'In Progress'", key="extra_jql_text")
@@ -2393,12 +2116,38 @@ if st.session_state.active_tab == "🔌 Ingestion":
             try:
                 csv_df = pd.read_csv(up_ov)
                 # Normalization
-                rename_map = {'key': 'Key', 'summary': 'Summary', 'epic': 'Epic', 'status': 'Status', 'fix version': 'Fix Version', 'assignee': 'Assignee', 'type': 'Type', 'issue type': 'Type', 'issuetype': 'Type', 'labels': 'Labels'}
+                rename_map = {
+                    'key': 'Key',
+                    'issue key': 'Key',
+                    'summary': 'Summary',
+                    'status': 'Status',
+                    'fix version': 'Fix Version',
+                    'fix version/s': 'Fix Version',
+                    'fix versions': 'Fix Version',
+                    'assignee': 'Assignee',
+                    'type': 'Type',
+                    'issue type': 'Type',
+                    'issuetype': 'Type',
+                    'labels': 'Labels'
+                }
                 norm_cols = {}
+                epic_col_detected = None
+                for c in csv_df.columns:
+                    c_lower = c.strip().lower()
+                    if c_lower == 'epic':
+                        epic_col_detected = c
+                        break
+                    elif c_lower == 'custom field (epic link)' or c_lower == 'epic link':
+                        epic_col_detected = c
+                    elif c_lower == 'custom field (epic name)' or c_lower == 'epic name':
+                        if not epic_col_detected:
+                            epic_col_detected = c
                 for c in csv_df.columns:
                     for k_map, v_map in rename_map.items():
                         if c.strip().lower() == k_map:
                             norm_cols[c] = v_map
+                if epic_col_detected:
+                    norm_cols[epic_col_detected] = 'Epic'
                 if norm_cols:
                     csv_df.rename(columns=norm_cols, inplace=True)
                 for req in ['Key', 'Summary', 'Epic', 'Status', 'Fix Version']:
@@ -2418,6 +2167,40 @@ if st.session_state.active_tab == "🔌 Ingestion":
                     csv_df['Fix Version'] = csv_df['Fix Version'].apply(extract_numeric_version)
                 if 'Epic' in csv_df.columns:
                     csv_df['Epic'] = csv_df['Epic'].apply(lambda x: "-" if pd.isna(x) or str(x).strip() in ["", "No Epic", "nan"] else str(x).strip())
+                    if st.session_state.get("jira_server") and st.session_state.get("jira_token"):
+                        try:
+                            epic_keys = set(csv_df['Epic'].dropna().unique()) - {"-"}
+                            epic_keys = {k for k in epic_keys if " - " not in k}
+                            if epic_keys:
+                                keys_str = ",".join([f"'{k}'" for k in epic_keys])
+                                url = f"{st.session_state.jira_server.rstrip('/')}/rest/api/2/search"
+                                headers = {"Accept": "application/json", "Content-Type": "application/json"}
+                                if st.session_state.get("jira_auth_method") == "Corporate Login (Username + Password)" or st.session_state.get("jira_auth_method") == "Jira Cloud/Server Basic (Email/User + Token)":
+                                    auth = (st.session_state.get("jira_email", "").strip(), st.session_state.get("jira_token", "").strip())
+                                else:
+                                    headers["Authorization"] = f"Bearer {st.session_state.jira_token.strip()}"
+                                    auth = None
+                                
+                                params = {"jql": f"key in ({keys_str})", "fields": "key,summary", "maxResults": 100}
+                                if auth:
+                                    resp = requests.get(url, headers=headers, params=params, auth=auth, timeout=10)
+                                else:
+                                    resp = requests.get(url, headers=headers, params=params, timeout=10)
+                                    
+                                if resp.status_code == 200:
+                                    epic_map = {}
+                                    for issue in resp.json().get("issues", []):
+                                        ek = issue.get("key")
+                                        es = (issue.get("fields") or {}).get("summary")
+                                        if ek and es:
+                                            epic_map[ek] = f"{ek} - {es}"
+                                    csv_df['Epic'] = csv_df['Epic'].apply(lambda x: epic_map.get(x, x))
+                        except Exception:
+                            pass
+                
+                # Filter by selected issue types
+                if not inc_all:
+                    csv_df = csv_df[csv_df["Type"].isin(selected_types)].reset_index(drop=True)
                 
                 st.session_state.overview_df = csv_df[['Key', 'Summary', 'Epic', 'Status', 'Fix Version', 'Labels', 'Outlook', 'Sprint Review', 'Release Notes', 'Assignee', 'Demo', 'Type']]
                 st.success("Overview CSV loaded.")
@@ -2430,12 +2213,38 @@ if st.session_state.active_tab == "🔌 Ingestion":
             try:
                 csv_df = pd.read_csv(up_ot)
                 # Normalization
-                rename_map = {'key': 'Key', 'summary': 'Summary', 'epic': 'Epic', 'status': 'Status', 'fix version': 'Fix Version', 'assignee': 'Assignee', 'type': 'Type', 'issue type': 'Type', 'issuetype': 'Type', 'labels': 'Labels'}
+                rename_map = {
+                    'key': 'Key',
+                    'issue key': 'Key',
+                    'summary': 'Summary',
+                    'status': 'Status',
+                    'fix version': 'Fix Version',
+                    'fix version/s': 'Fix Version',
+                    'fix versions': 'Fix Version',
+                    'assignee': 'Assignee',
+                    'type': 'Type',
+                    'issue type': 'Type',
+                    'issuetype': 'Type',
+                    'labels': 'Labels'
+                }
                 norm_cols = {}
+                epic_col_detected = None
+                for c in csv_df.columns:
+                    c_lower = c.strip().lower()
+                    if c_lower == 'epic':
+                        epic_col_detected = c
+                        break
+                    elif c_lower == 'custom field (epic link)' or c_lower == 'epic link':
+                        epic_col_detected = c
+                    elif c_lower == 'custom field (epic name)' or c_lower == 'epic name':
+                        if not epic_col_detected:
+                            epic_col_detected = c
                 for c in csv_df.columns:
                     for k_map, v_map in rename_map.items():
                         if c.strip().lower() == k_map:
                             norm_cols[c] = v_map
+                if epic_col_detected:
+                    norm_cols[epic_col_detected] = 'Epic'
                 if norm_cols:
                     csv_df.rename(columns=norm_cols, inplace=True)
                 for req in ['Key', 'Summary', 'Epic', 'Status', 'Fix Version']:
@@ -2451,8 +2260,42 @@ if st.session_state.active_tab == "🔌 Ingestion":
                     csv_df['Fix Version'] = csv_df['Fix Version'].apply(extract_numeric_version)
                 if 'Epic' in csv_df.columns:
                     csv_df['Epic'] = csv_df['Epic'].apply(lambda x: "-" if pd.isna(x) or str(x).strip() in ["", "No Epic", "nan"] else str(x).strip())
+                    if st.session_state.get("jira_server") and st.session_state.get("jira_token"):
+                        try:
+                            epic_keys = set(csv_df['Epic'].dropna().unique()) - {"-"}
+                            epic_keys = {k for k in epic_keys if " - " not in k}
+                            if epic_keys:
+                                keys_str = ",".join([f"'{k}'" for k in epic_keys])
+                                url = f"{st.session_state.jira_server.rstrip('/')}/rest/api/2/search"
+                                headers = {"Accept": "application/json", "Content-Type": "application/json"}
+                                if st.session_state.get("jira_auth_method") == "Corporate Login (Username + Password)" or st.session_state.get("jira_auth_method") == "Jira Cloud/Server Basic (Email/User + Token)":
+                                    auth = (st.session_state.get("jira_email", "").strip(), st.session_state.get("jira_token", "").strip())
+                                else:
+                                    headers["Authorization"] = f"Bearer {st.session_state.jira_token.strip()}"
+                                    auth = None
+                                
+                                params = {"jql": f"key in ({keys_str})", "fields": "key,summary", "maxResults": 100}
+                                if auth:
+                                    resp = requests.get(url, headers=headers, params=params, auth=auth, timeout=10)
+                                else:
+                                    resp = requests.get(url, headers=headers, params=params, timeout=10)
+                                    
+                                if resp.status_code == 200:
+                                    epic_map = {}
+                                    for issue in resp.json().get("issues", []):
+                                        ek = issue.get("key")
+                                        es = (issue.get("fields") or {}).get("summary")
+                                        if ek and es:
+                                            epic_map[ek] = f"{ek} - {es}"
+                                    csv_df['Epic'] = csv_df['Epic'].apply(lambda x: epic_map.get(x, x))
+                        except Exception:
+                            pass
                 csv_df['Sprint Review'] = True
                 csv_df['Release Notes'] = True
+                
+                # Filter by selected issue types
+                if not inc_all:
+                    csv_df = csv_df[csv_df["Type"].isin(selected_types)].reset_index(drop=True)
                 
                 st.session_state.outlook_df = csv_df[['Key', 'Summary', 'Epic', 'Status', 'Fix Version', 'Labels', 'Sprint Review', 'Release Notes', 'Assignee', 'Type']]
                 st.success("Outlook CSV loaded.")
@@ -2538,7 +2381,7 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 col_cfg_ov = {
                     "Select": st.column_config.CheckboxColumn("Select 🗑️", default=False, width="small"),
                     "Key": st.column_config.TextColumn("Key 🔑", disabled=False),
-                    "Type": st.column_config.SelectboxColumn("Type 🏷️", options=["User Story", "Task", "Technical Task", "Bug"], width="medium", default="User Story"),
+                    "Type": st.column_config.SelectboxColumn("Type 🏷️", options=["User Story", "Task", "Technical Task", "Technical Sub-task", "Bug", "Epic", "Improvement", "Sub-task", "Other"], width="medium", default="User Story"),
                     "Summary": st.column_config.TextColumn("Summary ✍️", width="large"),
                     "Epic": st.column_config.TextColumn("Epic 🎯", width="medium"),
                     "Status": st.column_config.SelectboxColumn("Status 🚥", options=ov_statuses, width="small"),
@@ -2580,25 +2423,7 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 has_selected_ov_visible = bool(display_df["Select"].any()) if "Select" in display_df.columns else False
                 toggle_icon_ov = "☑️" if has_selected_ov_visible else "⬜"
                 
-                if st.session_state.custom_tables:
-                    # Target custom table selector
-                    st.markdown("---")
-                    target_ext_col1, target_ext_col2 = st.columns([3, 9])
-                    with target_ext_col1:
-                        st.markdown("**Add Custom Target:**")
-                    with target_ext_col2:
-                        target_table_title = st.selectbox(
-                            "Select which Custom Table to duplicate selected rows to:",
-                            options=[t["title"] for t in st.session_state.custom_tables],
-                            key="dup_ov_target_ext_title",
-                            label_visibility="collapsed"
-                        )
-                
-                if st.session_state.custom_tables:
-                    bot_col_sel, bot_col1, bot_col2, bot_col3, bot_col4 = st.columns([1.0, 2.5, 2.5, 2.5, 4.5])
-                else:
-                    bot_col_sel, bot_col1, bot_col2, bot_col3 = st.columns([1.0, 2.5, 2.5, 6.0])
-                    
+                bot_col_sel, bot_col1, bot_col2, bot_col3 = st.columns([1.0, 2.5, 2.5, 6.0])
                 with bot_col_sel:
                     if st.button(toggle_icon_ov, key="btn_toggle_sel_ov", use_container_width=True, help="Select/Deselect All"):
                         if has_selected_ov_visible:
@@ -2617,8 +2442,25 @@ elif st.session_state.active_tab == "✍️ Workbook":
                         st.toast("Deleted selected rows!", icon="🗑️")
                         st.rerun()
                 with bot_col2:
-                    if st.button("Add Outlook", key="btn_dup_ov_to_ot", use_container_width=True, disabled=not has_selected_ov):
-                        selected_rows = st.session_state.overview_df[st.session_state.overview_df["Select"] == True].copy()
+                    if st.button("Clear", key="btn_clear_ov", use_container_width=True):
+                        st.session_state.overview_df = None
+                        st.rerun()
+
+                # Duplicate in: dropdown menu
+                dest_options = ["Select destination...", "Outlook"]
+                if st.session_state.custom_tables:
+                    dest_options.extend([f"Custom Table: {t['title']}" for t in st.session_state.custom_tables])
+                
+                dup_dest = st.selectbox(
+                    "Duplicate in:",
+                    options=dest_options,
+                    key="dup_dest_ov",
+                    disabled=not has_selected_ov
+                )
+                
+                if dup_dest != "Select destination...":
+                    selected_rows = st.session_state.overview_df[st.session_state.overview_df["Select"] == True].copy()
+                    if dup_dest == "Outlook":
                         cols_to_keep = ["Key", "Summary", "Epic", "Status", "Fix Version", "Labels", "Sprint Review", "Release Notes", "Assignee", "Type"]
                         cols_to_keep = [c for c in cols_to_keep if c in selected_rows.columns]
                         selected_rows = selected_rows[cols_to_keep]
@@ -2632,37 +2474,25 @@ elif st.session_state.active_tab == "✍️ Workbook":
                         st.session_state.overview_df["Select"] = False
                         st.toast("Duplicated selected rows to Outlook!", icon="🔮")
                         st.rerun()
-                        
-                if st.session_state.custom_tables:
-                    with bot_col3:
-                        if st.button("Add Custom", key="btn_dup_ov_to_ext", use_container_width=True, disabled=not has_selected_ov):
-                            target_idx = None
-                            for idx, t in enumerate(st.session_state.custom_tables):
-                                if t["title"] == target_table_title:
-                                    target_idx = idx
-                                    break
-                            if target_idx is not None:
-                                selected_rows = st.session_state.overview_df[st.session_state.overview_df["Select"] == True].copy()
-                                target_df = st.session_state.custom_tables[target_idx]["df"]
-                                cols_to_keep = [col for col in target_df.columns if col != "Select"]
-                                for col in cols_to_keep:
-                                    if col not in selected_rows.columns:
-                                        selected_rows[col] = "-"
-                                selected_rows = selected_rows[cols_to_keep]
-                                selected_rows.insert(0, "Select", False)
-                                
-                                st.session_state.custom_tables[target_idx]["df"] = pd.concat([target_df, selected_rows], ignore_index=True)
-                                st.session_state.overview_df["Select"] = False
-                                st.toast(f"Duplicated selected rows to Custom Table '{target_table_title}'!", icon="📊")
-                                st.rerun()
-                    with bot_col4:
-                        if st.button("Clear", key="btn_clear_ov", use_container_width=True):
-                            st.session_state.overview_df = None
-                            st.rerun()
-                else:
-                    with bot_col3:
-                        if st.button("Clear", key="btn_clear_ov", use_container_width=True):
-                            st.session_state.overview_df = None
+                    elif dup_dest.startswith("Custom Table: "):
+                        target_title = dup_dest.replace("Custom Table: ", "")
+                        target_idx = None
+                        for idx, t in enumerate(st.session_state.custom_tables):
+                            if t["title"] == target_title:
+                                target_idx = idx
+                                break
+                        if target_idx is not None:
+                            target_df = st.session_state.custom_tables[target_idx]["df"]
+                            cols_to_keep = [col for col in target_df.columns if col != "Select"]
+                            for col in cols_to_keep:
+                                if col not in selected_rows.columns:
+                                    selected_rows[col] = "-"
+                            selected_rows = selected_rows[cols_to_keep]
+                            selected_rows.insert(0, "Select", False)
+                            
+                            st.session_state.custom_tables[target_idx]["df"] = pd.concat([target_df, selected_rows], ignore_index=True)
+                            st.session_state.overview_df["Select"] = False
+                            st.toast(f"Duplicated selected rows to Custom Table '{target_title}'!", icon="📊")
                             st.rerun()
                 
                 if not edited_ov.equals(display_df):
@@ -2695,7 +2525,7 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 col_cfg_ot = {
                     "Select": st.column_config.CheckboxColumn("Select 🗑️", default=False, width="small"),
                     "Key": st.column_config.TextColumn("Key 🔑", disabled=False),
-                    "Type": st.column_config.SelectboxColumn("Type 🏷️", options=["User Story", "Task", "Technical Task", "Bug"], width="medium", default="User Story"),
+                    "Type": st.column_config.SelectboxColumn("Type 🏷️", options=["User Story", "Task", "Technical Task", "Technical Sub-task", "Bug", "Epic", "Improvement", "Sub-task", "Other"], width="medium", default="User Story"),
                     "Summary": st.column_config.TextColumn("Summary ✍️", width="large"),
                     "Epic": st.column_config.TextColumn("Epic 🎯", width="medium"),
                     "Status": st.column_config.SelectboxColumn("Status 🚥", options=ot_statuses, width="small"),
@@ -2730,12 +2560,12 @@ elif st.session_state.active_tab == "✍️ Workbook":
                     column_config=col_cfg_ot,
                     key="editor_ot_refined"
                 )
-                
+
                 # Bottom action controls
                 has_selected_ot_visible = bool(display_df_ot["Select"].any()) if "Select" in display_df_ot.columns else False
                 toggle_icon_ot = "☑️" if has_selected_ot_visible else "⬜"
                 
-                bot_col_sel, bot_col1, bot_col2, bot_col3, bot_col4 = st.columns([1.0, 2.5, 2.5, 2.5, 4.5])
+                bot_col_sel, bot_col1, bot_col2, bot_col3 = st.columns([1.0, 2.5, 2.5, 6.0])
                 with bot_col_sel:
                     if st.button(toggle_icon_ot, key="btn_toggle_sel_ot", use_container_width=True, help="Select/Deselect All"):
                         if has_selected_ot_visible:
@@ -2753,27 +2583,34 @@ elif st.session_state.active_tab == "✍️ Workbook":
                         st.toast("Deleted selected rows!", icon="🗑️")
                         st.rerun()
                 with bot_col2:
-                    if st.button("Add Overview", key="btn_dup_ot_to_ov", use_container_width=True, disabled=not has_selected_ot):
-                        selected_rows = st.session_state.outlook_df[st.session_state.outlook_df["Select"] == True].copy()
-                        selected_rows["Outlook"] = ""
-                        selected_rows["Demo"] = False
-                        cols_order = ["Select", "Key", "Summary", "Epic", "Status", "Fix Version", "Labels", "Outlook", "Sprint Review", "Release Notes", "Assignee", "Demo", "Type"]
-                        cols_order = [c for c in cols_order if c in selected_rows.columns]
-                        selected_rows = selected_rows[cols_order]
-                        selected_rows["Select"] = False
-                        
-                        if st.session_state.overview_df is None:
-                            st.session_state.overview_df = selected_rows
-                        else:
-                            st.session_state.overview_df = pd.concat([st.session_state.overview_df, selected_rows], ignore_index=True)
-                            
-                        st.session_state.outlook_df["Select"] = False
-                        st.toast("Duplicated selected rows to Overview!", icon="🚀")
-                        st.rerun()
-                with bot_col3:
                     if st.button("Clear", key="btn_clear_ot", use_container_width=True):
                         st.session_state.outlook_df = None
                         st.rerun()
+
+                # Duplicate in: dropdown menu
+                dup_dest_ot = st.selectbox(
+                    "Duplicate in:",
+                    options=["Select destination...", "Overview"],
+                    key="dup_dest_ot",
+                    disabled=not has_selected_ot
+                )
+                if dup_dest_ot == "Overview":
+                    selected_rows = st.session_state.outlook_df[st.session_state.outlook_df["Select"] == True].copy()
+                    selected_rows["Outlook"] = ""
+                    selected_rows["Demo"] = False
+                    cols_order = ["Select", "Key", "Summary", "Epic", "Status", "Fix Version", "Labels", "Outlook", "Sprint Review", "Release Notes", "Assignee", "Demo", "Type"]
+                    cols_order = [c for c in cols_order if c in selected_rows.columns]
+                    selected_rows = selected_rows[cols_order]
+                    selected_rows["Select"] = False
+                    
+                    if st.session_state.overview_df is None:
+                        st.session_state.overview_df = selected_rows
+                    else:
+                        st.session_state.overview_df = pd.concat([st.session_state.overview_df, selected_rows], ignore_index=True)
+                        
+                    st.session_state.outlook_df["Select"] = False
+                    st.toast("Duplicated selected rows to Overview!", icon="🚀")
+                    st.rerun()
                 
                 if not edited_ot.equals(display_df_ot):
                     # Handle deleted rows in filtered view
@@ -2789,6 +2626,10 @@ elif st.session_state.active_tab == "✍️ Workbook":
                             match_idx = st.session_state.outlook_df[st.session_state.outlook_df["Key"] == key_val].index
                             if not match_idx.empty:
                                 st.session_state.outlook_df.loc[match_idx[0], row.index] = row.values
+                        else:
+                            st.session_state.outlook_df = pd.concat([st.session_state.outlook_df, pd.DataFrame([row])], ignore_index=True)
+                    st.success("Outlook workbook saved successfully!")
+                    st.rerun()
                  # Custom Table Dataset Workspace
         for ext_idx, ext_tab in enumerate(work_subtabs_ext):
             with ext_tab:
@@ -2798,8 +2639,8 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 
                 st.markdown(f"#### 📊 Custom Table: {display_title}")
                 
-                # Title, Position, and Delete inputs/actions
-                edit_col_title, edit_col_pos, edit_col_del = st.columns([3, 2, 2])
+                # Title, Position inputs
+                edit_col_title, edit_col_pos = st.columns([3, 2])
                 with edit_col_title:
                     new_title = st.text_input("Rename Table Title:", value=title_val, key=f"rename_ext_{ext_idx}")
                     if new_title != title_val:
@@ -2809,13 +2650,6 @@ elif st.session_state.active_tab == "✍️ Workbook":
                     new_pos = st.selectbox("Position in Report:", options=["Before Demo Table", "After Demo Table"], index=0 if table_data["position"] == "Before Demo Table" else 1, key=f"pos_ext_{ext_idx}")
                     if new_pos != table_data["position"]:
                         st.session_state.custom_tables[ext_idx]["position"] = new_pos
-                        st.rerun()
-                with edit_col_del:
-                    st.write("") # Spacer to align button
-                    st.write("")
-                    if st.button("🗑️ Delete Table", key=f"del_ext_tab_{ext_idx}", use_container_width=True):
-                        st.session_state.custom_tables.pop(ext_idx)
-                        st.toast(f"Custom table '{display_title}' deleted!", icon="🗑️")
                         st.rerun()
                 
                 df_ext = table_data["df"]
@@ -2832,7 +2666,7 @@ elif st.session_state.active_tab == "✍️ Workbook":
                     col_cfg_ext["Status"] = st.column_config.SelectboxColumn("Status 🚥", options=ext_statuses, width="small")
                 
                 # Sorting & Filtering controls
-                sc_col1, sc_col2, sc_col3, sc_col4 = st.columns([3.0, 3.0, 3.0, 3.0])
+                sc_col1, sc_col2, sc_col3 = st.columns([4.0, 4.0, 4.0])
                 with sc_col1:
                     ext_cols = ["🔍 Sort by..."] + [col for col in df_ext.columns if col != "Select"]
                     sort_col = st.selectbox("Sort by:", ext_cols, key=f"sort_ext_{ext_idx}_col", label_visibility="collapsed", on_change=trigger_sort_ext, args=(ext_idx,))
@@ -2846,17 +2680,6 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 if filter_label_ext.strip() != "" and "Labels" in display_df_ext.columns:
                     display_df_ext = display_df_ext[display_df_ext["Labels"].str.contains(filter_label_ext.strip(), case=False, na=False)]
 
-                with sc_col4:
-                    sel_all_col1, sel_all_col2 = st.columns(2)
-                    with sel_all_col1:
-                        if st.button("Select All", key=f"btn_sel_all_ext_{ext_idx}", use_container_width=True):
-                            st.session_state.custom_tables[ext_idx]["df"].loc[display_df_ext.index, "Select"] = True
-                            st.rerun()
-                    with sel_all_col2:
-                        if st.button("Deselect All", key=f"btn_unsel_all_ext_{ext_idx}", use_container_width=True):
-                            st.session_state.custom_tables[ext_idx]["df"].loc[display_df_ext.index, "Select"] = False
-                            st.rerun()
-
                 edited_ext = st.data_editor(
                     display_df_ext,
                     num_rows="dynamic",
@@ -2869,7 +2692,7 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 has_selected_ext_visible = bool(display_df_ext["Select"].any()) if "Select" in display_df_ext.columns else False
                 toggle_icon_ext = "☑️" if has_selected_ext_visible else "⬜"
                 
-                bot_col_sel, bot_col1, bot_col2, bot_col3, bot_col4 = st.columns([1.0, 2.5, 2.5, 2.5, 4.5])
+                bot_col_sel, bot_col1, bot_col2, bot_col3, bot_col4 = st.columns([1.0, 2.5, 2.5, 2.5, 3.5])
                 with bot_col_sel:
                     if st.button(toggle_icon_ext, key=f"btn_toggle_sel_ext_{ext_idx}", use_container_width=True, help="Select/Deselect All"):
                         if has_selected_ext_visible:
@@ -2917,6 +2740,11 @@ elif st.session_state.active_tab == "✍️ Workbook":
                     if st.button("Clear Data", key=f"btn_clear_ext_{ext_idx}", use_container_width=True):
                         st.session_state.custom_tables[ext_idx]["df"] = pd.DataFrame(columns=df_ext.columns)
                         st.toast("Custom table dataset cleared!", icon="🧹")
+                        st.rerun()
+                with bot_col4:
+                    if st.button("Delete Table", key=f"del_ext_tab_{ext_idx}", use_container_width=True):
+                        st.session_state.custom_tables.pop(ext_idx)
+                        st.toast(f"Custom table '{display_title}' deleted!", icon="🗑️")
                         st.rerun()
                         
                 if not edited_ext.equals(display_df_ext):
@@ -3154,50 +2982,25 @@ elif st.session_state.active_tab == "🎨 Branding":
                             pass
                 st.session_state.cover_temp_path = None
 
-        # Document Export File Names Configuration (NEW requested configuration)
+        # Document Export File Names Configuration
         st.markdown("**📄 Document Export File Names Base**")
-        st.write("Customize default download file names (spaces will automatically be replaced by underscores):")
-        col_fn1, col_fn2 = st.columns(2)
-        with col_fn1:
-            fn_sr = st.text_input(
-                "Sprint Review Filename Base:",
-                value=st.session_state.filename_sr,
-                placeholder="Sprint_Review_Report"
-            )
-            if fn_sr != st.session_state.filename_sr:
-                st.session_state.filename_sr = fn_sr
-        with col_fn2:
-            fn_rn = st.text_input(
-                "Release Notes Filename Base:",
-                value=st.session_state.filename_rn,
-                placeholder="Release_Notes"
-            )
-            if fn_rn != st.session_state.filename_rn:
-                st.session_state.filename_rn = fn_rn
+        st.write("Customize default download file name (spaces will automatically be replaced by underscores):")
+        fn_sr = st.text_input(
+            "Sprint Review Filename Base:",
+            value=st.session_state.filename_sr,
+            placeholder="Sprint_Review_Report"
+        )
+        if fn_sr != st.session_state.filename_sr:
+            st.session_state.filename_sr = fn_sr
 
-                
         with col_br_right:
-            st.markdown("**2. Release Notes Introduction (Rich Text / Markdown)**")
-            st.write("Write the welcoming customer intro paragraph printed at the top of your Release Notes PDF document.")
-            
-            intro_in = st.text_area(
-                "Introduction Content:",
-                value=st.session_state.release_notes_intro,
-                height=250
-            )
-            if intro_in != st.session_state.release_notes_intro:
-                st.session_state.release_notes_intro = intro_in
-                
-            with st.expander("👁️ View Live Markdown Preview"):
-                st.markdown(st.session_state.release_notes_intro)
-                
-            st.markdown("**3. Sprint Review Welcome Message**")
+            st.markdown("**2. Sprint Review Welcome Message**")
             st.write("Write the greeting message printed on the starting cover page of the Sprint Review PDF.")
             
             sprint_welcome_input = st.text_area(
                 "Welcome Message Content:",
                 value=st.session_state.sprint_welcome_message,
-                height=120,
+                height=180,
                 key="sprint_welcome_editor"
             )
             if sprint_welcome_input != st.session_state.sprint_welcome_message:
@@ -3260,47 +3063,17 @@ elif st.session_state.active_tab == "💾 Exporter":
                 
             st.markdown("<br/>", unsafe_allow_html=True)
             
-            # 2. Release Notes Card
-            st.markdown(f"""
-            <div class="export-card">
-                <h4 style='margin-bottom:6px; color:#FFFFFF;'>📣 Release Notes</h4>
-                <p style='font-size:11.5px; line-height:14px;'>Customer-facing release document featuring:
-                <ul style='margin-top:2px; margin-bottom:2px; padding-left:15px; font-size:11px;'>
-                    <li>Your custom rich welcome intro paragraph.</li>
-                    <li><b>Highlights:</b> Consolidated delivered items single table.</li>
-                    <li><b>Roadmap:</b> Consolidated next release highlights (Target: {primary_rel}).</li>
-                </ul>
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            try:
-                rn_pdf = build_release_notes_pdf(rn_ov_df, rn_ot_df)
-                clean_project_name = st.session_state.project_name.replace(' ', '_')
-                rn_filename = f"{st.session_state.filename_rn.strip().replace(' ', '_')}_{clean_project_name}.pdf" if st.session_state.filename_rn.strip() != "" else f"Release_Notes_{clean_project_name}.pdf"
-                st.download_button(
-                    label="⬇️ Download PDF Release Notes",
-                    data=rn_pdf,
-                    file_name=rn_filename,
-                    mime="application/pdf",
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.error(f"Error compiling Release Notes PDF: {str(e)}")
-                
-            st.markdown("<br/>", unsafe_allow_html=True)
             st.markdown("### 🔌 Confluence Publisher")
             st.markdown("""
             <div class="export-card" style="border-left: 4px solid #3B82F6;">
                 <h4 style="margin-bottom:6px; color:#FFFFFF;">🌐 Atlassian Confluence Integration</h4>
                 <p style="font-size:11.5px; line-height:14px; margin-bottom: 2px;">
-                    Upload generated PDFs directly as attachments to a targeted page in Confluence.
+                    Upload the generated Sprint Review PDF directly as an attachment to a targeted page in Confluence.
                 </p>
             </div>
             """, unsafe_allow_html=True)
             
             conf_server_input = st.text_input(
-
                 "Confluence Server URL:",
                 value=st.session_state.conf_server if st.session_state.conf_server else "https://devstack.vwgroup.com/confluence",
                 placeholder="https://devstack.vwgroup.com/confluence",
@@ -3327,7 +3100,7 @@ elif st.session_state.active_tab == "💾 Exporter":
                 conf_page_title_input = st.text_input(
                     "Page Title:",
                     value=st.session_state.conf_page_name,
-                    placeholder="e.g. Release Notes",
+                    placeholder="e.g. Sprint Review",
                     key="conf_page_name_input"
                 )
                 
@@ -3341,24 +3114,12 @@ elif st.session_state.active_tab == "💾 Exporter":
             if conf_page_title_input != st.session_state.conf_page_name:
                 st.session_state.conf_page_name = conf_page_title_input
                 
-            target_doc = st.selectbox(
-                "Select PDF Document to Upload:",
-                options=["Sprint Review Report 📋", "Release Notes 📣"],
-                key="conf_target_doc"
-            )
-            
             if st.button("🚀 Upload PDF to Confluence", use_container_width=True):
                 with st.spinner("Connecting and uploading to Confluence..."):
                     try:
-                        # Compile selected PDF
-                        if "Sprint Review" in target_doc:
-                            pdf_data = build_sprint_review_pdf(sr_ov_df, sr_ot_df)
-                            clean_project_name = st.session_state.project_name.replace(' ', '_')
-                            filename = f"{st.session_state.filename_sr.strip().replace(' ', '_')}_{clean_project_name}.pdf" if st.session_state.filename_sr.strip() != "" else f"Sprint_Review_Report_{clean_project_name}.pdf"
-                        else:
-                            pdf_data = build_release_notes_pdf(rn_ov_df, rn_ot_df)
-                            clean_project_name = st.session_state.project_name.replace(' ', '_')
-                            filename = f"{st.session_state.filename_rn.strip().replace(' ', '_')}_{clean_project_name}.pdf" if st.session_state.filename_rn.strip() != "" else f"Release_Notes_{clean_project_name}.pdf"
+                        pdf_data = build_sprint_review_pdf(sr_ov_df, sr_ot_df)
+                        clean_project_name = st.session_state.project_name.replace(' ', '_')
+                        filename = f"{st.session_state.filename_sr.strip().replace(' ', '_')}_{clean_project_name}.pdf" if st.session_state.filename_sr.strip() != "" else f"Sprint_Review_Report_{clean_project_name}.pdf"
                             
                         # Call helper
                         pdf_bytes = pdf_data.getvalue()
@@ -3379,27 +3140,14 @@ elif st.session_state.active_tab == "💾 Exporter":
                         st.error(f"Failed to publish to Confluence: {str(ex)}")
                         
         with col_preview_area:
-
             st.markdown("### 👁️ Live Document Previewer")
-            st.write("Toggle between documents to see an interactive, scrollable PDF preview below:")
-            
-            sel_preview = st.radio(
-                "Document Preview Target:",
-                options=["Sprint Review Report 📋", "Release Notes 📣"],
-                horizontal=True
-            )
+            st.write("Sprint Review Report PDF live preview:")
             
             active_pdf_data = None
-            if "Sprint Review" in sel_preview:
-                try:
-                    active_pdf_data = build_sprint_review_pdf(sr_ov_df, sr_ot_df)
-                except:
-                    pass
-            else:
-                try:
-                    active_pdf_data = build_release_notes_pdf(rn_ov_df, rn_ot_df)
-                except:
-                    pass
+            try:
+                active_pdf_data = build_sprint_review_pdf(sr_ov_df, sr_ot_df)
+            except:
+                pass
                     
             if active_pdf_data is not None:
                 try:
