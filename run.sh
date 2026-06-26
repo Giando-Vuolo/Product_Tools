@@ -17,9 +17,9 @@ echo "🔋 Activando entorno virtual..."
 source .venv/bin/activate
 
 # 3. Actualizar pip e instalar dependencias
-echo "📥 Verificando e instalando dependencias (Streamlit, Pandas, Plotly)..."
+echo "📥 Verificando e instalar dependencias desde requirements.txt..."
 python -m pip install --upgrade pip
-pip install streamlit pandas plotly
+pip install -r requirements.txt
 
 # 4. Iniciar la aplicación de Streamlit
 echo "🚀 Lanzando servidor de Streamlit..."

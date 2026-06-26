@@ -86,7 +86,7 @@ If you are a developer and prefer to configure the virtual environment and run t
 3. **Install Dependencies**:
    ```bash
    pip install --upgrade pip
-   pip install streamlit pandas plotly
+   pip install -r requirements.txt
    ```
 4. **Launch Streamlit**:
    ```bash

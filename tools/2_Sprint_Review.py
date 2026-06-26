@@ -127,8 +127,8 @@ if 'active_tab' not in st.session_state:
     st.session_state.active_tab = "🔌 Ingestion"
 
 # Temporary logo file management
-if 'logo_temp_path' not in st.session_state:
-    st.session_state.logo_temp_path = default_logo_temp_path
+if 'sr_logo_temp_path' not in st.session_state:
+    st.session_state.sr_logo_temp_path = default_logo_temp_path
 
 # Starting Cover Page welcome message and cover image states (NEW requested states)
 if 'sprint_number' not in st.session_state:
@@ -137,8 +137,8 @@ if 'sprint_number' not in st.session_state:
 if 'sprint_welcome_message' not in st.session_state:
     st.session_state.sprint_welcome_message = default_sprint_welcome_message
 
-if 'cover_temp_path' not in st.session_state:
-    st.session_state.cover_temp_path = default_cover_temp_path
+if 'sr_cover_temp_path' not in st.session_state:
+    st.session_state.sr_cover_temp_path = default_cover_temp_path
 
 if 'ov_sprint_num' not in st.session_state:
     st.session_state.ov_sprint_num = default_ov_sprint_num
@@ -979,7 +979,7 @@ class NumberedCanvas(canvas.Canvas):
         primary_color_hex = st.session_state.primary_color
         primary_color = hex_to_reportlab_color(primary_color_hex)
         project_name = st.session_state.project_name
-        logo_path = st.session_state.logo_temp_path
+        logo_path = st.session_state.sr_logo_temp_path
         
         self.saveState()
         
@@ -1532,7 +1532,7 @@ def build_sprint_review_pdf(overview_df, outlook_df):
     story.append(Paragraph(f"Date: {current_date}", cover_date_style))
     story.append(Spacer(1, 5))
     
-    cover_image_path = st.session_state.cover_temp_path
+    cover_image_path = st.session_state.sr_cover_temp_path
     if cover_image_path and os.path.exists(cover_image_path):
         try:
             pil_img = PILImage.open(cover_image_path)
@@ -2108,8 +2108,8 @@ if st.session_state.active_tab == "🔌 Ingestion":
  
     with col_sand2:
         st.write("Or import raw local CSV files:")
-        up_ov = st.file_uploader("Upload Overview CSV File:", type=["csv"], key="uploader_ov")
-        up_ot = st.file_uploader("Upload Outlook CSV File:", type=["csv"], key="uploader_ot")
+        up_ov = st.file_uploader("Upload Overview CSV File:", type=["csv"], key="sr_uploader_ov")
+        up_ot = st.file_uploader("Upload Outlook CSV File:", type=["csv"], key="sr_uploader_ot")
         
         # Ingest Overview CSV
         if up_ov:
@@ -2511,8 +2511,6 @@ elif st.session_state.active_tab == "✍️ Workbook":
                                 st.session_state.overview_df.loc[match_idx[0], row.index] = row.values
                         else:
                             st.session_state.overview_df = pd.concat([st.session_state.overview_df, pd.DataFrame([row])], ignore_index=True)
-                    st.success("Overview workbook saved successfully!")
-                    st.rerun()
                     
         # Outlook Dataset Workspace
         with work_subtab_ot:
@@ -2628,8 +2626,6 @@ elif st.session_state.active_tab == "✍️ Workbook":
                                 st.session_state.outlook_df.loc[match_idx[0], row.index] = row.values
                         else:
                             st.session_state.outlook_df = pd.concat([st.session_state.outlook_df, pd.DataFrame([row])], ignore_index=True)
-                    st.success("Outlook workbook saved successfully!")
-                    st.rerun()
                  # Custom Table Dataset Workspace
         for ext_idx, ext_tab in enumerate(work_subtabs_ext):
             with ext_tab:
@@ -2769,8 +2765,6 @@ elif st.session_state.active_tab == "✍️ Workbook":
                     else:
                         for idx, row in edited_ext.iterrows():
                             st.session_state.custom_tables[ext_idx]["df"].loc[idx] = row
-                    st.success("Custom table workbook saved successfully!")
-                    st.rerun()
 
 # ---------------------------------------------------------
 # STEP 3: Branding & Intro
@@ -2901,34 +2895,35 @@ elif st.session_state.active_tab == "🎨 Branding":
         # Brand Logo Image uploader
         logo_file = st.file_uploader(
             "Or upload a new Custom Project Brand Logo (PNG, JPEG):",
-            type=["png", "jpg", "jpeg"]
+            type=["png", "jpg", "jpeg"],
+            key="sr_logo_uploader"
         )
         
         if logo_file:
             try:
                 logo_image = PILImage.open(logo_file)
-                logo_temp = "tools_temp_logo.png"
+                logo_temp = "sr_temp_logo.png"
                 logo_image.save(logo_temp)
-                st.session_state.logo_temp_path = logo_temp
+                st.session_state.sr_logo_temp_path = logo_temp
                 st.image(logo_image, caption="Preview of uploaded brand logo", width=150)
             except Exception as e:
                 st.error(f"Error processing upload image logo: {str(e)}")
         else:
             if selected_default_logo:
-                st.session_state.logo_temp_path = selected_default_logo
+                st.session_state.sr_logo_temp_path = selected_default_logo
                 try:
                     default_img = PILImage.open(selected_default_logo)
                     st.image(default_img, caption=f"Preview of logo preset: {os.path.basename(selected_default_logo)}", width=150)
                 except Exception as e:
                     st.error(f"Error loading logo preset: {str(e)}")
             else:
-                if st.session_state.logo_temp_path == "tools_temp_logo.png":
-                    if os.path.exists("tools_temp_logo.png"):
+                if st.session_state.sr_logo_temp_path == "sr_temp_logo.png":
+                    if os.path.exists("sr_temp_logo.png"):
                         try:
-                            os.remove("tools_temp_logo.png")
+                            os.remove("sr_temp_logo.png")
                         except:
                             pass
-                st.session_state.logo_temp_path = None
+                st.session_state.sr_logo_temp_path = None
                 
         # Scan covers folder for presets
         cover_dir = "assets/covers"
@@ -2953,34 +2948,34 @@ elif st.session_state.active_tab == "🎨 Branding":
         cover_file = st.file_uploader(
             "Or upload a new Custom Starting Page Cover Image (PNG, JPEG):",
             type=["png", "jpg", "jpeg"],
-            key="cover_image_uploader"
+            key="sr_cover_image_uploader"
         )
         
         if cover_file:
             try:
                 cover_image = PILImage.open(cover_file)
-                cover_temp = "tools_temp_cover.png"
+                cover_temp = "sr_temp_cover.png"
                 cover_image.save(cover_temp)
-                st.session_state.cover_temp_path = cover_temp
+                st.session_state.sr_cover_temp_path = cover_temp
                 st.image(cover_image, caption="Preview of uploaded cover image", width=180)
             except Exception as e:
                 st.error(f"Error processing cover image: {str(e)}")
         else:
             if selected_default_cover:
-                st.session_state.cover_temp_path = selected_default_cover
+                st.session_state.sr_cover_temp_path = selected_default_cover
                 try:
                     default_cimg = PILImage.open(selected_default_cover)
                     st.image(default_cimg, caption=f"Preview of cover preset: {os.path.basename(selected_default_cover)}", width=180)
                 except Exception as e:
                     st.error(f"Error loading cover preset: {str(e)}")
             else:
-                if st.session_state.cover_temp_path == "tools_temp_cover.png":
-                    if os.path.exists("tools_temp_cover.png"):
+                if st.session_state.sr_cover_temp_path == "sr_temp_cover.png":
+                    if os.path.exists("sr_temp_cover.png"):
                         try:
-                            os.remove("tools_temp_cover.png")
+                            os.remove("sr_temp_cover.png")
                         except:
                             pass
-                st.session_state.cover_temp_path = None
+                st.session_state.sr_cover_temp_path = None
 
         # Document Export File Names Configuration
         st.markdown("**📄 Document Export File Names Base**")

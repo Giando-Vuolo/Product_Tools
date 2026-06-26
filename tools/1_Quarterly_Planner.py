@@ -561,6 +561,9 @@ if uploaded_file:
 
         # Compare changes reactively
         if not edited_df.equals(st.session_state.main_df):
+            needs_rerun = False
+            if len(edited_df) != len(st.session_state.main_df):
+                needs_rerun = True
             for idx in edited_df.index:
                 if idx in st.session_state.main_df.index:
                     old_row = st.session_state.main_df.loc[idx]
@@ -578,6 +581,7 @@ if uploaded_file:
                         calculated = calculate_sequential_dates(new_row)
                         edited_df.at[idx, 'Start Date'] = calculated[0]
                         edited_df.at[idx, 'Due Date'] = calculated[1]
+                        needs_rerun = True
                     elif start_date_changed or due_date_changed:
                         # Manual date changes -> Reverse calculate Sprint and Size
                         new_start = new_row.get('Start Date')
@@ -608,14 +612,17 @@ if uploaded_file:
                                     min_diff = diff
                                     best_size = sz
                             edited_df.at[idx, 'Size'] = best_size
+                        needs_rerun = True
                 else:
                     # New row
                     calculated = calculate_sequential_dates(edited_df.loc[idx])
                     edited_df.at[idx, 'Start Date'] = calculated[0]
                     edited_df.at[idx, 'Due Date'] = calculated[1]
+                    needs_rerun = True
                     
             st.session_state.main_df = edited_df
-            st.rerun()
+            if needs_rerun:
+                st.rerun()
 
     # 5. Apply filters mask to a copy for visual display and analysis
     filtered_df = st.session_state.main_df.copy()
