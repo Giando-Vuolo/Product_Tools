@@ -1978,7 +1978,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
     with col_cb4:
         inc_tech = st.checkbox("Technical Task", value=("Technical Task" in DEFAULT_INCLUDED_TYPES), key="inc_tech", disabled=inc_all)
     with col_cb5:
-        inc_subtask = st.checkbox("Technical Sub-task", value=("Technical Sub-task" in DEFAULT_INCLUDED_TYPES), key="inc_subtask", disabled=inc_all)
+        inc_subtask = st.checkbox("Sub-task", value=("Technical Sub-task" in DEFAULT_INCLUDED_TYPES), key="inc_subtask", disabled=inc_all)
     with col_cb6:
         inc_bug = st.checkbox("Bug", value=("Bug" in DEFAULT_INCLUDED_TYPES), key="inc_bug", disabled=inc_all)
 
