@@ -209,7 +209,7 @@ def get_status_group(status_str, is_milestone=False):
         return "To Do"
     elif s in ["in progress", "en progreso", "desarrollo", "testing", "in_progress"]:
         return "In Progress"
-    elif s in ["done", "completado", "listo", "closed", "cerrado", "finalizado", "terminado"]:
+    elif s in ["done", "completado", "listo", "closed", "cerrado", "finalizado", "terminado", "acceptance test"]:
         return "Done"
     elif s in ["blocked", "bloqueado", "impedimento", "pausado"]:
         return "Blocked"
@@ -257,6 +257,209 @@ def val_changed(v1, v2):
         return bool(v1 != v2)
     except Exception:
         return True
+
+
+def get_sprint_duration():
+    return st.session_state.get("sprint_duration", 15)
+
+def get_size_mapping():
+    return {
+        'S': int(st.session_state.get("size_s_sprints", 1)),
+        'M': int(st.session_state.get("size_m_sprints", 2)),
+        'L': int(st.session_state.get("size_l_sprints", 3)),
+        'XL': int(st.session_state.get("size_xl_sprints", 4))
+    }
+
+def calculate_sequential_dates(row):
+    is_milestone = row.get('Milestone', False)
+    
+    epic_size = row.get('Size', 'M')
+    size_mapping = get_size_mapping()
+    sprint_duration = get_sprint_duration()
+    
+    if pd.isna(epic_size) or not isinstance(epic_size, str) or epic_size.upper() not in size_mapping:
+        epic_size = 'M'
+    else:
+        epic_size = epic_size.upper()
+        
+    num_sprints = size_mapping[epic_size]
+    
+    # If it is a Milestone, the default duration is 1 day, otherwise calculated in sprints
+    duration = 1 if is_milestone else (num_sprints * sprint_duration)
+    
+    sprint_val = row.get('Sprint')
+    q_field = row.get('Quarter')
+    base_date = parse_quarter_to_date(q_field)
+    
+    try:
+        if pd.notna(sprint_val) and 'sprint_calendar' in st.session_state:
+            sprint_num = int(float(sprint_val))
+            if is_milestone:
+                cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == sprint_num]
+                if not cal_row.empty:
+                    start_date = pd.to_datetime(cal_row.iloc[0]['Start Date'])
+                    due_date = start_date + pd.Timedelta(days=1)
+                else:
+                    start_date = base_date + pd.Timedelta(days=(sprint_num - 1) * sprint_duration)
+                    due_date = start_date + pd.Timedelta(days=1)
+            else:
+                end_sprint_num = sprint_num + num_sprints - 1
+                
+                start_cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == sprint_num]
+                end_cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == end_sprint_num]
+                
+                if not start_cal_row.empty:
+                    start_date = pd.to_datetime(start_cal_row.iloc[0]['Start Date'])
+                    if not end_cal_row.empty:
+                        due_date = pd.to_datetime(end_cal_row.iloc[0]['Due Date'])
+                    else:
+                        due_date = start_date + pd.Timedelta(days=duration)
+                else:
+                    start_date = base_date + pd.Timedelta(days=(sprint_num - 1) * sprint_duration)
+                    due_date = start_date + pd.Timedelta(days=duration)
+        else:
+            start_date = base_date
+            due_date = start_date + pd.Timedelta(days=duration)
+    except Exception as e:
+        start_date = base_date
+        due_date = start_date + pd.Timedelta(days=duration)
+        
+    return pd.Series([start_date, due_date], index=['Start Date', 'Due Date'])
+
+def sync_sprint_calendar_changes():
+    edits = st.session_state.get("sprint_cal_editor")
+    if not edits or st.session_state.get("sprint_calendar") is None:
+        return
+    df = st.session_state.sprint_calendar.copy()
+    for idx_str, col_changes in edits.get("edited_rows", {}).items():
+        idx = int(idx_str)
+        if idx < len(df):
+            for col, val in col_changes.items():
+                df.at[idx, col] = val
+    st.session_state.sprint_calendar = df
+    
+    # Recalculate main_df if present
+    if 'main_df' in st.session_state:
+        main_df = st.session_state.main_df.copy()
+        for idx, row in main_df.iterrows():
+            sprint_val = row.get('Sprint')
+            if pd.notna(sprint_val):
+                try:
+                    s_num = int(float(sprint_val))
+                    cal_row = df[df['Sprint'] == s_num]
+                    if not cal_row.empty:
+                        calculated = calculate_sequential_dates(row)
+                        main_df.at[idx, 'Start Date'] = calculated[0]
+                        main_df.at[idx, 'Due Date'] = calculated[1]
+                except:
+                    pass
+        st.session_state.main_df = main_df
+
+def sync_main_editor_changes():
+    edits = st.session_state.get("main_editor")
+    if not edits or st.session_state.get("main_df") is None:
+        return
+    
+    df = st.session_state.main_df.copy()
+    sprint_duration = get_sprint_duration()
+    size_mapping = get_size_mapping()
+    
+    # Process Edited Rows
+    for idx_str, col_changes in edits.get("edited_rows", {}).items():
+        idx = int(idx_str)
+        if idx in df.index:
+            old_row = df.loc[idx]
+            new_row = old_row.copy()
+            for col, val in col_changes.items():
+                new_row[col] = val
+                
+            sprint_changed = val_changed(old_row.get('Sprint'), new_row.get('Sprint'))
+            quarter_changed = val_changed(old_row.get('Quarter'), new_row.get('Quarter'))
+            milestone_changed = val_changed(old_row.get('Milestone'), new_row.get('Milestone'))
+            size_changed = val_changed(old_row.get('Size'), new_row.get('Size'))
+            start_date_changed = val_changed(old_row.get('Start Date'), new_row.get('Start Date'))
+            due_date_changed = val_changed(old_row.get('Due Date'), new_row.get('Due Date'))
+            dates_null = bool(pd.isna(new_row.get('Start Date')) or pd.isna(new_row.get('Due Date')))
+            
+            if sprint_changed or quarter_changed or milestone_changed or size_changed or dates_null:
+                calculated = calculate_sequential_dates(new_row)
+                new_row['Start Date'] = calculated[0]
+                new_row['Due Date'] = calculated[1]
+            elif start_date_changed or due_date_changed:
+                new_start = new_row.get('Start Date')
+                new_due = new_row.get('Due Date')
+                
+                if pd.notna(new_start):
+                    new_start_dt = pd.to_datetime(new_start)
+                    matching_sprint = pd.NA
+                    if 'sprint_calendar' in st.session_state:
+                        for _, cal_row in st.session_state.sprint_calendar.iterrows():
+                            cal_start = pd.to_datetime(cal_row['Start Date'])
+                            cal_due = pd.to_datetime(cal_row['Due Date'])
+                            if cal_start <= new_start_dt < cal_due:
+                                matching_sprint = int(cal_row['Sprint'])
+                                break
+                    new_row['Sprint'] = matching_sprint
+                    
+                if pd.notna(new_start) and pd.notna(new_due):
+                    new_start_dt = pd.to_datetime(new_start)
+                    new_due_dt = pd.to_datetime(new_due)
+                    duration_days = (new_due_dt - new_start_dt).days
+                    approx_sprints = max(1, round(duration_days / sprint_duration))
+                    
+                    best_size = 'M'
+                    min_diff = 999
+                    for sz, sz_sprints in size_mapping.items():
+                        diff = abs(sz_sprints - approx_sprints)
+                        if diff < min_diff:
+                            min_diff = diff
+                            best_size = sz
+                    new_row['Size'] = best_size
+            
+            for col in df.columns:
+                df.at[idx, col] = new_row[col]
+
+    # Process Deleted Rows
+    deleted_indices = edits.get("deleted_rows", [])
+    if deleted_indices:
+        df.drop(index=deleted_indices, inplace=True)
+        df.reset_index(drop=True, inplace=True)
+
+    # Process Added Rows
+    added_rows = edits.get("added_rows", [])
+    if added_rows:
+        new_rows_list = []
+        for added_row in added_rows:
+            row_dict = {
+                'Key': added_row.get('Key', 'KEY-999'),
+                'Epic Name': added_row.get('Epic Name', 'New Epic'),
+                'Status': added_row.get('Status', 'To Do'),
+                'Sprint': added_row.get('Sprint', pd.NA),
+                'Size': added_row.get('Size', 'M'),
+                'Quarter': added_row.get('Quarter', 'Q1 - 26'),
+                'Cluster': added_row.get('Cluster', 'General'),
+                'Cluster Name': added_row.get('Cluster Name', ''),
+                'Milestone': added_row.get('Milestone', False),
+                'Labels': added_row.get('Labels', ''),
+                'Description': added_row.get('Description', 'No description provided.')
+            }
+            for k, v in added_row.items():
+                if k not in row_dict:
+                    row_dict[k] = v
+                    
+            calculated = calculate_sequential_dates(row_dict)
+            row_dict['Start Date'] = calculated[0]
+            row_dict['Due Date'] = calculated[1]
+            new_rows_list.append(row_dict)
+            
+        new_rows_df = pd.DataFrame(new_rows_list)
+        for col in df.columns:
+            if col not in new_rows_df.columns:
+                new_rows_df[col] = pd.NA
+        new_rows_df = new_rows_df[df.columns]
+        df = pd.concat([df, new_rows_df], ignore_index=True)
+
+    st.session_state.main_df = df
 
 
 st.title("🎯 Quarterly Planner")
@@ -367,74 +570,15 @@ if uploaded_file:
     st.sidebar.header("⚙️ Settings")
 
     with st.sidebar.expander("⚙️ Sprint Duration", expanded=False):
-        sprint_duration = st.number_input("Days:", min_value=1, max_value=90, value=15)
+        sprint_duration = st.number_input("Days:", min_value=1, max_value=90, value=15, key="sprint_duration")
         
     with st.sidebar.expander("📐 Sizes to Sprints Equivalence", expanded=False):
-        size_s_sprints = st.number_input("S Size:", min_value=1, max_value=20, value=1)
-        size_m_sprints = st.number_input("M Size:", min_value=1, max_value=20, value=2)
-        size_l_sprints = st.number_input("L Size:", min_value=1, max_value=20, value=3)
-        size_xl_sprints = st.number_input("XL Size:", min_value=1, max_value=20, value=4)
+        size_s_sprints = st.number_input("S Size:", min_value=1, max_value=20, value=1, key="size_s_sprints")
+        size_m_sprints = st.number_input("M Size:", min_value=1, max_value=20, value=2, key="size_m_sprints")
+        size_l_sprints = st.number_input("L Size:", min_value=1, max_value=20, value=3, key="size_l_sprints")
+        size_xl_sprints = st.number_input("XL Size:", min_value=1, max_value=20, value=4, key="size_xl_sprints")
         
-    size_mapping = {
-        'S': int(size_s_sprints),
-        'M': int(size_m_sprints),
-        'L': int(size_l_sprints),
-        'XL': int(size_xl_sprints)
-    }
-
-    # Function to calculate sequential/dynamic dates for a row
-    def calculate_sequential_dates(row):
-        is_milestone = row.get('Milestone', False)
-        
-        epic_size = row.get('Size', 'M')
-        if pd.isna(epic_size) or not isinstance(epic_size, str) or epic_size.upper() not in size_mapping:
-            epic_size = 'M'
-        else:
-            epic_size = epic_size.upper()
-            
-        num_sprints = size_mapping[epic_size]
-        
-        # If it is a Milestone, the default duration is 1 day, otherwise calculated in sprints
-        duration = 1 if is_milestone else (num_sprints * sprint_duration)
-        
-        sprint_val = row.get('Sprint')
-        q_field = row.get('Quarter')
-        base_date = parse_quarter_to_date(q_field)
-        
-        try:
-            if pd.notna(sprint_val):
-                sprint_num = int(float(sprint_val))
-                if is_milestone:
-                    cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == sprint_num]
-                    if not cal_row.empty:
-                        start_date = pd.to_datetime(cal_row.iloc[0]['Start Date'])
-                        due_date = start_date + pd.Timedelta(days=1)
-                    else:
-                        start_date = base_date + pd.Timedelta(days=(sprint_num - 1) * sprint_duration)
-                        due_date = start_date + pd.Timedelta(days=1)
-                else:
-                    end_sprint_num = sprint_num + num_sprints - 1
-                    
-                    start_cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == sprint_num]
-                    end_cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == end_sprint_num]
-                    
-                    if not start_cal_row.empty:
-                        start_date = pd.to_datetime(start_cal_row.iloc[0]['Start Date'])
-                        if not end_cal_row.empty:
-                            due_date = pd.to_datetime(end_cal_row.iloc[0]['Due Date'])
-                        else:
-                            due_date = start_date + pd.Timedelta(days=duration)
-                    else:
-                        start_date = base_date + pd.Timedelta(days=(sprint_num - 1) * sprint_duration)
-                        due_date = start_date + pd.Timedelta(days=duration)
-            else:
-                start_date = base_date
-                due_date = start_date + pd.Timedelta(days=duration)
-        except Exception as e:
-            start_date = base_date
-            due_date = start_date + pd.Timedelta(days=duration)
-            
-        return pd.Series([start_date, due_date], index=['Start Date', 'Due Date'])
+    size_mapping = get_size_mapping()
 
     # Initialize the Sprint Calendar in Session State if it doesn't exist
     if 'sprint_calendar' not in st.session_state:
@@ -473,7 +617,7 @@ if uploaded_file:
         st.session_state.sprint_calendar = pd.DataFrame(updated_sprints)
 
     with st.sidebar.expander("📅 Sprints Dates", expanded=False):
-        sprint_calendar_edited = st.data_editor(
+        st.data_editor(
             st.session_state.sprint_calendar,
             num_rows="fixed",
             use_container_width=True,
@@ -482,27 +626,10 @@ if uploaded_file:
                 "Start Date": st.column_config.DateColumn("Start Date"),
                 "Due Date": st.column_config.DateColumn("End Date")
             },
-            key="sprint_cal_editor"
+            key="sprint_cal_editor",
+            on_change=sync_sprint_calendar_changes
         )
-        
-        # If the calendar is edited, update session and recalculate
-        if not sprint_calendar_edited.equals(st.session_state.sprint_calendar):
-            st.session_state.sprint_calendar = sprint_calendar_edited
-            if 'main_df' in st.session_state:
-                # Recalculate epics that depend on a Sprint
-                for idx, row in st.session_state.main_df.iterrows():
-                    sprint_val = row.get('Sprint')
-                    if pd.notna(sprint_val):
-                        try:
-                            s_num = int(float(sprint_val))
-                            cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == s_num]
-                            if not cal_row.empty:
-                                calculated = calculate_sequential_dates(row)
-                                st.session_state.main_df.at[idx, 'Start Date'] = calculated[0]
-                                st.session_state.main_df.at[idx, 'Due Date'] = calculated[1]
-                        except:
-                            pass
-                st.rerun()
+
 
     # Expander 4: Actions (Recalculate)
     with st.sidebar.expander("🔄 Actions", expanded=False):
@@ -551,78 +678,15 @@ if uploaded_file:
     # "Data" Collapsible Expandable Section
     with st.expander("📊 Data", expanded=True):
         st.write("Modify your epics and sprints directly in the table below:")
-        edited_df = st.data_editor(
+        st.data_editor(
             st.session_state.main_df, 
             num_rows="dynamic", 
             use_container_width=True,
             column_config=column_config,
-            key="main_editor"
+            key="main_editor",
+            on_change=sync_main_editor_changes
         )
 
-        # Compare changes reactively
-        if not edited_df.equals(st.session_state.main_df):
-            needs_rerun = False
-            if len(edited_df) != len(st.session_state.main_df):
-                needs_rerun = True
-            for idx in edited_df.index:
-                if idx in st.session_state.main_df.index:
-                    old_row = st.session_state.main_df.loc[idx]
-                    new_row = edited_df.loc[idx]
-                    
-                    sprint_changed = val_changed(old_row.get('Sprint'), new_row.get('Sprint'))
-                    quarter_changed = val_changed(old_row.get('Quarter'), new_row.get('Quarter'))
-                    milestone_changed = val_changed(old_row.get('Milestone'), new_row.get('Milestone'))
-                    size_changed = val_changed(old_row.get('Size'), new_row.get('Size'))
-                    start_date_changed = val_changed(old_row.get('Start Date'), new_row.get('Start Date'))
-                    due_date_changed = val_changed(old_row.get('Due Date'), new_row.get('Due Date'))
-                    dates_null = bool(pd.isna(new_row.get('Start Date')) or pd.isna(new_row.get('Due Date')))
-                    
-                    if sprint_changed or quarter_changed or milestone_changed or size_changed or dates_null:
-                        calculated = calculate_sequential_dates(new_row)
-                        edited_df.at[idx, 'Start Date'] = calculated[0]
-                        edited_df.at[idx, 'Due Date'] = calculated[1]
-                        needs_rerun = True
-                    elif start_date_changed or due_date_changed:
-                        # Manual date changes -> Reverse calculate Sprint and Size
-                        new_start = new_row.get('Start Date')
-                        new_due = new_row.get('Due Date')
-                        
-                        if pd.notna(new_start):
-                            new_start_dt = pd.to_datetime(new_start)
-                            matching_sprint = pd.NA
-                            for _, cal_row in st.session_state.sprint_calendar.iterrows():
-                                cal_start = pd.to_datetime(cal_row['Start Date'])
-                                cal_due = pd.to_datetime(cal_row['Due Date'])
-                                if cal_start <= new_start_dt < cal_due:
-                                    matching_sprint = int(cal_row['Sprint'])
-                                    break
-                            edited_df.at[idx, 'Sprint'] = matching_sprint
-                            
-                        if pd.notna(new_start) and pd.notna(new_due):
-                            new_start_dt = pd.to_datetime(new_start)
-                            new_due_dt = pd.to_datetime(new_due)
-                            duration_days = (new_due_dt - new_start_dt).days
-                            approx_sprints = max(1, round(duration_days / sprint_duration))
-                            
-                            best_size = 'M'
-                            min_diff = 999
-                            for sz, sz_sprints in size_mapping.items():
-                                diff = abs(sz_sprints - approx_sprints)
-                                if diff < min_diff:
-                                    min_diff = diff
-                                    best_size = sz
-                            edited_df.at[idx, 'Size'] = best_size
-                        needs_rerun = True
-                else:
-                    # New row
-                    calculated = calculate_sequential_dates(edited_df.loc[idx])
-                    edited_df.at[idx, 'Start Date'] = calculated[0]
-                    edited_df.at[idx, 'Due Date'] = calculated[1]
-                    needs_rerun = True
-                    
-            st.session_state.main_df = edited_df
-            if needs_rerun:
-                st.rerun()
 
     # 5. Apply filters mask to a copy for visual display and analysis
     filtered_df = st.session_state.main_df.copy()

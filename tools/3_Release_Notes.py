@@ -11,10 +11,192 @@ from PIL import Image as PILImage
 # ReportLab imports for beautiful PDF generation
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether, Image, Flowable
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen import canvas
 from reportlab.graphics.shapes import Drawing, Line, PolyLine
+
+class SmartKeepTogether(Flowable):
+    def __init__(self, flowables):
+        super().__init__()
+        if isinstance(flowables, Flowable):
+            self.flowables = [flowables]
+        else:
+            self.flowables = list(flowables)
+        self.has_been_deferred = False
+        
+    def wrap(self, availWidth, availHeight):
+        current_height = 0
+        max_width = 0
+        self.child_heights = []
+        for f in self.flowables:
+            w, h = f.wrap(availWidth, max(0, availHeight - current_height))
+            self.child_heights.append(h)
+            current_height += h
+            max_width = max(max_width, w)
+        self.width = max_width
+        self.height = current_height
+        return self.width, self.height
+        
+    def drawOn(self, canvas, x, y, *args, **kwargs):
+        current_y = y + self.height
+        for f, h in zip(self.flowables, self.child_heights):
+            current_y -= h
+            f.drawOn(canvas, x, current_y, *args, **kwargs)
+            
+    def split(self, availWidth, availHeight):
+        current_height = 0
+        for f in self.flowables:
+            _, h = f.wrap(availWidth, 99999)
+            current_height += h
+            
+        if current_height <= availHeight:
+            return self.flowables
+            
+        is_ls = (availWidth > 600)
+        full_frame_height = 504 if is_ls else 648
+        if availHeight >= 0.85 * full_frame_height:
+            return self.flowables
+            
+        if not self.has_been_deferred:
+            self.has_been_deferred = True
+            return []
+            
+        return self.flowables
+
+
+# ---------------------------------------------------------
+# Callback synchronization helpers for st.data_editor
+# ---------------------------------------------------------
+def check_any_selected(df_key, editor_key, display_df_indices):
+    if st.session_state.get(df_key) is None:
+        return False
+    df = st.session_state[df_key]
+    if "Select" in df.columns and df["Select"].any():
+        return True
+    edits = st.session_state.get(editor_key, {})
+    for idx_str, col_changes in edits.get("edited_rows", {}).items():
+        if col_changes.get("Select") == True:
+            return True
+    return False
+
+def check_any_selected_custom(table_idx, editor_key, display_df_indices):
+    if table_idx >= len(st.session_state.custom_tables):
+        return False
+    df = st.session_state.custom_tables[table_idx]["df"]
+    if "Select" in df.columns and df["Select"].any():
+        return True
+    edits = st.session_state.get(editor_key, {})
+    for idx_str, col_changes in edits.get("edited_rows", {}).items():
+        if col_changes.get("Select") == True:
+            return True
+    return False
+
+def get_selected_rows(df_key, editor_key, display_df_indices):
+    if st.session_state.get(df_key) is None:
+        return pd.DataFrame()
+    df = st.session_state[df_key].copy()
+    edits = st.session_state.get(editor_key, {})
+    for idx_str, col_changes in edits.get("edited_rows", {}).items():
+        if "Select" in col_changes:
+            idx = int(idx_str)
+            if idx < len(display_df_indices):
+                actual_idx = display_df_indices[idx]
+                df.at[actual_idx, "Select"] = col_changes["Select"]
+    return df[df["Select"] == True]
+
+def get_selected_rows_custom(table_idx, editor_key, display_df_indices):
+    if table_idx >= len(st.session_state.custom_tables):
+        return pd.DataFrame()
+    df = st.session_state.custom_tables[table_idx]["df"].copy()
+    edits = st.session_state.get(editor_key, {})
+    for idx_str, col_changes in edits.get("edited_rows", {}).items():
+        if "Select" in col_changes:
+            idx = int(idx_str)
+            if idx < len(display_df_indices):
+                actual_idx = display_df_indices[idx]
+                df.at[actual_idx, "Select"] = col_changes["Select"]
+    return df[df["Select"] == True]
+
+def sync_editor_changes(df_key, editor_key, display_df_indices):
+    edits = st.session_state.get(editor_key)
+    if not edits or st.session_state.get(df_key) is None:
+        return
+    df = st.session_state[df_key].copy()
+    
+    has_real_edits = False
+    
+    # Edited rows
+    for idx_str, col_changes in edits.get("edited_rows", {}).items():
+        idx = int(idx_str)
+        if idx < len(display_df_indices):
+            actual_idx = display_df_indices[idx]
+            for col, val in col_changes.items():
+                if col != "Select":
+                    df.at[actual_idx, col] = val
+                    has_real_edits = True
+                
+    # Deleted rows
+    deleted_indices = edits.get("deleted_rows", [])
+    if deleted_indices:
+        indices_to_drop = [display_df_indices[i] for i in deleted_indices if i < len(display_df_indices)]
+        df.drop(index=indices_to_drop, inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        has_real_edits = True
+        
+    # Added rows
+    added_rows = edits.get("added_rows", [])
+    if added_rows:
+        new_rows_df = pd.DataFrame(added_rows)
+        for col in df.columns:
+            if col not in new_rows_df.columns:
+                new_rows_df[col] = pd.NA
+        new_rows_df = new_rows_df[df.columns]
+        df = pd.concat([df, new_rows_df], ignore_index=True)
+        has_real_edits = True
+        
+    if has_real_edits:
+        st.session_state[df_key] = df
+
+def sync_custom_table_changes(table_idx, editor_key, display_df_indices):
+    edits = st.session_state.get(editor_key)
+    if not edits or table_idx >= len(st.session_state.custom_tables):
+        return
+    df = st.session_state.custom_tables[table_idx]["df"].copy()
+    
+    has_real_edits = False
+    
+    # Edited rows
+    for idx_str, col_changes in edits.get("edited_rows", {}).items():
+        idx = int(idx_str)
+        if idx < len(display_df_indices):
+            actual_idx = display_df_indices[idx]
+            for col, val in col_changes.items():
+                if col != "Select":
+                    df.at[actual_idx, col] = val
+                    has_real_edits = True
+                
+    # Deleted rows
+    deleted_indices = edits.get("deleted_rows", [])
+    if deleted_indices:
+        indices_to_drop = [display_df_indices[i] for i in deleted_indices if i < len(display_df_indices)]
+        df.drop(index=indices_to_drop, inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        has_real_edits = True
+        
+    # Added rows
+    added_rows = edits.get("added_rows", [])
+    if added_rows:
+        new_rows_df = pd.DataFrame(added_rows)
+        for col in df.columns:
+            if col not in new_rows_df.columns:
+                new_rows_df[col] = pd.NA
+        new_rows_df = new_rows_df[df.columns]
+        df = pd.concat([df, new_rows_df], ignore_index=True)
+        has_real_edits = True
+        
+    if has_real_edits:
+        st.session_state.custom_tables[table_idx]["df"] = df
 
 # ---------------------------------------------------------
 # 1. Environment Loading & Session Setup
@@ -1115,7 +1297,7 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None, is_
     block_elements.append(demo_table)
     block_elements.append(Spacer(1, 15))
     
-    return [KeepTogether(block_elements)]
+    return [SmartKeepTogether(block_elements)]
 
 # Helper to build Target Release versions table block in PDFs (NEW requested table)
 def build_next_releases_pdf_block(df, primary_color, styles, is_landscape=False):
@@ -1209,7 +1391,7 @@ def format_status_with_emoji(status_str):
         
     st_clean = status_str.strip().lower()
     
-    if st_clean in ['done', 'closed', 'resolved', 'complete']:
+    if st_clean in ['done', 'closed', 'resolved', 'complete', 'acceptance test']:
         return '<font color="#22C55E">●</font>'
     elif st_clean in ['in progress', 'development', 'testing', 'review', 'in dev', 'dev', 'qa']:
         return '<font color="#F59E0B">●</font>'
@@ -1567,11 +1749,17 @@ def build_release_notes_pdf(overview_df):
     topics_ov, bugs_ov = split_bugs_and_topics(overview_df)
     
     if not topics_ov.empty or not bugs_ov.empty:
-        story.append(Paragraph("Overview:", section_title_style))
+        prefix_flowables = [
+            Paragraph("Overview:", section_title_style)
+        ]
         
         # 3a. Delivered Topics Sub-section
         if not topics_ov.empty:
-            story.append(Paragraph("Delivered Topics", sub_section_title_style))
+            topics_flowables = []
+            if prefix_flowables:
+                topics_flowables.extend(prefix_flowables)
+                prefix_flowables = []
+            topics_flowables.append(Paragraph("Delivered Topics", sub_section_title_style))
             # Col Widths: Total = 504pt
             # Reference: 60pt, Epic Theme: 90pt, Delivered Capability: 274pt, Release Version: 80pt
             table_data = [[
@@ -1625,12 +1813,17 @@ def build_release_notes_pdf(overview_df):
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
             ]))
-            story.append(changelog_table)
-            story.append(Spacer(1, 10))
+            topics_flowables.append(changelog_table)
+            topics_flowables.append(Spacer(1, 10))
+            story.append(SmartKeepTogether(topics_flowables))
             
         # 3b. Resolved Bugs Sub-section
         if not bugs_ov.empty:
-            story.append(Paragraph("Resolved Bugs", sub_section_title_style))
+            bugs_flowables = []
+            if prefix_flowables:
+                bugs_flowables.extend(prefix_flowables)
+                prefix_flowables = []
+            bugs_flowables.append(Paragraph("Resolved Bugs", sub_section_title_style))
             bug_data = [[
                 Paragraph("Epic", cell_header_style),
                 Paragraph("Key", cell_header_style),
@@ -1682,8 +1875,9 @@ def build_release_notes_pdf(overview_df):
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
             ]))
-            story.append(bugs_table)
-            story.append(Spacer(1, 10))
+            bugs_flowables.append(bugs_table)
+            bugs_flowables.append(Spacer(1, 10))
+            story.append(SmartKeepTogether(bugs_flowables))
         
     # Render custom extra tables (Release Notes, portrait)
     for t in st.session_state.custom_tables:
@@ -1692,11 +1886,12 @@ def build_release_notes_pdf(overview_df):
             df_render = df_ext.drop(columns=["Select"]) if "Select" in df_ext.columns else df_ext
             story.append(PageBreak())
             extra_title = t["title"] if t["title"].strip() != "" else "Special Metrics Overview"
-            story.append(Paragraph(extra_title, section_title_style))
-            story.append(Spacer(1, 10))
             extra_blocks = build_custom_extra_table_pdf_block(df_render, primary_color, styles, is_landscape=False)
             if extra_blocks:
-                story.extend(extra_blocks)
+                story.append(SmartKeepTogether([
+                    Paragraph(extra_title, section_title_style),
+                    Spacer(1, 10)
+                ] + extra_blocks))
             
 
         
@@ -2083,7 +2278,7 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 }
                 
                 # Check selection state dynamically
-                has_selected_ov = bool(st.session_state.overview_df["Select"].any())
+                has_selected_ov = check_any_selected("overview_df", "editor_ov_refined", list(st.session_state.overview_df.index))
                 
                 # Sorting & Filtering controls
                 sc_col1, sc_col2, sc_col3 = st.columns([4.0, 4.0, 4.0])
@@ -2093,18 +2288,20 @@ elif st.session_state.active_tab == "✍️ Workbook":
                     sort_dir = st.selectbox("Order:", ["Ascending", "Descending"], key="sort_ov_dir", label_visibility="collapsed", on_change=trigger_sort_ov)
                 with sc_col3:
                     filter_label = st.text_input("Filter by Label:", key="filter_ov_label", placeholder="🔍 Filter by label...", label_visibility="collapsed")
- 
+  
                 # Apply filter to display
                 display_df = st.session_state.overview_df
                 if "Labels" in display_df.columns and filter_label.strip() != "":
                     display_df = display_df[display_df["Labels"].str.contains(filter_label.strip(), case=False, na=False)]
-
-                edited_ov = st.data_editor(
+ 
+                st.data_editor(
                     display_df,
                     num_rows="dynamic",
                     use_container_width=True,
                     column_config=col_cfg_ov,
-                    key="editor_ov_refined"
+                    key="editor_ov_refined",
+                    on_change=sync_editor_changes,
+                    args=("overview_df", "editor_ov_refined", list(display_df.index))
                 )
                 
                 # Bottom action controls
@@ -2123,7 +2320,8 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 with bot_col1:
                     if st.button("Delete", key="btn_del_ov", use_container_width=True, disabled=not has_selected_ov):
                         # Filter out selected keys from master dataframe
-                        selected_keys = st.session_state.overview_df[st.session_state.overview_df["Select"] == True]["Key"].tolist()
+                        selected_rows = get_selected_rows("overview_df", "editor_ov_refined", list(display_df.index))
+                        selected_keys = selected_rows["Key"].tolist()
                         st.session_state.overview_df = st.session_state.overview_df[
                             ~st.session_state.overview_df["Key"].isin(selected_keys)
                         ].reset_index(drop=True)
@@ -2133,7 +2331,7 @@ elif st.session_state.active_tab == "✍️ Workbook":
                     if st.button("Clear", key="btn_clear_ov", use_container_width=True):
                         st.session_state.overview_df = None
                         st.rerun()
-
+ 
                 # Duplicate in: dropdown menu
                 dest_options = ["Select destination..."]
                 if st.session_state.custom_tables:
@@ -2147,7 +2345,7 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 )
                 
                 if dup_dest != "Select destination...":
-                    selected_rows = st.session_state.overview_df[st.session_state.overview_df["Select"] == True].copy()
+                    selected_rows = get_selected_rows("overview_df", "editor_ov_refined", list(display_df.index))
                     if dup_dest.startswith("Custom Table: "):
                         target_title = dup_dest.replace("Custom Table: ", "")
                         target_idx = None
@@ -2167,24 +2365,8 @@ elif st.session_state.active_tab == "✍️ Workbook":
                             st.session_state.custom_tables[target_idx]["df"] = pd.concat([target_df, selected_rows], ignore_index=True)
                             st.session_state.overview_df["Select"] = False
                             st.toast(f"Duplicated selected rows to Custom Table '{target_title}'!", icon="📊")
+                            st.session_state.dup_dest_ov = "Select destination..."
                             st.rerun()
-                
-                if not edited_ov.equals(display_df):
-                    # Handle deleted rows in filtered view
-                    deleted_keys = set(display_df["Key"]) - set(edited_ov["Key"])
-                    if deleted_keys:
-                        st.session_state.overview_df = st.session_state.overview_df[
-                            ~st.session_state.overview_df["Key"].isin(deleted_keys)
-                        ].reset_index(drop=True)
-                    # Handle updated or added rows
-                    for _, row in edited_ov.iterrows():
-                        key_val = row["Key"]
-                        if key_val in st.session_state.overview_df["Key"].values:
-                            match_idx = st.session_state.overview_df[st.session_state.overview_df["Key"] == key_val].index
-                            if not match_idx.empty:
-                                st.session_state.overview_df.loc[match_idx[0], row.index] = row.values
-                        else:
-                            st.session_state.overview_df = pd.concat([st.session_state.overview_df, pd.DataFrame([row])], ignore_index=True)
                  # Custom Table Dataset Workspace
         for ext_idx, ext_tab in enumerate(work_subtabs_ext):
             with ext_tab:
@@ -2210,8 +2392,6 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 df_ext = table_data["df"]
                 if 'Select' not in df_ext.columns:
                     df_ext.insert(0, 'Select', False)
-                    
-                has_selected_ext = bool(df_ext["Select"].any())
                 
                 col_cfg_ext = {
                     "Select": st.column_config.CheckboxColumn("Select 🗑️", default=False, width="small"),
@@ -2229,18 +2409,22 @@ elif st.session_state.active_tab == "✍️ Workbook":
                     sort_dir = st.selectbox("Order:", ["Ascending", "Descending"], key=f"sort_ext_{ext_idx}_dir", label_visibility="collapsed", on_change=trigger_sort_ext, args=(ext_idx,))
                 with sc_col3:
                     filter_label_ext = st.text_input("Filter by Label:", key=f"filter_ext_{ext_idx}_label", placeholder="🔍 Filter by label...", label_visibility="collapsed")
- 
+  
                 # Apply filter to display
                 display_df_ext = df_ext
                 if filter_label_ext.strip() != "" and "Labels" in display_df_ext.columns:
                     display_df_ext = display_df_ext[display_df_ext["Labels"].str.contains(filter_label_ext.strip(), case=False, na=False)]
-
-                edited_ext = st.data_editor(
+ 
+                has_selected_ext = check_any_selected_custom(ext_idx, f"editor_ext_{ext_idx}_refined", list(display_df_ext.index))
+ 
+                st.data_editor(
                     display_df_ext,
                     num_rows="dynamic",
                     use_container_width=True,
                     column_config=col_cfg_ext,
-                    key=f"editor_ext_{ext_idx}_refined"
+                    key=f"editor_ext_{ext_idx}_refined",
+                    on_change=sync_custom_table_changes,
+                    args=(ext_idx, f"editor_ext_{ext_idx}_refined", list(display_df_ext.index))
                 )
                 
                 # Bottom action controls
@@ -2257,15 +2441,14 @@ elif st.session_state.active_tab == "✍️ Workbook":
                         st.rerun()
                 with bot_col1:
                     if st.button("Delete", key=f"btn_del_ext_{ext_idx}", use_container_width=True, disabled=not has_selected_ext):
+                        selected_rows = get_selected_rows_custom(ext_idx, f"editor_ext_{ext_idx}_refined", list(display_df_ext.index))
                         if "Key" in df_ext.columns:
-                            selected_keys = df_ext[df_ext["Select"] == True]["Key"].tolist()
+                            selected_keys = selected_rows["Key"].tolist()
                             st.session_state.custom_tables[ext_idx]["df"] = df_ext[
                                 ~df_ext["Key"].isin(selected_keys)
                             ].reset_index(drop=True)
                         else:
-                            st.session_state.custom_tables[ext_idx]["df"] = df_ext[
-                                df_ext["Select"] == False
-                            ].reset_index(drop=True)
+                            st.session_state.custom_tables[ext_idx]["df"] = df_ext.drop(index=selected_rows.index).reset_index(drop=True)
                         st.toast("Deleted selected rows!", icon="🗑️")
                         st.rerun()
                 with bot_col2:
@@ -2278,29 +2461,6 @@ elif st.session_state.active_tab == "✍️ Workbook":
                         st.session_state.custom_tables[ext_idx]["df"] = pd.DataFrame(columns=df_ext.columns)
                         st.toast("Custom table dataset cleared!", icon="🧹")
                         st.rerun()
-                        
-                if not edited_ext.equals(display_df_ext):
-                    master_df = st.session_state.custom_tables[ext_idx]["df"]
-                    if "Key" in display_df_ext.columns and "Key" in master_df.columns:
-                        # Handle deleted rows
-                        deleted_keys = set(display_df_ext["Key"]) - set(edited_ext["Key"])
-                        if deleted_keys:
-                            master_df = master_df[
-                                ~master_df["Key"].isin(deleted_keys)
-                            ].reset_index(drop=True)
-                        # Handle updated/added rows
-                        for _, row in edited_ext.iterrows():
-                            key_val = row["Key"]
-                            if key_val in master_df["Key"].values:
-                                match_idx = master_df[master_df["Key"] == key_val].index
-                                if not match_idx.empty:
-                                    master_df.loc[match_idx[0], row.index] = row.values
-                            else:
-                                master_df = pd.concat([master_df, pd.DataFrame([row])], ignore_index=True)
-                        st.session_state.custom_tables[ext_idx]["df"] = master_df
-                    else:
-                        for idx, row in edited_ext.iterrows():
-                            st.session_state.custom_tables[ext_idx]["df"].loc[idx] = row
 # ---------------------------------------------------------
 elif st.session_state.active_tab == "🎨 Branding":
     st.subheader("🎨 Visual Customization & Documentation Branding")
