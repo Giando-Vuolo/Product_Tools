@@ -707,7 +707,8 @@ def load_mock_sprint_data():
         if st.session_state.get("inc_story", "User Story" in DEFAULT_INCLUDED_TYPES): selected_types.append("User Story")
         if st.session_state.get("inc_task", "Task" in DEFAULT_INCLUDED_TYPES): selected_types.append("Task")
         if st.session_state.get("inc_tech", "Technical Task" in DEFAULT_INCLUDED_TYPES): selected_types.append("Technical Task")
-        if st.session_state.get("inc_subtask", "Technical Sub-task" in DEFAULT_INCLUDED_TYPES): selected_types.append("Technical Sub-task")
+        if st.session_state.get("inc_subtask", "Technical Sub-task" in DEFAULT_INCLUDED_TYPES):
+            selected_types.extend(["Technical Sub-task", "Sub-task"])
         if st.session_state.get("inc_bug", "Bug" in DEFAULT_INCLUDED_TYPES): selected_types.append("Bug")
         
         if st.session_state.overview_df is not None and not st.session_state.overview_df.empty:
@@ -893,7 +894,9 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
                 issue_type = "Bug"
             elif "technical" in raw_lower or "tech" in raw_lower or "performance" in raw_lower or "scaling" in raw_lower or "infrastructure" in raw_lower:
                 issue_type = "Technical Task"
-            elif "task" in raw_lower or "sub-task" in raw_lower:
+            elif "sub-task" in raw_lower or "subtask" in raw_lower:
+                issue_type = "Sub-task"
+            elif "task" in raw_lower:
                 issue_type = "Task"
             else:
                 issue_type = issue_type_raw if st.session_state.get("inc_all", False) else "Technical Task"
@@ -2262,7 +2265,8 @@ if st.session_state.active_tab == "🔌 Ingestion":
         if inc_story: selected_types.append("User Story")
         if inc_task: selected_types.append("Task")
         if inc_tech: selected_types.append("Technical Task")
-        if inc_subtask: selected_types.append("Technical Sub-task")
+        if inc_subtask:
+            selected_types.extend(["Technical Sub-task", "Sub-task"])
         if inc_bug: selected_types.append("Bug")
 
     st.divider()
