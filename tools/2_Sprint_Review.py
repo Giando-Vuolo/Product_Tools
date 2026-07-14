@@ -84,7 +84,9 @@ def map_jira_status(status_name):
     if not status_name or not isinstance(status_name, str):
         return "To Do"
     s_clean = status_name.strip().lower()
-    if s_clean in ["resolved", "closed", "done", "acceptance test"]:
+    if s_clean in ["blocked", "impeded"]:
+        return "Blocked"
+    elif s_clean in ["resolved", "closed", "done", "acceptance test"]:
         return "Done"
     elif s_clean in ["to do", "todo", "to-do", "backlog", "open", "new", "reopened"]:
         return "To Do"
