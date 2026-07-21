@@ -1196,6 +1196,12 @@ def sort_items_by_label_priority(df, secondary_columns):
     df_copy.sort_values(by=["_label_sort_order"] + secondary_columns, inplace=True, kind="stable")
     return df_copy.drop(columns=["_label_sort_order"])
 
+def get_team_label(labels):
+    """Return the first selected team label assigned to an item."""
+    selected_labels = st.session_state.get("sprint_review_label_order", [])
+    item_labels = {label.strip().lower() for label in str(labels).split(",") if label.strip()}
+    return next((label for label in selected_labels if label.strip().lower() in item_labels), "-")
+
 # Helper to sort items by selected team label, then Type order (User Story -> Task -> Technical Task) and Epic
 def sort_items_by_type_and_epic(df):
     if df is None or df.empty:
@@ -1424,7 +1430,8 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None, is_
         Paragraph("Key", cell_header_style),
         Paragraph("Summary", cell_header_style),
         Paragraph("Epic", cell_header_style),
-        Paragraph("Presenter 👤", cell_header_style)
+        Paragraph("Presenter 👤", cell_header_style),
+        Paragraph("Team", cell_header_style)
     ]]
     
     for _, row in demo_items.iterrows():
@@ -1433,14 +1440,15 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None, is_
             Paragraph(str(row['Key']), cell_body_bold_style),
             Paragraph(str(row['Summary']), cell_body_style),
             Paragraph(str(row['Epic']), cell_body_style),
-            Paragraph(presenter, cell_body_bold_style)
+            Paragraph(presenter, cell_body_bold_style),
+            Paragraph(get_team_label(row.get('Labels', '')), cell_body_style)
         ])
         
     # Col Widths: Total = 504pt (Portrait) or 684pt (Landscape)
     if is_landscape:
-        col_widths = [95, 269, 160, 160]
+        col_widths = [80, 214, 140, 160, 90]
     else:
-        col_widths = [95, 169, 120, 120]
+        col_widths = [75, 139, 110, 110, 70]
         
     demo_table = Table(
         table_data,
@@ -1574,6 +1582,10 @@ def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=F
         return []
         
     block_elements = []
+    df = df.copy()
+    if "Labels" in df.columns:
+        df["Team"] = df["Labels"].apply(get_team_label)
+        df = df[[column for column in df.columns if column != "Team"] + ["Team"]]
     
     # Dynamic styling matching the presentation grade
     font_size_header = 9 if is_landscape else 8
@@ -1878,7 +1890,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                 Paragraph("Key", cell_header_style),
                 Paragraph("Summary", cell_header_style),
                 Paragraph("Status", cell_header_center_style),
-                Paragraph("Fix Version", cell_header_style)
+                Paragraph("Fix Version", cell_header_style),
+                Paragraph("Team", cell_header_style)
             ]]
             
             sorted_topics = sort_items_by_type_and_epic(topics_ov)
@@ -1911,12 +1924,13 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                     Paragraph(str(row['Key']), cell_body_bold_style),
                     Paragraph(str(row['Summary']), cell_body_style),
                     Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                    Paragraph(fv_val, cell_body_style)
+                    Paragraph(fv_val, cell_body_style),
+                    Paragraph(get_team_label(row.get('Labels', '')), cell_body_style)
                 ])
                 
             topics_table = Table(
                 table_data,
-                colWidths=[135, 95, 349, 50, 55]
+                colWidths=[110, 75, 295, 50, 59, 95]
             )
             topics_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), primary_color),
@@ -1947,7 +1961,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                 Paragraph("Key", cell_header_style),
                 Paragraph("Summary", cell_header_style),
                 Paragraph("Status", cell_header_center_style),
-                Paragraph("Fix Version", cell_header_style)
+                Paragraph("Fix Version", cell_header_style),
+                Paragraph("Team", cell_header_style)
             ]]
             
             sorted_bugs = sort_items_by_label_priority(bugs_ov, ["Epic", "Key"])
@@ -1980,12 +1995,13 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                     Paragraph(str(row['Key']), cell_body_bold_style),
                     Paragraph(str(row['Summary']), cell_body_style),
                     Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                    Paragraph(fv_val, cell_body_style)
+                    Paragraph(fv_val, cell_body_style),
+                    Paragraph(get_team_label(row.get('Labels', '')), cell_body_style)
                 ])
                 
             bugs_table = Table(
                 bug_data,
-                colWidths=[155, 95, 329, 50, 55]
+                colWidths=[130, 75, 275, 50, 59, 95]
             )
             bugs_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), primary_color),
@@ -2071,7 +2087,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                 Paragraph("Key", cell_header_style),
                 Paragraph("Summary", cell_header_style),
                 Paragraph("Status", cell_header_center_style),
-                Paragraph("Fix Version", cell_header_style)
+                Paragraph("Fix Version", cell_header_style),
+                Paragraph("Team", cell_header_style)
             ]]
             
             sorted_outlook = sort_items_by_type_and_epic(topics_ot)
@@ -2104,12 +2121,13 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                     Paragraph(str(row['Key']), cell_body_bold_style),
                     Paragraph(str(row['Summary']), cell_body_style),
                     Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                    Paragraph(fv_val, cell_body_style)
+                    Paragraph(fv_val, cell_body_style),
+                    Paragraph(get_team_label(row.get('Labels', '')), cell_body_style)
                 ])
                 
             outlook_table = Table(
                 table_data_outlook,
-                colWidths=[135, 95, 349, 50, 55]
+                colWidths=[110, 75, 295, 50, 59, 95]
             )
             outlook_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), primary_color),
@@ -2140,7 +2158,8 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                 Paragraph("Key", cell_header_style),
                 Paragraph("Summary", cell_header_style),
                 Paragraph("Status", cell_header_center_style),
-                Paragraph("Fix Version", cell_header_style)
+                Paragraph("Fix Version", cell_header_style),
+                Paragraph("Team", cell_header_style)
             ]]
             
             sorted_outlook_bugs = sort_items_by_label_priority(bugs_ot, ["Epic", "Key"])
@@ -2173,12 +2192,13 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                     Paragraph(str(row['Key']), cell_body_bold_style),
                     Paragraph(str(row['Summary']), cell_body_style),
                     Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                    Paragraph(fv_val, cell_body_style)
+                    Paragraph(fv_val, cell_body_style),
+                    Paragraph(get_team_label(row.get('Labels', '')), cell_body_style)
                 ])
                 
             bugs_outlook_table = Table(
                 bug_data_outlook,
-                colWidths=[155, 95, 329, 50, 55]
+                colWidths=[130, 75, 275, 50, 59, 95]
             )
             bugs_outlook_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), primary_color),
