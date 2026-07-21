@@ -80,6 +80,12 @@ def handle_dup_dest_ot():
         st.session_state["dup_dest_ot_action"] = val
         st.session_state["dup_dest_ot"] = "Select destination..."
 
+def save_sprint_review_label_order():
+    """Keep the PDF ordering selection when the Workbook widgets are hidden."""
+    st.session_state["sprint_review_label_order"] = st.session_state.get(
+        "sprint_review_label_order_input", []
+    )
+
 def map_jira_status(status_name):
     if not status_name or not isinstance(status_name, str):
         return "To Do"
@@ -389,6 +395,8 @@ if 'extra_table_title' not in st.session_state:
     st.session_state.extra_table_title = ""
 if 'custom_tables' not in st.session_state:
     st.session_state.custom_tables = []
+if 'sprint_review_label_order' not in st.session_state:
+    st.session_state.sprint_review_label_order = []
 
 
 # ---------------------------------------------------------
@@ -1167,12 +1175,33 @@ def split_bugs_and_topics(df):
     topics_df = df[~is_bug]
     return topics_df, bugs_df
 
-# Helper to sort items by Type order (User Story -> Task -> Technical Task) and then Epic
+# Helper to place items with selected team labels first, in the selected order.
+def sort_items_by_label_priority(df, secondary_columns):
+    if df is None or df.empty:
+        return df
+
+    selected_labels = st.session_state.get("sprint_review_label_order", [])
+    if not selected_labels or "Labels" not in df.columns:
+        return df.sort_values(secondary_columns, kind="stable")
+
+    label_priorities = {label.strip().lower(): index for index, label in enumerate(selected_labels)}
+    fallback_priority = len(label_priorities)
+
+    def get_label_priority(labels):
+        item_labels = [label.strip().lower() for label in str(labels).split(",") if label.strip()]
+        return min((label_priorities[label] for label in item_labels if label in label_priorities), default=fallback_priority)
+
+    df_copy = df.copy()
+    df_copy["_label_sort_order"] = df_copy["Labels"].apply(get_label_priority)
+    df_copy.sort_values(by=["_label_sort_order"] + secondary_columns, inplace=True, kind="stable")
+    return df_copy.drop(columns=["_label_sort_order"])
+
+# Helper to sort items by selected team label, then Type order (User Story -> Task -> Technical Task) and Epic
 def sort_items_by_type_and_epic(df):
     if df is None or df.empty:
         return df
     if 'Type' not in df.columns:
-        return df.sort_values("Epic")
+        return sort_items_by_label_priority(df, ["Epic", "Key"])
         
     def get_sort_order(item_type):
         val = str(item_type).strip().lower()
@@ -1189,9 +1218,8 @@ def sort_items_by_type_and_epic(df):
             
     df_copy = df.copy()
     df_copy['_type_sort_order'] = df_copy['Type'].apply(get_sort_order)
-    df_copy.sort_values(by=['Epic', '_type_sort_order', 'Key'], inplace=True)
-    df_copy.drop(columns=['_type_sort_order'], inplace=True)
-    return df_copy
+    df_copy = sort_items_by_label_priority(df_copy, ['Epic', '_type_sort_order', 'Key'])
+    return df_copy.drop(columns=['_type_sort_order'])
 
 # ---------------------------------------------------------
 # 5. PDF Generation Custom Canvas & Background Callbacks (Header, Footer, Branding)
@@ -1323,6 +1351,7 @@ class NumberedCanvas(canvas.Canvas):
 # Helper to build "Apartado de Demos" block (common to both PDFs if items are selected)
 def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None, is_landscape=False):
     demo_items = df[df["Demo"] == True] if "Demo" in df.columns else pd.DataFrame()
+    demo_items = sort_items_by_label_priority(demo_items, ["Epic", "Key"])
     if demo_items.empty:
         return []
     block_elements = []
@@ -1921,7 +1950,7 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                 Paragraph("Fix Version", cell_header_style)
             ]]
             
-            sorted_bugs = bugs_ov.sort_values("Epic")
+            sorted_bugs = sort_items_by_label_priority(bugs_ov, ["Epic", "Key"])
             
             last_epic = None
             for _, row in sorted_bugs.iterrows():
@@ -2114,7 +2143,7 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                 Paragraph("Fix Version", cell_header_style)
             ]]
             
-            sorted_outlook_bugs = bugs_ot.sort_values("Epic")
+            sorted_outlook_bugs = sort_items_by_label_priority(bugs_ot, ["Epic", "Key"])
             
             last_epic = None
             for _, row in sorted_outlook_bugs.iterrows():
@@ -2695,6 +2724,30 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 st.session_state.outlook_df.insert(0, 'Select', False)
             if 'Labels' not in st.session_state.outlook_df.columns:
                 st.session_state.outlook_df['Labels'] = ""
+
+        # The chosen order is used by every Sprint Review PDF table.
+        label_sources = [df for df in [st.session_state.overview_df, st.session_state.outlook_df] if df is not None and "Labels" in df.columns]
+        available_labels = sorted({
+            label.strip()
+            for df in label_sources
+            for labels in df["Labels"].dropna()
+            for label in str(labels).split(",")
+            if label.strip()
+        }, key=str.lower)
+        st.markdown("#### 🏷️ Sprint Review team order")
+        st.caption("Select team labels in the presentation order. Matching items are grouped first in every Sprint Review PDF table; all other items follow afterwards.")
+        if "sprint_review_label_order_input" not in st.session_state:
+            st.session_state["sprint_review_label_order_input"] = [
+                label for label in st.session_state.sprint_review_label_order
+                if label in available_labels
+            ]
+        st.multiselect(
+            "Team labels to group by",
+            options=available_labels,
+            key="sprint_review_label_order_input",
+            placeholder="Choose labels in presentation order...",
+            on_change=save_sprint_review_label_order
+        )
         
         # Overview Dataset Workspace
         with work_subtab_ov:
@@ -2735,6 +2788,9 @@ elif st.session_state.active_tab == "✍️ Workbook":
   
                 # Apply filter to display
                 display_df = st.session_state.overview_df
+                if st.session_state.get("sprint_review_label_order", []):
+                    display_df = sort_items_by_type_and_epic(display_df)
+                    st.caption("Previewing the Sprint Review team order. This view does not change the saved workbook order.")
                 if "Labels" in display_df.columns and filter_label.strip() != "":
                     display_df = display_df[display_df["Labels"].str.contains(filter_label.strip(), case=False, na=False)]
  
@@ -2862,6 +2918,9 @@ elif st.session_state.active_tab == "✍️ Workbook":
    
                 # Apply filter to display
                 display_df_ot = st.session_state.outlook_df
+                if display_df_ot is not None and st.session_state.get("sprint_review_label_order", []):
+                    display_df_ot = sort_items_by_type_and_epic(display_df_ot)
+                    st.caption("Previewing the Sprint Review team order. This view does not change the saved workbook order.")
                 if display_df_ot is not None and "Labels" in display_df_ot.columns and filter_label_ot.strip() != "":
                     display_df_ot = display_df_ot[display_df_ot["Labels"].str.contains(filter_label_ot.strip(), case=False, na=False)]
 
