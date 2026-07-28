@@ -270,7 +270,7 @@ env_types = os.getenv("DEFAULT_INCLUDED_TYPES")
 if env_types:
     DEFAULT_INCLUDED_TYPES = [t.strip() for t in env_types.split(",") if t.strip()]
 else:
-    DEFAULT_INCLUDED_TYPES = ["User Story", "Task", "Technical Task", "Technical Sub-task", "Bug"]
+    DEFAULT_INCLUDED_TYPES = ["User Story", "Task", "Technical Task", "Technical Sub-task", "Improvement", "Bug"]
 
 # Read default environment variables if provided
 default_jira_server = os.getenv("JIRA_SERVER", "")
@@ -719,6 +719,7 @@ def load_mock_sprint_data():
         if st.session_state.get("inc_tech", "Technical Task" in DEFAULT_INCLUDED_TYPES): selected_types.append("Technical Task")
         if st.session_state.get("inc_subtask", "Technical Sub-task" in DEFAULT_INCLUDED_TYPES):
             selected_types.extend(["Technical Sub-task", "Sub-task"])
+        if st.session_state.get("inc_improvement", "Improvement" in DEFAULT_INCLUDED_TYPES): selected_types.append("Improvement")
         if st.session_state.get("inc_bug", "Bug" in DEFAULT_INCLUDED_TYPES): selected_types.append("Bug")
         
         if st.session_state.overview_df is not None and not st.session_state.overview_df.empty:
@@ -748,7 +749,7 @@ def load_mock_sprint_data():
 
 # 4. Jira Connection API Fetcher (Bearer Token Auth PAT)
 # ---------------------------------------------------------
-def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_type="Personal Access Token (Bearer PAT)", email="", only_unresolved=False):
+def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_type="Personal Access Token (Bearer PAT)", email="", only_unresolved=False, include_raw_status=False):
     if not server or not token:
         st.error("Please provide Jira Server URL and Personal Access Token (PAT).")
         return None
@@ -779,9 +780,11 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
             if st.session_state.get("inc_task"):
                 jira_types.extend(["Task", "Sub-task"])
             if st.session_state.get("inc_tech"):
-                jira_types.extend(["Task", "Improvement", "Epic"])
+                jira_types.extend(["Task", "Epic"])
             if st.session_state.get("inc_subtask"):
                 jira_types.extend(["Sub-task", "Technical Sub-task"])
+            if st.session_state.get("inc_improvement"):
+                jira_types.append("Improvement")
         
         allowed_jira_types = {"Bug", "Epic", "Improvement", "Story", "Task", "Sub-task", "Technical Sub-task"}
         jira_types = [t for t in sorted(list(set(jira_types))) if t in allowed_jira_types]
@@ -902,6 +905,8 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
                 issue_type = "User Story"
             elif "bug" in raw_lower:
                 issue_type = "Bug"
+            elif "improvement" in raw_lower:
+                issue_type = "Improvement"
             elif "technical" in raw_lower or "tech" in raw_lower or "performance" in raw_lower or "scaling" in raw_lower or "infrastructure" in raw_lower:
                 issue_type = "Technical Task"
             elif "sub-task" in raw_lower or "subtask" in raw_lower:
@@ -915,7 +920,7 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
             labels_list = fields.get("labels", [])
             labels_str = ", ".join(labels_list) if isinstance(labels_list, list) else ""
                 
-            rows.append({
+            row = {
                 "Key": key,
                 "Summary": summary,
                 "Epic": epic,
@@ -928,7 +933,10 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
                 "Demo": False,
                 "Type": issue_type,
                 "Labels": labels_str
-            })
+            }
+            if include_raw_status:
+                row["Raw Status"] = status_obj.get("name", "To Do")
+            rows.append(row)
             
         # Bulk resolve Epic summaries from Jira
         epic_keys_to_resolve = set()
@@ -973,6 +981,113 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
     except Exception as e:
         st.error(f"Exception connecting to Jira: {str(e)}")
         return None
+
+def fetch_epic_completion(server, token, epic_keys, epic_link_field, auth_type="Personal Access Token (Bearer PAT)", email=""):
+    """Calculate progress for each Epic from the status of its linked issues."""
+    token_clean = token.strip()
+    if token_clean.lower().startswith("bearer "):
+        token_clean = token_clean[7:].strip()
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0",
+        "X-Atlassian-Token": "no-check"
+    }
+    auth = None
+    if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"]:
+        auth = (email.strip(), token_clean)
+    else:
+        headers["Authorization"] = f"Bearer {token_clean}"
+
+    completion_by_epic = {}
+    for epic_key in epic_keys:
+        relation_jql = f'parent = "{epic_key}"' if epic_link_field == "Parent" else f'"Epic Link" = "{epic_key}"'
+        params = {"jql": relation_jql, "maxResults": 1000, "fields": "status"}
+        try:
+            response = requests.get(
+                f"{server.rstrip('/')}/rest/api/2/search",
+                headers=headers,
+                params=params,
+                auth=auth,
+                timeout=15
+            )
+            if response.status_code != 200:
+                st.warning(f"Could not calculate completion for {epic_key} ({response.status_code}).")
+                completion_by_epic[epic_key] = "-"
+                continue
+
+            issues = response.json().get("issues", [])
+            if not issues:
+                completion_by_epic[epic_key] = "-"
+                continue
+
+            scores = []
+            for issue in issues:
+                status_name = ((issue.get("fields") or {}).get("status") or {}).get("name", "To Do")
+                normalized_status = map_jira_status(status_name)
+                scores.append(100 if normalized_status == "Done" else 0 if normalized_status == "To Do" else 50)
+            completion_by_epic[epic_key] = f"{round(sum(scores) / len(scores))}%"
+        except (requests.RequestException, ValueError) as error:
+            st.warning(f"Could not calculate completion for {epic_key}: {error}")
+            completion_by_epic[epic_key] = "-"
+
+    return completion_by_epic
+
+def map_epic_status_for_completion_table(status_name):
+    """Use a strict, presentation-friendly status for Epic completion rows."""
+    status_clean = str(status_name).strip().lower()
+    if status_clean in ["done", "closed", "resolved", "complete", "acceptance test"]:
+        return "Done"
+    if status_clean == "in progress":
+        return "In Progress"
+    return "To Do"
+
+def build_quarterly_epic_progress_table(server, token, quarter_label, title, position, auth_type, email):
+    """Build the standard Recalltwo quarterly Epic progress table."""
+    escaped_quarter_label = quarter_label.replace('"', '\\"')
+    jql = (
+        'project = RECALLTWO AND issuetype = Epic '
+        'AND labels in (RC2_committed) '
+        f'AND labels in ({escaped_quarter_label})'
+    )
+    res_df = fetch_jira_tickets_dataset(
+        server,
+        token,
+        jql,
+        is_sprint=False,
+        auth_type=auth_type,
+        email=email,
+        include_raw_status=True
+    )
+    if res_df is None:
+        return None
+
+    if not res_df.empty:
+        res_df["Status"] = res_df["Raw Status"].apply(map_epic_status_for_completion_table)
+        completion_by_epic = fetch_epic_completion(
+            server,
+            token,
+            res_df["Key"].dropna().astype(str).tolist(),
+            "Epic Link",
+            auth_type=auth_type,
+            email=email
+        )
+        res_df["Completion"] = res_df["Key"].map(completion_by_epic).fillna("-")
+
+    cols_to_keep = ["Key", "Summary", "Completion", "Epic", "Status", "Fix Version", "Assignee", "Labels"]
+    extra_df = res_df[[column for column in cols_to_keep if column in res_df.columns]].copy()
+    extra_df.insert(0, "Select", False)
+    if "Labels" not in extra_df.columns:
+        extra_df["Labels"] = ""
+    return {
+        "title": title,
+        "df": extra_df,
+        "position": position,
+        "hidden_cols": ["Epic", "Fix Version", "Assignee", "Labels"],
+        "sort_by_team": True,
+        "table_type": "quarterly_epic_progress"
+    }
 
 def upload_pdf_to_confluence(server_url, auth_type, token, email, space_key, page_title, pdf_bytes, filename):
     """
@@ -2028,6 +2143,11 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         df_ext = t["df"]
         if df_ext is not None and not df_ext.empty:
             df_render = df_ext.drop(columns=["Select"]) if "Select" in df_ext.columns else df_ext.copy()
+            if t.get("sort_by_team"):
+                df_render = sort_items_by_label_priority(df_render, ["Key"])
+                if "Labels" in df_render.columns:
+                    df_render["Team"] = df_render["Labels"].apply(get_team_label)
+                    df_render = df_render[[column for column in df_render.columns if column != "Team"] + ["Team"]]
             hidden_cols = t.get("hidden_cols", [])
             df_render = df_render.drop(columns=[col for col in hidden_cols if col in df_render.columns])
             story.append(PageBreak())
@@ -2052,6 +2172,11 @@ def build_sprint_review_pdf(overview_df, outlook_df):
         df_ext = t["df"]
         if df_ext is not None and not df_ext.empty:
             df_render = df_ext.drop(columns=["Select"]) if "Select" in df_ext.columns else df_ext.copy()
+            if t.get("sort_by_team"):
+                df_render = sort_items_by_label_priority(df_render, ["Key"])
+                if "Labels" in df_render.columns:
+                    df_render["Team"] = df_render["Labels"].apply(get_team_label)
+                    df_render = df_render[[column for column in df_render.columns if column != "Team"] + ["Team"]]
             hidden_cols = t.get("hidden_cols", [])
             df_render = df_render.drop(columns=[col for col in hidden_cols if col in df_render.columns])
             story.append(PageBreak())
@@ -2297,7 +2422,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
     # Issue Type Selection Checkboxes
     st.markdown("**2. Filter Ingested Issue Types**")
     st.write("Select which issue types should be loaded into the workspace:")
-    col_cb1, col_cb2, col_cb3, col_cb4, col_cb5, col_cb6 = st.columns(6)
+    col_cb1, col_cb2, col_cb3, col_cb4, col_cb5, col_cb6, col_cb7 = st.columns(7)
     with col_cb1:
         inc_all = st.checkbox("All / Everything", value=False, key="inc_all")
     with col_cb2:
@@ -2309,6 +2434,8 @@ if st.session_state.active_tab == "🔌 Ingestion":
     with col_cb5:
         inc_subtask = st.checkbox("Sub-task", value=("Technical Sub-task" in DEFAULT_INCLUDED_TYPES), key="inc_subtask", disabled=inc_all)
     with col_cb6:
+        inc_improvement = st.checkbox("Improvement", value=("Improvement" in DEFAULT_INCLUDED_TYPES), key="inc_improvement", disabled=inc_all)
+    with col_cb7:
         inc_bug = st.checkbox("Bug", value=("Bug" in DEFAULT_INCLUDED_TYPES), key="inc_bug", disabled=inc_all)
 
     selected_types = []
@@ -2318,6 +2445,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
         if inc_tech: selected_types.append("Technical Task")
         if inc_subtask:
             selected_types.extend(["Technical Sub-task", "Sub-task"])
+        if inc_improvement: selected_types.append("Improvement")
         if inc_bug: selected_types.append("Bug")
 
     st.divider()
@@ -2399,6 +2527,50 @@ if st.session_state.active_tab == "🔌 Ingestion":
                         st.success(f"Success! Loaded {len(res_df)} Outlook tickets.")
                         st.rerun()
     
+    # Standard quarterly Epic progress table
+    st.subheader("📈 Quarterly Epic Progress")
+    st.write("Add the standard Recalltwo progress table for committed Epics. It always filters by `RC2_committed` plus the quarter label you choose.")
+    with st.container(border=True):
+        quarter_col, title_col = st.columns([1, 2])
+        with quarter_col:
+            quarterly_epic_label = st.text_input(
+                "Quarter label",
+                value="RC2_FB_18",
+                placeholder="e.g. RC2_FB_18"
+            )
+        with title_col:
+            quarterly_epic_title = st.text_input(
+                "Table title",
+                value="Epics Q3 - Current Progress"
+            )
+        st.caption("Project: RECALLTWO · Required label: RC2_committed · Epic link: Epic Link")
+        if st.button("📈 Load Quarterly Epic Progress", use_container_width=True):
+            if not quarterly_epic_label.strip():
+                st.error("Enter the label used for the quarter before loading the table.")
+            else:
+                with st.spinner("Downloading quarterly Epics and calculating progress..."):
+                    new_table = build_quarterly_epic_progress_table(
+                        st.session_state.jira_server,
+                        st.session_state.jira_token,
+                        quarterly_epic_label.strip(),
+                        quarterly_epic_title.strip() or f"Epics {quarterly_epic_label.strip()} - Current Progress",
+                        "Before Demo Table",
+                        st.session_state.jira_auth_method,
+                        st.session_state.jira_email
+                    )
+                if new_table is not None:
+                    existing_index = next(
+                        (index for index, table in enumerate(st.session_state.custom_tables)
+                         if table.get("table_type") == "quarterly_epic_progress"),
+                        None
+                    )
+                    if existing_index is None:
+                        st.session_state.custom_tables.append(new_table)
+                    else:
+                        st.session_state.custom_tables[existing_index] = new_table
+                    st.toast(f"Loaded {len(new_table['df'])} committed Epics for {quarterly_epic_label.strip()}.", icon="📈")
+                    st.rerun()
+
     # Ingestion of Additional Custom Report Tables (Jira or CSV)
     st.subheader("📊 Ingestion of Additional Custom Table (Optional)")
     st.write("Retrieve custom data from Jira or upload a CSV file to render a custom table in a dedicated section of the document.")
@@ -2439,6 +2611,19 @@ if st.session_state.active_tab == "🔌 Ingestion":
     else:
         # Jira JQL Query
         custom_jql = st.text_area("JQL Query for Custom Table:", value="project = 'PROJ' AND status = 'In Progress'", key="extra_jql_text")
+        calculate_epic_completion = st.checkbox(
+            "Calculate Epic completion",
+            help="Use this when the JQL query returns Epics. Done issues count as 100%, To Do as 0%, and every other status as 50%."
+        )
+        epic_link_field = "Epic Link"
+        if calculate_epic_completion:
+            epic_link_field = st.selectbox(
+                "How are tickets linked to the Epic?",
+                options=["Parent", "Epic Link"],
+                index=1,
+                help="Choose Parent for Jira Cloud/team-managed projects, or Epic Link for classic company-managed projects."
+            )
+            st.caption("The table will include a Completion column. Epics without linked tickets will show ‘-’.")
         if st.button("🔌 Fetch Custom Table", use_container_width=True):
             with st.spinner("Downloading custom tickets from Jira..."):
                 res_df = fetch_jira_tickets_dataset(
@@ -2447,11 +2632,25 @@ if st.session_state.active_tab == "🔌 Ingestion":
                     custom_jql,
                     is_sprint=False,
                     auth_type=st.session_state.jira_auth_method,
-                    email=st.session_state.jira_email
+                    email=st.session_state.jira_email,
+                    include_raw_status=calculate_epic_completion
                 )
                 if res_df is not None:
+                    if calculate_epic_completion and not res_df.empty:
+                        res_df["Status"] = res_df["Raw Status"].apply(map_epic_status_for_completion_table)
+                        with st.spinner("Calculating completion for each Epic..."):
+                            epic_keys = res_df["Key"].dropna().astype(str).tolist()
+                            completion_by_epic = fetch_epic_completion(
+                                st.session_state.jira_server,
+                                st.session_state.jira_token,
+                                epic_keys,
+                                epic_link_field,
+                                auth_type=st.session_state.jira_auth_method,
+                                email=st.session_state.jira_email
+                            )
+                            res_df["Completion"] = res_df["Key"].map(completion_by_epic).fillna("-")
                     # Filter to standard presentation columns so it renders beautifully in ReportLab
-                    cols_to_keep = ["Key", "Summary", "Epic", "Status", "Fix Version", "Assignee", "Labels"]
+                    cols_to_keep = ["Key", "Summary", "Completion", "Epic", "Status", "Fix Version", "Assignee", "Labels"]
                     cols_to_keep = [c for c in cols_to_keep if c in res_df.columns]
                     extra_df = res_df[cols_to_keep]
                     if 'Select' not in extra_df.columns:
@@ -2461,7 +2660,9 @@ if st.session_state.active_tab == "🔌 Ingestion":
                     new_table = {
                         "title": extra_table_title if extra_table_title.strip() != "" else "Special Project Metrics",
                         "df": extra_df,
-                        "position": extra_table_position
+                        "position": extra_table_position,
+                        "hidden_cols": ["Epic", "Fix Version", "Assignee", "Labels"] if calculate_epic_completion else [],
+                        "sort_by_team": calculate_epic_completion
                     }
                     st.session_state.custom_tables.append(new_table)
                     st.toast(f"Success! Loaded {len(res_df)} tickets for custom table '{new_table['title']}'.", icon="📊")
@@ -3074,6 +3275,9 @@ elif st.session_state.active_tab == "✍️ Workbook":
   
                 # Apply filter to display
                 display_df_ext = df_ext
+                if table_data.get("sort_by_team") and st.session_state.get("sprint_review_label_order", []):
+                    display_df_ext = sort_items_by_label_priority(display_df_ext, ["Key"])
+                    st.caption("Previewing the Sprint Review team order. This view does not change the saved workbook order.")
                 if filter_label_ext.strip() != "" and "Labels" in display_df_ext.columns:
                     display_df_ext = display_df_ext[display_df_ext["Labels"].str.contains(filter_label_ext.strip(), case=False, na=False)]
  
