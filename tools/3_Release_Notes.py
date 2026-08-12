@@ -5,6 +5,9 @@ import os
 import io
 import re
 import base64
+from html import unescape
+from datetime import datetime
+from urllib.parse import quote
 from dotenv import load_dotenv
 from PIL import Image as PILImage
 
@@ -343,6 +346,10 @@ if 'release_date' not in st.session_state:
     st.session_state.release_date = datetime.date.today()
 if 'show_items_resume' not in st.session_state:
     st.session_state.show_items_resume = True
+if 'prepared_release_notes' not in st.session_state:
+    st.session_state.prepared_release_notes = None
+if 'release_purpose' not in st.session_state:
+    st.session_state.release_purpose = "The purpose of this release is to rollout the following functionalities:"
 
 
 # ---------------------------------------------------------
@@ -760,6 +767,8 @@ def fetch_jira_tickets_dataset(server, token, query_val, query_mode="sprint", au
                 issue_type = "User Story"
             elif "bug" in raw_lower:
                 issue_type = "Bug"
+            elif "improvement" in raw_lower:
+                issue_type = "Improvement"
             elif "technical" in raw_lower or "tech" in raw_lower or "performance" in raw_lower or "scaling" in raw_lower or "infrastructure" in raw_lower:
                 issue_type = "Technical Task"
             elif "sub-task" in raw_lower or "subtask" in raw_lower:
@@ -831,6 +840,209 @@ def fetch_jira_tickets_dataset(server, token, query_val, query_mode="sprint", au
     except Exception as e:
         st.error(f"Exception connecting to Jira: {str(e)}")
         return None
+
+def jira_request(server, token, path, params=None, auth_type="Personal Access Token (Bearer PAT)", email=""):
+    headers = {"Accept": "application/json"}
+    token_clean = token.strip().removeprefix("Bearer ").strip()
+    auth = None
+    if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"]:
+        auth = (email.strip(), token_clean)
+    else:
+        headers["Authorization"] = f"Bearer {token_clean}"
+    return requests.get(f"{server.rstrip('/')}{path}", headers=headers, params=params, auth=auth, timeout=20)
+
+def extract_release_version(version_name):
+    match = re.search(r"DIGITAL:HUB\s*[-:]?\s*(v?\d+(?:\.\d+)+)", version_name or "", re.IGNORECASE)
+    if not match:
+        raise ValueError("The Jira version name must contain a value after 'DIGITAL:HUB', for example 'DIGITAL:HUB 33.0.0'.")
+    return match.group(1).lstrip("v")
+
+def find_history_value(row, candidates):
+    normalized = {str(key).strip().lower(): value for key, value in row.items()}
+    for candidate in candidates:
+        for key, value in normalized.items():
+            if candidate in key:
+                return "" if pd.isna(value) else str(value).strip()
+    return ""
+
+def format_release_date(value):
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").strftime("%d.%m.%Y")
+    except ValueError:
+        return str(value)
+
+def build_release_purpose_draft(resolved):
+    """Create an editable, high-level release-purpose draft from release tickets."""
+    intro = "The purpose of this release is to rollout the following functionalities:"
+    if resolved is None or resolved.empty:
+        return intro
+
+    items = []
+    grouped = resolved.copy()
+    grouped["_epic"] = grouped["Epic"].fillna("-").astype(str).str.strip()
+    for epic, epic_items in grouped[grouped["_epic"].ne("-")].groupby("_epic", sort=True):
+        epic_name = re.sub(r"^[A-Z][A-Z0-9]+-\d+\s*-\s*", "", epic).strip()
+        items.append(f"- {epic_name}:")
+
+    no_epic = grouped[grouped["_epic"].eq("-")]
+    if not no_epic.empty:
+        has_bug = no_epic["Type"].astype(str).str.contains("bug", case=False, na=False).any()
+        has_other = (~no_epic["Type"].astype(str).str.contains("bug", case=False, na=False)).any()
+        if has_bug and has_other:
+            items.append("- Bug fixing and general improvements across the platform.")
+        elif has_bug:
+            items.append("- Bug fixing and stability improvements across the platform.")
+        else:
+            items.append("- General improvements across the platform.")
+    return intro + "\n\n" + "\n".join(items) if items else intro
+
+def parse_confluence_history_rows(html):
+    """Read Confluence storage tables without requiring optional lxml/bs4 packages."""
+    for table_html in re.findall(r"<table[^>]*>(.*?)</table>", html, flags=re.IGNORECASE | re.DOTALL):
+        rows = []
+        for row_html in re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.DOTALL):
+            cells = []
+            for cell_html in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row_html, flags=re.IGNORECASE | re.DOTALL):
+                cell_html = re.sub(
+                    r'<time[^>]*datetime=["\']([^"\']+)["\'][^>]*/?>',
+                    r'\1',
+                    cell_html,
+                    flags=re.IGNORECASE
+                )
+                cell_text = re.sub(r"<br\s*/?>", "\n", cell_html, flags=re.IGNORECASE)
+                cell_text = unescape(re.sub(r"<[^>]+>", "", cell_text)).strip()
+                cells.append(cell_text)
+            if cells:
+                rows.append(cells)
+        if len(rows) > 1:
+            headers = rows[0]
+            for row in rows[1:]:
+                parsed_row = dict(zip(headers, row))
+                parsed_row["__first_column__"] = row[0] if row else ""
+                yield parsed_row
+
+def fetch_release_history(confluence_server, token, release_version, auth_type, email):
+    confluence_url = f"{confluence_server.rstrip('/')}/rest/api/content/201544094"
+    headers = {"Accept": "application/json"}
+    token_clean = token.strip().removeprefix("Bearer ").strip()
+    auth = (email.strip(), token_clean) if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"] else None
+    if auth:
+        response = requests.get(confluence_url, headers=headers, params={"expand": "body.storage"}, auth=auth, timeout=20)
+    else:
+        headers["Authorization"] = f"Bearer {token_clean}"
+        response = requests.get(confluence_url, headers=headers, params={"expand": "body.storage"}, timeout=20)
+    if response.status_code != 200:
+        raise ValueError(f"Could not read Release history Documentation ({response.status_code}).")
+    html = response.json().get("body", {}).get("storage", {}).get("value", "")
+    for row in parse_confluence_history_rows(html):
+        values = " ".join(str(value) for value in row.values())
+        if re.search(rf"(?<!\d){re.escape(release_version)}(?!\d)", values):
+            deploy_date = row.get("__first_column__") or find_history_value(row, ["deploy date", "date"])
+            if not deploy_date:
+                raise ValueError(f"Release history has a row for version {release_version}, but its Deploy Date (PROD) is still empty.")
+            return {
+                "deploy_date": format_release_date(deploy_date),
+                "scs": find_history_value(row, ["scs"]),
+                "service_center_change": find_history_value(row, ["service center change", "vw service"]),
+                "test_protocols": find_history_value(row, ["test protocol", "e2e", "protocol"])
+            }
+    raise ValueError(f"There is no Release history row for version {release_version} yet.")
+
+def prepare_release_notes_from_version_url(version_url):
+    version_id_match = re.search(r"/versions/(\d+)", version_url.strip())
+    if not version_id_match:
+        raise ValueError("Paste a Jira version URL ending in /versions/<id>.")
+    version_response = jira_request(st.session_state.jira_server, st.session_state.jira_token, f"/rest/api/2/version/{version_id_match.group(1)}", auth_type=st.session_state.jira_auth_method, email=st.session_state.jira_email)
+    if version_response.status_code != 200:
+        raise ValueError(f"Could not load the Jira version ({version_response.status_code}).")
+    version_name = version_response.json().get("name", "")
+    release_version = extract_release_version(version_name)
+    history = fetch_release_history(st.session_state.conf_server, st.session_state.conf_token, release_version, st.session_state.jira_auth_method, st.session_state.jira_email)
+    issues = fetch_jira_tickets_dataset(st.session_state.jira_server, st.session_state.jira_token, version_name, query_mode="fix_version", auth_type=st.session_state.jira_auth_method, email=st.session_state.jira_email)
+    if issues is None:
+        raise ValueError("Could not load the release tickets from Jira.")
+    allowed = ["Bug", "User Story", "Task", "Improvement"]
+    resolved = issues[issues["Type"].isin(allowed)].copy()
+    residual_jql = (
+        'issuetype = Bug AND status != Closed AND status != Resolved '
+        'AND labels in (Severity_A, Severity_B) AND labels not in (Cognos)'
+    )
+    residual = fetch_jira_tickets_dataset(st.session_state.jira_server, st.session_state.jira_token, residual_jql, query_mode="custom", auth_type=st.session_state.jira_auth_method, email=st.session_state.jira_email)
+    if residual is not None and not residual.empty:
+        # Exclude only bugs assigned to this exact release. Bugs planned for a
+        # future version (for example 34.0.0 while preparing 33.0.0) remain.
+        residual = residual[
+            ~residual["Fix Version"].astype(str).str.contains(re.escape(release_version), case=False, na=False)
+        ].reset_index(drop=True)
+    return {"version": release_version, "jira_version_name": version_name, "history": history, "resolved": resolved, "residual": residual if residual is not None else pd.DataFrame(), "purpose_draft": build_release_purpose_draft(resolved)}
+
+def publish_release_note_to_history(prepared, pdf_bytes, filename):
+    """Attach the PDF and link it from the Release history row for this version."""
+    base_url = st.session_state.conf_server.rstrip("/")
+    token = st.session_state.conf_token.strip().removeprefix("Bearer ").strip()
+    headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+    page_id = "201544094"
+    page_response = requests.get(f"{base_url}/rest/api/content/{page_id}", headers=headers, params={"expand": "body.storage,version"}, timeout=20)
+    if page_response.status_code != 200:
+        raise ValueError(f"Could not read Release history Documentation ({page_response.status_code}).")
+    page = page_response.json()
+
+    upload_headers = {"Accept": "application/json", "Authorization": f"Bearer {token}", "X-Atlassian-Token": "no-check"}
+    attachment_list_response = requests.get(
+        f"{base_url}/rest/api/content/{page_id}/child/attachment",
+        headers=headers,
+        params={"filename": filename, "limit": 1},
+        timeout=20
+    )
+    existing_attachments = attachment_list_response.json().get("results", []) if attachment_list_response.status_code == 200 else []
+    upload_url = f"{base_url}/rest/api/content/{page_id}/child/attachment"
+    if existing_attachments:
+        upload_url = f"{upload_url}/{existing_attachments[0]['id']}/data"
+    attachment_response = requests.post(
+        upload_url,
+        headers=upload_headers,
+        files={"file": (filename, pdf_bytes, "application/pdf")},
+        timeout=30
+    )
+    if attachment_response.status_code not in (200, 201):
+        raise ValueError(f"Could not upload the Release Note PDF ({attachment_response.status_code}).")
+
+    html = page["body"]["storage"]["value"]
+    version = prepared["version"]
+    updated = False
+    def replace_release_note_cell(match):
+        nonlocal updated
+        row_html = match.group(0)
+        row_text = unescape(re.sub(r"<[^>]+>", " ", row_html))
+        if updated or not re.search(rf"(?<!\d){re.escape(version)}(?!\d)", row_text):
+            return row_html
+        cells = list(re.finditer(r"<td[^>]*>.*?</td>", row_html, flags=re.IGNORECASE | re.DOTALL))
+        if len(cells) < 5:
+            return row_html
+        link = f'<td><p><a href="{base_url}/download/attachments/{page_id}/{quote(filename)}">{filename}</a></p></td>'
+        target = cells[4]
+        updated = True
+        return row_html[:target.start()] + link + row_html[target.end():]
+
+    new_html = re.sub(r"<tr[^>]*>.*?</tr>", replace_release_note_cell, html, flags=re.IGNORECASE | re.DOTALL)
+    if not updated:
+        raise ValueError(f"Could not find the Release history row for version {version}.")
+    update_response = requests.put(
+        f"{base_url}/rest/api/content/{page_id}",
+        headers={**headers, "Content-Type": "application/json"},
+        json={
+            "id": page_id,
+            "type": "page",
+            "title": page["title"],
+            "body": {"storage": {"value": new_html, "representation": "storage"}},
+            "version": {"number": page["version"]["number"] + 1}
+        },
+        timeout=30
+    )
+    if update_response.status_code != 200:
+        detail = re.sub(r"\s+", " ", update_response.text)[:300]
+        raise ValueError(f"PDF uploaded, but the history row could not be updated ({update_response.status_code}): {detail}")
+    return f"{base_url}/pages/viewpage.action?pageId={page_id}"
 
 def upload_pdf_to_confluence(server_url, auth_type, token, email, space_key, page_title, pdf_bytes, filename):
     """
@@ -1117,7 +1329,11 @@ class NumberedCanvas(canvas.Canvas):
     def draw_page_decorations(self, page_count):
         primary_color_hex = st.session_state.primary_color
         primary_color = hex_to_reportlab_color(primary_color_hex)
-        project_name = st.session_state.project_name
+        project_name = (
+            "ReCall2 - Software Release Note"
+            if st.session_state.get("prepared_release_notes") is not None
+            else st.session_state.project_name
+        )
         logo_path = st.session_state.rn_logo_temp_path
         
         self.saveState()
@@ -1484,7 +1700,67 @@ def get_arrow_drawing(color):
     d.add(Line(0, 6, 2, 8, strokeColor=colors.black, strokeWidth=1.0))
     d.add(Line(4, 6, 2, 8, strokeColor=colors.black, strokeWidth=1.0))
     return d
+
+def build_prepared_release_notes_pdf(prepared):
+    """Generate the standard ReCall 2 Release Note from a prepared Jira version."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, leftMargin=54, rightMargin=54, topMargin=72, bottomMargin=60)
+    styles = getSampleStyleSheet()
+    primary = hex_to_reportlab_color(st.session_state.primary_color)
+    title = ParagraphStyle("RNTitle", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=20, leading=24, textColor=colors.black, spaceBefore=14, spaceAfter=10)
+    body = ParagraphStyle("RNBody", parent=styles["Normal"], fontName="Helvetica", fontSize=10.5, leading=14, spaceAfter=8)
+    header = ParagraphStyle("RNHead", parent=body, fontName="Helvetica-Bold", fontSize=8, leading=10, textColor=colors.white)
+    cell = ParagraphStyle("RNCell", parent=body, fontSize=8.5, leading=11)
+    label = ParagraphStyle("RNLabel", parent=cell, fontName="Helvetica-Bold")
+    story = [Spacer(1, 50), Paragraph("ReCall2 - Software Release Note", ParagraphStyle("CoverProject", parent=body, alignment=1, textColor=colors.HexColor("#64748B"))), Paragraph("Release Notes", ParagraphStyle("CoverTitle", parent=title, alignment=1, fontSize=32, leading=38, textColor=primary, spaceBefore=18)), Paragraph(f"Version: {prepared['version']}", ParagraphStyle("CoverVersion", parent=body, alignment=1, fontSize=18, leading=22, textColor=colors.HexColor("#334155"))), Spacer(1, 250), Paragraph("This documentation outlines the software development results of Digital:Hub for the specified release delivered to Volkswagen AG.", ParagraphStyle("CoverFooter", parent=body, alignment=1)), PageBreak()]
+
+    story += [Paragraph("1. Release Purpose", title), Paragraph(st.session_state.release_purpose.replace("\n", "<br/>"), body), Paragraph("2. Software Release Information", title)]
+    history = prepared["history"]
+    metadata = [("Release version (ReCall2)", prepared["version"]), ("VW Service Center Change number", history.get("service_center_change") or "-"), ("Deploy Date (PROD)", history.get("deploy_date") or "-"), ("SCS", history.get("scs") or "-")]
+    meta_data = [[Paragraph(key, label), Paragraph(value.replace("\n", "<br/>"), cell)] for key, value in metadata]
+    meta_table = Table(meta_data, colWidths=[225, 279])
+    meta_table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), .75, colors.black), ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E7E7E7")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6), ("LEFTPADDING", (0, 0), (-1, -1), 7)]))
+    story += [meta_table, Paragraph("3. Release: Resolved Issues", title), Paragraph("Number of resolved issues by Issue Type:", body)]
+    resolved = prepared["resolved"].copy()
+    display_types = [("Stories", "User Story"), ("Task", "Task"), ("Bugs", "Bug"), ("Improvements", "Improvement")]
+    counts = [[Paragraph("Issue Type", header), Paragraph("Amount", header)]] + [[Paragraph(name, cell), Paragraph(str((resolved["Type"] == issue_type).sum()), cell)] for name, issue_type in display_types]
+    count_table = Table(counts, colWidths=[250, 100])
+    count_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#BFBFBF")), ("GRID", (0, 0), (-1, -1), .4, colors.HexColor("#777777")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+    story += [count_table, Spacer(1, 12), Paragraph("List of all resolved issues (Jira ticket number) for this release:", body)]
+    resolved["_epic"] = resolved["Epic"].fillna("-").astype(str)
+    resolved.sort_values(["_epic", "Key"], inplace=True)
+    issue_rows = [[Paragraph("Issue Type", header), Paragraph("Key", header), Paragraph("Summary", header)]]
+    epic_group_rows = []
+    last_epic = None
+    for _, row in resolved.iterrows():
+        epic = str(row["_epic"])
+        if epic != last_epic:
+            last_epic = epic
+            epic_group_rows.append(len(issue_rows))
+            issue_rows.append([Paragraph(f"Epic: {epic}", ParagraphStyle("RNEpic", parent=cell, fontName="Helvetica-Bold")), "", ""])
+        issue_rows.append([Paragraph(str(row["Type"]), cell), Paragraph(str(row["Key"]), cell), Paragraph(str(row["Summary"]), cell)])
+    issues_table = Table(issue_rows, colWidths=[105, 125, 274], repeatRows=1)
+    issue_table_style = [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#BFBFBF")), ("GRID", (0, 0), (-1, -1), .6, colors.black), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]
+    for row_index in epic_group_rows:
+        issue_table_style.extend([("SPAN", (0, row_index), (-1, row_index)), ("BACKGROUND", (0, row_index), (-1, row_index), colors.HexColor("#E7E7E7"))])
+    issues_table.setStyle(TableStyle(issue_table_style))
+    story += [issues_table, Paragraph("4. Release: All known residual anomalies", title), Paragraph("List of all known bugs/defects (Severity A or B) not included in this release:", body)]
+    residual = prepared["residual"]
+    residual_rows = [[Paragraph("Issue Type", header), Paragraph("Key", header), Paragraph("Summary", header)]]
+    for _, row in residual.iterrows():
+        residual_rows.append([Paragraph("Bug", cell), Paragraph(str(row["Key"]), cell), Paragraph(str(row["Summary"]), cell)])
+    residual_table = Table(residual_rows, colWidths=[105, 125, 274], repeatRows=1)
+    residual_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#BFBFBF")), ("GRID", (0, 0), (-1, -1), .6, colors.black), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+    story += [residual_table, Paragraph("5. Test protocols", title)]
+    link = "https://devstack.vwgroup.com/confluence/x/nlEDD"
+    story.append(Paragraph(f'E2E test protocols: <link href="{link}" color="blue">E2E test protocols for release</link>', body))
+    doc.build(story, canvasmaker=NumberedCanvas)
+    buffer.seek(0)
+    return buffer
+
 def build_release_notes_pdf(overview_df):
+    if st.session_state.get("prepared_release_notes") is not None:
+        return build_prepared_release_notes_pdf(st.session_state.prepared_release_notes)
     pdf_buffer = io.BytesIO()
     
     # Setup document
@@ -1912,7 +2188,7 @@ st.markdown("Automate and customize Release Notes reports securely by connecting
 
 # Programmatic Navigation Sidebar
 st.sidebar.markdown("### 🧭 Navigation Panel")
-options_en = ["🔌 Ingestion", "✍️ Workbook", "🎨 Branding", "💾 Exporter"]
+options_en = ["🔌 Ingestion", "✍️ Workbook", "💾 Exporter"]
 
 if 'active_tab' not in st.session_state or st.session_state.active_tab not in options_en:
     st.session_state.active_tab = "🔌 Ingestion"
@@ -1962,6 +2238,39 @@ if st.session_state.active_tab == "🔌 Ingestion":
         st.session_state.jira_token = token_input
         
     st.info("💡 **Security:** Credentials are loaded locally using secure dotenv files and are never saved publicly on git repositories.")
+
+    st.subheader("📝 Prepare Release Note")
+    st.write("Paste the Jira version link to load the release metadata, resolved issues, and known residual anomalies.")
+    release_version_url = st.text_input(
+        "Jira version link",
+        placeholder="https://devstack.vwgroup.com/jira/projects/RECALLTWO/versions/543216",
+        key="release_version_url"
+    )
+    purpose_in = st.text_area(
+        "Release purpose",
+        value=st.session_state.release_purpose,
+        height=120
+    )
+    st.session_state.release_purpose = purpose_in
+    st.caption("Uses the Jira and Confluence credentials configured in your local `.env` file.")
+    if st.button("✨ Prepare Release Note", use_container_width=True):
+        if not st.session_state.conf_token:
+            st.error("Missing CONFLUENCE_API_TOKEN in the local .env configuration.")
+            st.stop()
+        try:
+            with st.spinner("Loading release metadata, tickets, and residual anomalies..."):
+                prepared = prepare_release_notes_from_version_url(release_version_url)
+            st.session_state.prepared_release_notes = prepared
+            st.session_state.app_version = prepared["version"]
+            st.session_state.overview_df = prepared["resolved"].copy()
+            st.session_state.release_purpose = prepared["purpose_draft"]
+            st.success(f"Release {prepared['version']} is ready. Review the generated purpose text and export the PDF.")
+            st.rerun()
+        except ValueError as error:
+            st.error(str(error))
+
+    # The version-link workflow replaces the legacy generic ingestion controls below.
+    st.stop()
 
     st.divider()
 
@@ -2212,6 +2521,43 @@ if st.session_state.active_tab == "🔌 Ingestion":
 # STEP 2: Worktable Workspace (Tabbed Data Editor)
 # ---------------------------------------------------------
 elif st.session_state.active_tab == "✍️ Workbook":
+    if st.session_state.get("prepared_release_notes") is not None:
+        st.subheader("✍️ Review Release Note data")
+        st.write("Remove or adjust rows before export. These are the only two ticket tables used in the Release Note.")
+        release_tickets_tab, residual_bugs_tab = st.tabs(["✅ Release tickets", "⚠️ Known residual bugs"])
+        with release_tickets_tab:
+            prepared = st.session_state.prepared_release_notes
+            release_df = prepared["resolved"].copy()
+            if "Select" not in release_df.columns:
+                release_df.insert(0, "Select", False)
+            release_df = st.data_editor(
+                release_df,
+                num_rows="fixed",
+                use_container_width=True,
+                key="prepared_release_tickets_editor",
+                disabled=[column for column in release_df.columns if column != "Select"],
+                column_order=["Select", "Type", "Key", "Summary", "Epic", "Status"]
+            )
+            if st.button("Remove selected release tickets", use_container_width=True):
+                prepared["resolved"] = release_df[~release_df["Select"]].drop(columns=["Select"]).reset_index(drop=True)
+                st.rerun()
+        with residual_bugs_tab:
+            prepared = st.session_state.prepared_release_notes
+            residual_df = prepared["residual"].copy()
+            if "Select" not in residual_df.columns:
+                residual_df.insert(0, "Select", False)
+            residual_df = st.data_editor(
+                residual_df,
+                num_rows="fixed",
+                use_container_width=True,
+                key="prepared_residual_bugs_editor",
+                disabled=[column for column in residual_df.columns if column != "Select"],
+                column_order=["Select", "Key", "Summary", "Epic", "Status", "Labels"]
+            )
+            if st.button("Remove selected residual bugs", use_container_width=True):
+                prepared["residual"] = residual_df[~residual_df["Select"]].drop(columns=["Select"]).reset_index(drop=True)
+                st.rerun()
+        st.stop()
     st.subheader("✍️ Workspace Workbooks: Commercial Fine-Tuning")
     st.write("Convert technical Jira summaries into elegant commercial feature descriptions, assign demo presenters, and toggle report targets.")
     if st.session_state.overview_df is None and not st.session_state.custom_tables:
@@ -2669,8 +3015,12 @@ elif st.session_state.active_tab == "🎨 Branding":
  
                 
         with col_br_right:
-            st.markdown("**2. Release Notes Introduction (Rich Text / Markdown)**")
-            st.write("Write the welcoming customer intro paragraph printed at the top of your Release Notes PDF document.")
+            st.markdown("**Release purpose**")
+            purpose_in = st.text_area("Release purpose text:", value=st.session_state.release_purpose, height=130)
+            if purpose_in != st.session_state.release_purpose:
+                st.session_state.release_purpose = purpose_in
+            st.markdown("**Additional introduction (optional)**")
+            st.write("Optional introductory content printed after the release purpose.")
             
             intro_in = st.text_area(
                 "Introduction Content:",
@@ -2760,84 +3110,29 @@ elif st.session_state.active_tab == "💾 Exporter":
                 )
             except Exception as e:
                 st.error(f"Error compiling Release Notes PDF: {str(e)}")
-                
-            st.markdown("<br/>", unsafe_allow_html=True)
-            st.markdown("### 🔌 Confluence Publisher")
-            st.markdown("""
-            <div class="export-card" style="border-left: 4px solid #3B82F6;">
-                <h4 style="margin-bottom:6px; color:#FFFFFF;">🌐 Atlassian Confluence Integration</h4>
-                <p style="font-size:11.5px; line-height:14px; margin-bottom: 2px;">
-                    Upload the generated Release Notes PDF directly as an attachment to a targeted page in Confluence.
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            conf_server_input = st.text_input(
-                "Confluence Server URL:",
-                value=st.session_state.conf_server if st.session_state.conf_server else "https://devstack.vwgroup.com/confluence",
-                placeholder="https://devstack.vwgroup.com/confluence",
-                key="conf_server_url_input"
-            )
-            
-            conf_token_input = st.text_input(
-                "Confluence PAT Token:",
-                value=st.session_state.conf_token,
-                type="password",
-                placeholder="Enter Confluence Personal Access Token (PAT)...",
-                key="conf_api_token_input"
-            )
-            
-            col_space, col_page = st.columns([1, 2])
-            with col_space:
-                conf_space_input = st.text_input(
-                    "Space Key:",
-                    value=st.session_state.conf_space_key,
-                    placeholder="e.g. DS",
-                    key="conf_space_key_input"
+
+            if st.session_state.get("prepared_release_notes") is not None:
+                st.markdown("### 📌 Publish to Release History")
+                st.info(
+                    "After reviewing the PDF, this publishes it to **Release history Documentation**. "
+                    "The PDF is attached to that page and its link is added to the **PO acceptance and release notes** column "
+                    "of the row matching the prepared release version."
                 )
-            with col_page:
-                conf_page_title_input = st.text_input(
-                    "Page Title:",
-                    value=st.session_state.conf_page_name,
-                    placeholder="e.g. Release Notes",
-                    key="conf_page_name_input"
-                )
-                
-            # Sync back to session state safely
-            if conf_server_input != st.session_state.conf_server:
-                st.session_state.conf_server = conf_server_input
-            if conf_token_input != st.session_state.conf_token:
-                st.session_state.conf_token = conf_token_input
-            if conf_space_input != st.session_state.conf_space_key:
-                st.session_state.conf_space_key = conf_space_input
-            if conf_page_title_input != st.session_state.conf_page_name:
-                st.session_state.conf_page_name = conf_page_title_input
-                
-            if st.button("🚀 Upload PDF to Confluence", use_container_width=True):
-                with st.spinner("Connecting and uploading to Confluence..."):
+                if st.button("🚀 Publish to Release History", use_container_width=True):
                     try:
-                        pdf_data = build_release_notes_pdf(rn_ov_df)
-                        clean_project_name = st.session_state.project_name.replace(' ', '_')
-                        filename = f"{st.session_state.filename_rn.strip().replace(' ', '_')}_{clean_project_name}.pdf" if st.session_state.filename_rn.strip() != "" else f"Release_Notes_{clean_project_name}.pdf"
-                            
-                        # Call helper
-                        pdf_bytes = pdf_data.getvalue()
-                        page_url = upload_pdf_to_confluence(
-                            server_url=st.session_state.conf_server,
-                            auth_type="Personal Access Token (Bearer PAT)",
-                            token=st.session_state.conf_token,
-                            email="",
-                            space_key=st.session_state.conf_space_key,
-                            page_title=st.session_state.conf_page_name,
-                            pdf_bytes=pdf_bytes,
-                            filename=filename
-                        )
- 
-                        st.success(f"🎉 **PDF successfully uploaded to Confluence!**")
-                        st.markdown(f"[👉 Click here to view Confluence Page]({page_url})")
-                    except Exception as ex:
-                        st.error(f"Failed to publish to Confluence: {str(ex)}")
-                        
+                        with st.spinner("Uploading the PDF and updating the Release history row..."):
+                            history_pdf = build_release_notes_pdf(rn_ov_df)
+                            history_filename = f"Software_Release_Note_ReCall2_v{st.session_state.prepared_release_notes['version']}.pdf"
+                            history_url = publish_release_note_to_history(
+                                st.session_state.prepared_release_notes,
+                                history_pdf.getvalue(),
+                                history_filename
+                            )
+                        st.success("Release Note published in the matching Release history row.")
+                        st.markdown(f"[Open Release history Documentation]({history_url})")
+                    except ValueError as error:
+                        st.error(str(error))
+
         with col_preview_area:
             st.markdown("### 👁️ Live Document Previewer")
             st.write("Release Notes PDF live preview:")
@@ -2857,4 +3152,3 @@ elif st.session_state.active_tab == "💾 Exporter":
                     st.error(f"Failed to render interactive base64 PDF: {str(e)}")
             else:
                 st.info("Ingest data first to view live generated previews.")
-
