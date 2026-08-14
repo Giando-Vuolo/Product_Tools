@@ -2214,7 +2214,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
     
     # Credentials block
 
-    st.markdown("**1. Secure Access Credentials (Jira Server PAT)**")
+    st.markdown("**1. Secure Access Credentials**")
     col_serv, col_tok = st.columns([1, 1])
     with col_serv:
         server_input = st.text_input(
@@ -2236,6 +2236,28 @@ if st.session_state.active_tab == "🔌 Ingestion":
         st.session_state.jira_server = server_input
     if token_input != st.session_state.jira_token:
         st.session_state.jira_token = token_input
+
+    col_conf_serv, col_conf_tok = st.columns([1, 1])
+    with col_conf_serv:
+        conf_server_input = st.text_input(
+            "Confluence Server URL:",
+            value=st.session_state.conf_server,
+            placeholder="https://company.atlassian.net/wiki",
+            help="Uses the value in your local .env file by default. Change it only if you need another Confluence server."
+        )
+    with col_conf_tok:
+        conf_token_input = st.text_input(
+            "Confluence Personal Access Token (PAT):",
+            value=st.session_state.conf_token,
+            type="password",
+            placeholder="Paste your Confluence token...",
+            help="Uses the value in your local .env file by default. You can paste another token for this session."
+        )
+
+    if conf_server_input != st.session_state.conf_server:
+        st.session_state.conf_server = conf_server_input
+    if conf_token_input != st.session_state.conf_token:
+        st.session_state.conf_token = conf_token_input
         
     st.info("💡 **Security:** Credentials are loaded locally using secure dotenv files and are never saved publicly on git repositories.")
 
@@ -2252,10 +2274,10 @@ if st.session_state.active_tab == "🔌 Ingestion":
         height=120
     )
     st.session_state.release_purpose = purpose_in
-    st.caption("Uses the Jira and Confluence credentials configured in your local `.env` file.")
+    st.caption("The Jira and Confluence fields are prefilled from your local `.env` file. Any change here is used only in the current session.")
     if st.button("✨ Prepare Release Note", use_container_width=True):
         if not st.session_state.conf_token:
-            st.error("Missing CONFLUENCE_API_TOKEN in the local .env configuration.")
+            st.error("Enter a Confluence Personal Access Token to load the release history.")
             st.stop()
         try:
             with st.spinner("Loading release metadata, tickets, and residual anomalies..."):
