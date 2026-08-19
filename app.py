@@ -1,6 +1,10 @@
 import streamlit as st
 import os
 from dotenv import load_dotenv
+from utils.tunnel import start_tunnel, get_tunnel_url
+
+# Start Cloudflare Tunnel automatically on port 8501
+start_tunnel(8501)
 
 # Load environment variables
 load_dotenv(override=True)
@@ -8,6 +12,7 @@ default_primary_color = os.getenv("PRIMARY_COLOR", "#3B82F6")
 if 'primary_color' not in st.session_state or st.session_state.get('prev_env_color') != default_primary_color:
     st.session_state.primary_color = default_primary_color
     st.session_state.prev_env_color = default_primary_color
+
 
 # 1. Define the page objects first so they are globally accessible
 planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner", icon="🎯")
@@ -236,4 +241,21 @@ home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
 # 4. Setup and run navigation
 pg = st.navigation([home_page, planner_page, sprint_review_page, release_notes_page])
 st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
+
+# Display live collaboration tunnel link in the sidebar
+st.sidebar.markdown("### 🤝 Colaboración Live")
+tunnel_url = get_tunnel_url()
+if tunnel_url:
+    st.sidebar.success("Túnel Activo ✅")
+    st.sidebar.code(tunnel_url, language="text")
+    st.sidebar.link_button("🌐 Abrir Enlace", tunnel_url, use_container_width=True)
+    st.sidebar.caption("Haz clic en el icono de copiar del recuadro de arriba o usa el botón para abrir el enlace.")
+else:
+    st.sidebar.info("🌀 Iniciando túnel...")
+    st.sidebar.caption("Buscando dirección pública de Cloudflare. La interfaz se actualizará automáticamente en cuanto esté lista.")
+    from streamlit_autorefresh import st_autorefresh
+    st_autorefresh(interval=1000, limit=20, key="tunnel_startup_refresher")
+
 pg.run()
+
+

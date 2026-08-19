@@ -1046,9 +1046,10 @@ def map_epic_status_for_completion_table(status_name):
 def build_quarterly_epic_progress_table(server, token, quarter_label, title, position, auth_type, email):
     """Build the standard Recalltwo quarterly Epic progress table."""
     escaped_quarter_label = quarter_label.replace('"', '\\"')
+    committed_label = os.getenv("COMMITTED_LABEL", "RC2_committed")
     jql = (
         'project = RECALLTWO AND issuetype = Epic '
-        'AND labels in (RC2_committed) '
+        f'AND labels in ({committed_label}) '
         f'AND labels in ({escaped_quarter_label})'
     )
     res_df = fetch_jira_tickets_dataset(
@@ -2529,21 +2530,25 @@ if st.session_state.active_tab == "🔌 Ingestion":
     
     # Standard quarterly Epic progress table
     st.subheader("📈 Quarterly Epic Progress")
-    st.write("Add the standard Recalltwo progress table for committed Epics. It always filters by `RC2_committed` plus the quarter label you choose.")
+    committed_label_env = os.getenv("COMMITTED_LABEL", "RC2_committed")
+    quarter_label_env = os.getenv("QUARTER_LABEL", "RC2_FB_18")
+    table_title_env = os.getenv("QUARTER_STATUS_TABLE_TITLE", "Epics Q3 - Current Progress")
+    
+    st.write(f"Add the standard Recalltwo progress table for committed Epics. It always filters by `{committed_label_env}` plus the quarter label you choose.")
     with st.container(border=True):
         quarter_col, title_col = st.columns([1, 2])
         with quarter_col:
             quarterly_epic_label = st.text_input(
                 "Quarter label",
-                value="RC2_FB_18",
-                placeholder="e.g. RC2_FB_18"
+                value=quarter_label_env,
+                placeholder=f"e.g. {quarter_label_env}"
             )
         with title_col:
             quarterly_epic_title = st.text_input(
                 "Table title",
-                value="Epics Q3 - Current Progress"
+                value=table_title_env
             )
-        st.caption("Project: RECALLTWO · Required label: RC2_committed · Epic link: Epic Link")
+        st.caption(f"Project: RECALLTWO · Required label: {committed_label_env} · Epic link: Epic Link")
         if st.button("📈 Load Quarterly Epic Progress", use_container_width=True):
             if not quarterly_epic_label.strip():
                 st.error("Enter the label used for the quarter before loading the table.")

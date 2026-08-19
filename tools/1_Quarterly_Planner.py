@@ -4,6 +4,48 @@ import plotly.express as px
 import re
 import os
 from dotenv import load_dotenv
+from streamlit_autorefresh import st_autorefresh
+
+# Shared file paths for live collaboration
+SHARED_DIR = "data"
+SHARED_BACKLOG_PATH = os.path.join(SHARED_DIR, "shared_backlog.csv")
+SHARED_SPRINT_CALENDAR_PATH = os.path.join(SHARED_DIR, "shared_sprint_calendar.csv")
+os.makedirs(SHARED_DIR, exist_ok=True)
+
+# Autorefresh page every 5 seconds for live sync
+st_autorefresh(interval=5000, key="backlog_sync_refresher")
+
+def sync_from_disk_if_modified():
+    """Reads modifications from the shared disk files if another user changed them."""
+    # Sync main backlog
+    if os.path.exists(SHARED_BACKLOG_PATH):
+        mtime = os.path.getmtime(SHARED_BACKLOG_PATH)
+        if 'main_df' not in st.session_state or mtime > st.session_state.get('last_backlog_mtime', 0):
+            try:
+                df = pd.read_csv(SHARED_BACKLOG_PATH)
+                df['Start Date'] = pd.to_datetime(df['Start Date'], errors='coerce')
+                df['Due Date'] = pd.to_datetime(df['Due Date'], errors='coerce')
+                st.session_state.main_df = df
+                st.session_state.last_backlog_mtime = mtime
+                # Reset selected epic key if no longer present in dataset
+                if st.session_state.get('selected_epic_key') not in df['Key'].values:
+                    st.session_state.selected_epic_key = None
+            except Exception:
+                pass
+
+    # Sync sprint calendar
+    if os.path.exists(SHARED_SPRINT_CALENDAR_PATH):
+        mtime_sprints = os.path.getmtime(SHARED_SPRINT_CALENDAR_PATH)
+        if 'sprint_calendar' not in st.session_state or mtime_sprints > st.session_state.get('last_sprint_cal_mtime', 0):
+            try:
+                df_sprints = pd.read_csv(SHARED_SPRINT_CALENDAR_PATH)
+                st.session_state.sprint_calendar = df_sprints
+                st.session_state.last_sprint_cal_mtime = mtime_sprints
+            except Exception:
+                pass
+
+# Run initial disk sync check
+sync_from_disk_if_modified()
 
 # Load environment variables
 load_dotenv(override=True)
@@ -11,6 +53,7 @@ default_primary_color = os.getenv("PRIMARY_COLOR", "#3B82F6")
 if 'primary_color' not in st.session_state or st.session_state.get('prev_env_color') != default_primary_color:
     st.session_state.primary_color = default_primary_color
     st.session_state.prev_env_color = default_primary_color
+
 
 if 'selected_epic_key' not in st.session_state:
     st.session_state.selected_epic_key = None
@@ -337,6 +380,11 @@ def sync_sprint_calendar_changes():
             for col, val in col_changes.items():
                 df.at[idx, col] = val
     st.session_state.sprint_calendar = df
+    try:
+        df.to_csv(SHARED_SPRINT_CALENDAR_PATH, index=False)
+        st.session_state.last_sprint_cal_mtime = os.path.getmtime(SHARED_SPRINT_CALENDAR_PATH)
+    except:
+        pass
     
     # Recalculate main_df if present
     if 'main_df' in st.session_state:
@@ -354,6 +402,12 @@ def sync_sprint_calendar_changes():
                 except:
                     pass
         st.session_state.main_df = main_df
+        try:
+            main_df.to_csv(SHARED_BACKLOG_PATH, index=False)
+            st.session_state.last_backlog_mtime = os.path.getmtime(SHARED_BACKLOG_PATH)
+        except:
+            pass
+
 
 def sync_main_editor_changes():
     edits = st.session_state.get("main_editor")
@@ -460,15 +514,31 @@ def sync_main_editor_changes():
         df = pd.concat([df, new_rows_df], ignore_index=True)
 
     st.session_state.main_df = df
+    try:
+        df.to_csv(SHARED_BACKLOG_PATH, index=False)
+        st.session_state.last_backlog_mtime = os.path.getmtime(SHARED_BACKLOG_PATH)
+    except:
+        pass
+
 
 
 st.title("🎯 Quarterly Planner")
 
 uploaded_file = st.file_uploader("Upload your data (CSV)", type=['csv'])
 
+if not uploaded_file and os.path.exists(SHARED_BACKLOG_PATH):
+    class DummyUploadedFile:
+        def __init__(self, name):
+            self.name = name
+    uploaded_file = DummyUploadedFile("shared_backlog.csv")
+
 if uploaded_file:
     # 1. Data Ingestion & Normalization
-    df_raw = pd.read_csv(uploaded_file)
+    if hasattr(uploaded_file, "name") and uploaded_file.name == "shared_backlog.csv":
+        df_raw = pd.read_csv(SHARED_BACKLOG_PATH)
+    else:
+        df_raw = pd.read_csv(uploaded_file)
+
     
     # Drop rows that are completely empty
     if not df_raw.empty:
@@ -659,6 +729,14 @@ if uploaded_file:
                 df_raw.loc[mask_missing, ['Start Date', 'Due Date']] = calculated_dates
                 
         st.session_state.main_df = df_raw
+        # Save newly uploaded file to shared storage
+        if uploaded_file.name != "shared_backlog.csv":
+            try:
+                df_raw.to_csv(SHARED_BACKLOG_PATH, index=False)
+                st.session_state.last_backlog_mtime = os.path.getmtime(SHARED_BACKLOG_PATH)
+            except:
+                pass
+
 
     # 4. Collapsible Backlog Editor
     column_config = {
