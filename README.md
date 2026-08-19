@@ -9,10 +9,13 @@ You can connect directly to your corporate **Jira Server / Cloud** to automatica
 ## 🚀 Key Features
 
 * **🔌 Dual Jira Backlog Ingestion**: Securely connect to your company Jira server using secure tokens to fetch live sprint roadmaps (or drag-and-drop local CSV files).
+* **🤝 Live Collaboration**: Automatically spins up a secure, free Cloudflare tunnel on startup, displaying a shareable public link in the sidebar so team members can view and edit the roadmap together in real time.
 * **✍️ Commercial Workspace Workbook**: Refine technical Jira summaries into elegant commercial feature descriptions, schedule live product demos with presenters, and toggle report targets.
 * **🎨 Visual Branding**: Customize document primary theme colors with premium corporate presets, upload corporate logos, and add custom welcome intros.
+* **📈 Jira Quarterly Epic Progress**: Load and calculate progress stats for committed Epics (filtered by committed label + quarter label) directly inside both the Quarterly Planner and the Sprint Review modules.
 * **💾 Export Presentation Slide Decks & PDFs**: Export compact, high-density, beautifully styled landscape slide presentation decks and portrait documents.
 * **📊 Interactive Gantt Chart & Velocity Reports**: Track delivery speed, complete/rollover story points, and visualize hierarchical timelines at a glance.
+
 
 ---
 
@@ -33,9 +36,14 @@ Before launching, configure your corporate server details:
 2. Find the file named `.env.example`.
 3. Make a copy of that file and rename the copy to `.env` (just `.env` with a dot at the beginning).
 4. Open the new `.env` file with any text editor (like **Notepad** on Windows or **TextEdit** on Mac).
-5. Edit the values to insert your actual company URLs and JIRA API token, then **save and close the file**.
+5. Edit the values to insert your actual company URLs, JIRA API token, and custom report configurations, then **save and close the file**.
+   * `COMMITTED_LABEL`: The Jira label used to identify committed epics (defaults to `RC2_committed`).
+   * `QUARTER_LABEL`: The label identifying the current quarter (defaults to `RC2_FB_18`).
+   * `QUARTER_STATUS_TABLE_TITLE`: The title of the Epic progress status table.
+   * `JIRA_VERSION_LINK_BASE`: The base project URL for version links in Release Notes.
    > [!NOTE]
    > The `.env` file is secure and ignored by Git so that your passwords and personal tokens are never saved publicly.
+
 
 ### 3️⃣ Step 3: Run the Application!
 

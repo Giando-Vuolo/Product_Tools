@@ -1252,6 +1252,110 @@ if uploaded_file:
         file_name="epics_sprints_jira_edited.csv", 
         mime="text/csv"
     )
+
+    # 10. Quarterly Epic Progress (Optional Jira Integration)
+    st.divider()
+    st.subheader("📈 Jira Quarterly Epic Progress")
+    
+    # Try importing build_quarterly_epic_progress_table from Sprint Review
+    import importlib
+    build_table_func = None
+    try:
+        sprint_review_module = importlib.import_module("tools.2_Sprint_Review")
+        build_table_func = sprint_review_module.build_quarterly_epic_progress_table
+    except Exception as e:
+        st.error(f"Could not load progress table engine from Sprint Review: {e}")
+        
+    if build_table_func:
+        # Load credentials
+        jira_server_default = st.session_state.get("jira_server") or os.getenv("JIRA_SERVER", "")
+        jira_token_default = st.session_state.get("jira_token") or os.getenv("JIRA_API_TOKEN", "")
+        jira_email_default = st.session_state.get("jira_email") or os.getenv("JIRA_EMAIL", "")
+        jira_auth_default = st.session_state.get("jira_auth_method") or os.getenv("JIRA_AUTH_METHOD", "Personal Access Token (Bearer PAT)")
+
+        with st.expander("📈 Load and display Epic progress from Jira", expanded=False):
+            st.write("Configure your Jira credentials (stored temporarily in your session):")
+            col_jserv, col_jtok = st.columns(2)
+            with col_jserv:
+                srv_in = st.text_input("Jira Server URL:", value=jira_server_default, key="qp_jira_server")
+            with col_jtok:
+                tok_in = st.text_input("Jira API Token:", value=jira_token_default, type="password", key="qp_jira_token")
+            
+            col_jauth, col_jmail = st.columns(2)
+            with col_jauth:
+                auth_in = st.selectbox(
+                    "Jira Auth Method:",
+                    options=[
+                        "Personal Access Token (Bearer PAT)",
+                        "Corporate Login (Username + Password)",
+                        "Jira Cloud/Server Basic (Email/User + Token)"
+                    ],
+                    index=[
+                        "Personal Access Token (Bearer PAT)",
+                        "Corporate Login (Username + Password)",
+                        "Jira Cloud/Server Basic (Email/User + Token)"
+                    ].index(jira_auth_default),
+                    key="qp_jira_auth"
+                )
+            with col_jmail:
+                mail_in = st.text_input("Jira Email/Username (Optional):", value=jira_email_default, key="qp_jira_email")
+                
+            # Update session state credentials
+            st.session_state.jira_server = srv_in
+            st.session_state.jira_token = tok_in
+            st.session_state.jira_auth_method = auth_in
+            st.session_state.jira_email = mail_in
+
+            st.divider()
+            
+            # Module parameters
+            committed_label_env = os.getenv("COMMITTED_LABEL", "RC2_committed")
+            quarter_label_env = os.getenv("QUARTER_LABEL", "RC2_FB_18")
+            table_title_env = os.getenv("QUARTER_STATUS_TABLE_TITLE", "Epics Q3 - Current Progress")
+            
+            qp_col_l, qp_col_q, qp_col_t = st.columns([1, 1, 2])
+            with qp_col_l:
+                qp_committed_label = st.text_input("Committed label", value=committed_label_env, key="qp_committed_label")
+            with qp_col_q:
+                qp_quarter_label = st.text_input("Quarter label", value=quarter_label_env, key="qp_quarter_label")
+            with qp_col_t:
+                qp_table_title = st.text_input("Table title", value=table_title_env, key="qp_table_title")
+                
+            st.caption(f"Required label: {qp_committed_label.strip()}")
+            
+            if st.button("📈 Load Quarterly Epic Progress", key="qp_load_epic_progress_btn", use_container_width=True):
+                if not srv_in or not tok_in:
+                    st.error("Please provide Jira Server URL and API Token.")
+                elif not qp_quarter_label.strip():
+                    st.error("Enter the label used for the quarter before loading.")
+                elif not qp_committed_label.strip():
+                    st.error("Enter the committed label before loading.")
+                else:
+                    with st.spinner("Downloading quarterly Epics and calculating progress..."):
+                        progress_table = build_table_func(
+                            srv_in,
+                            tok_in,
+                            qp_committed_label.strip(),
+                            qp_quarter_label.strip(),
+                            qp_table_title.strip() or f"Epics {qp_quarter_label.strip()} - Current Progress",
+                            "Before Demo Table",
+                            auth_in,
+                            mail_in
+                        )
+                    if progress_table is not None:
+                        st.session_state.qp_progress_table = progress_table
+                        st.toast("Loaded committed Epics successfully!", icon="📈")
+                        st.rerun()
+            
+            # Display the table if loaded
+            if st.session_state.get("qp_progress_table") is not None:
+                st.write(f"#### {st.session_state.qp_progress_table['title']}")
+                df_render = st.session_state.qp_progress_table["df"]
+                
+                # drop Select/unwanted columns for cleaner display
+                display_cols = [c for c in df_render.columns if c not in ["Select", "Labels", "Assignee", "Fix Version"]]
+                st.dataframe(df_render[display_cols], use_container_width=True)
+
 else:
     # Beautiful mock data welcome screen in English
     st.info("👋 Upload your CSV file to get started.")
