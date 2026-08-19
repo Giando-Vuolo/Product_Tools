@@ -2263,9 +2263,11 @@ if st.session_state.active_tab == "🔌 Ingestion":
 
     st.subheader("📝 Prepare Release Note")
     st.write("Paste the Jira version link to load the release metadata, resolved issues, and known residual anomalies.")
+    jira_version_link_base = os.getenv("JIRA_VERSION_LINK_BASE", "https://devstack.vwgroup.com/jira/projects/RECALLTWO/versions/")
     release_version_url = st.text_input(
         "Jira version link",
-        placeholder="https://devstack.vwgroup.com/jira/projects/RECALLTWO/versions/543216",
+        value=jira_version_link_base,
+        placeholder=f"{jira_version_link_base}543216",
         key="release_version_url"
     )
     purpose_in = st.text_area(
