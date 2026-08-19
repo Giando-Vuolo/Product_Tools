@@ -243,16 +243,16 @@ pg = st.navigation([home_page, planner_page, sprint_review_page, release_notes_p
 st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
 
 # Display live collaboration tunnel link in the sidebar
-st.sidebar.markdown("### 🤝 Colaboración Live")
+st.sidebar.markdown("### 🤝 Live Collaboration")
 tunnel_url = get_tunnel_url()
 if tunnel_url:
-    st.sidebar.success("Túnel Activo ✅")
+    st.sidebar.success("Tunnel Active ✅")
     st.sidebar.code(tunnel_url, language="text")
-    st.sidebar.link_button("🌐 Abrir Enlace", tunnel_url, use_container_width=True)
-    st.sidebar.caption("Haz clic en el icono de copiar del recuadro de arriba o usa el botón para abrir el enlace.")
+    st.sidebar.link_button("🌐 Open Link", tunnel_url, use_container_width=True)
+    st.sidebar.caption("Click the copy icon in the box above or use the button to open the link.")
 else:
-    st.sidebar.info("🌀 Iniciando túnel...")
-    st.sidebar.caption("Buscando dirección pública de Cloudflare. La interfaz se actualizará automáticamente en cuanto esté lista.")
+    st.sidebar.info("🌀 Starting tunnel...")
+    st.sidebar.caption("Fetching Cloudflare public URL. The interface will update automatically once ready.")
     from streamlit_autorefresh import st_autorefresh
     st_autorefresh(interval=1000, limit=20, key="tunnel_startup_refresher")
 
