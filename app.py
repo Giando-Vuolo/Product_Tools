@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import requests
 from dotenv import load_dotenv
 from utils.tunnel import start_tunnel, get_tunnel_url
 
@@ -292,6 +293,60 @@ def show_home():
         st.session_state.conf_token = ctok_in
 
         st.success("Integrations updated and saved in active session! ✅")
+
+        st.markdown("<br/>", unsafe_allow_html=True)
+        if st.button("🔌 Check Integration Status", use_container_width=True):
+            st.markdown("### 🔍 Connection Test Results")
+            
+            # 1. Test Jira Connection
+            if srv_in and tok_in:
+                with st.spinner("Testing Jira Connection..."):
+                    try:
+                        headers = {"Accept": "application/json"}
+                        auth = None
+                        token_clean = tok_in.strip().removeprefix("Bearer ").strip()
+                        if auth_in in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"]:
+                            auth = (mail_in.strip(), token_clean)
+                        else:
+                            headers["Authorization"] = f"Bearer {token_clean}"
+                        
+                        resp = requests.get(f"{srv_in.rstrip('/')}/rest/api/2/myself", headers=headers, auth=auth, timeout=8)
+                        if resp.status_code == 200:
+                            user_name = resp.json().get("displayName", "User")
+                            st.success(f"✅ **Jira Connection Successful!** Connected as `{user_name}`.")
+                        else:
+                            st.error(f"❌ **Jira Authentication Failed (HTTP {resp.status_code})**. Check server URL and API token.")
+                    except Exception as e:
+                        st.error(f"❌ **Jira Connection Failed**: Could not connect to server. ({e})")
+            else:
+                st.warning("⚠️ **Jira not tested**: Server URL or token is empty.")
+
+            # 2. Test Confluence Connection
+            if csrv_in and ctok_in:
+                with st.spinner("Testing Confluence Connection..."):
+                    try:
+                        headers = {"Accept": "application/json"}
+                        auth = None
+                        token_clean = ctok_in.strip().removeprefix("Bearer ").strip()
+                        if auth_in in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"]:
+                            auth = (mail_in.strip(), token_clean)
+                        else:
+                            headers["Authorization"] = f"Bearer {token_clean}"
+                            
+                        base_url = csrv_in.rstrip("/")
+                        if "atlassian.net" in base_url and not base_url.endswith("/wiki"):
+                            base_url = base_url + "/wiki"
+                            
+                        resp = requests.get(f"{base_url}/rest/api/settings", headers=headers, auth=auth, timeout=8)
+                        if resp.status_code == 200:
+                            st.success(f"✅ **Confluence Connection Successful!**")
+                        else:
+                            st.error(f"❌ **Confluence Authentication Failed (HTTP {resp.status_code})**. Check URL and token.")
+                    except Exception as e:
+                        st.error(f"❌ **Confluence Connection Failed**: Could not connect to server. ({e})")
+            else:
+                st.warning("⚠️ **Confluence not tested**: Server URL or token is empty.")
+
 
 
 # 3. Define the page listing for navigation
