@@ -1043,13 +1043,13 @@ def map_epic_status_for_completion_table(status_name):
         return "In Progress"
     return "To Do"
 
-def build_quarterly_epic_progress_table(server, token, quarter_label, title, position, auth_type, email):
-    """Build the standard Recalltwo quarterly Epic progress table."""
+def build_quarterly_epic_progress_table(server, token, committed_label, quarter_label, title, position, auth_type, email):
+    """Build the standard quarterly Epic progress table."""
     escaped_quarter_label = quarter_label.replace('"', '\\"')
-    committed_label = os.getenv("COMMITTED_LABEL", "RC2_committed")
+    escaped_committed_label = committed_label.replace('"', '\\"')
     jql = (
         'project = RECALLTWO AND issuetype = Epic '
-        f'AND labels in ({committed_label}) '
+        f'AND labels in ({escaped_committed_label}) '
         f'AND labels in ({escaped_quarter_label})'
     )
     res_df = fetch_jira_tickets_dataset(
@@ -2534,9 +2534,15 @@ if st.session_state.active_tab == "🔌 Ingestion":
     quarter_label_env = os.getenv("QUARTER_LABEL", "RC2_FB_18")
     table_title_env = os.getenv("QUARTER_STATUS_TABLE_TITLE", "Epics Q3 - Current Progress")
     
-    st.write(f"Add the standard Recalltwo progress table for committed Epics. It always filters by `{committed_label_env}` plus the quarter label you choose.")
+    st.write("Add the standard progress table for committed Epics. It always filters by committed label plus the quarter label you choose.")
     with st.container(border=True):
-        quarter_col, title_col = st.columns([1, 2])
+        label_col, quarter_col, title_col = st.columns([1, 1, 2])
+        with label_col:
+            committed_epic_label = st.text_input(
+                "Committed label",
+                value=committed_label_env,
+                placeholder=f"e.g. {committed_label_env}"
+            )
         with quarter_col:
             quarterly_epic_label = st.text_input(
                 "Quarter label",
@@ -2548,15 +2554,18 @@ if st.session_state.active_tab == "🔌 Ingestion":
                 "Table title",
                 value=table_title_env
             )
-        st.caption(f"Project: RECALLTWO · Required label: {committed_label_env} · Epic link: Epic Link")
+        st.caption(f"Project: RECALLTWO · Required label: {committed_epic_label.strip()} · Epic link: Epic Link")
         if st.button("📈 Load Quarterly Epic Progress", use_container_width=True):
             if not quarterly_epic_label.strip():
                 st.error("Enter the label used for the quarter before loading the table.")
+            elif not committed_epic_label.strip():
+                st.error("Enter the committed label before loading the table.")
             else:
                 with st.spinner("Downloading quarterly Epics and calculating progress..."):
                     new_table = build_quarterly_epic_progress_table(
                         st.session_state.jira_server,
                         st.session_state.jira_token,
+                        committed_epic_label.strip(),
                         quarterly_epic_label.strip(),
                         quarterly_epic_title.strip() or f"Epics {quarterly_epic_label.strip()} - Current Progress",
                         "Before Demo Table",
