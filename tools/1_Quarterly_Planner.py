@@ -1268,45 +1268,20 @@ if uploaded_file:
         
     if build_table_func:
         # Load credentials
-        jira_server_default = st.session_state.get("jira_server") or os.getenv("JIRA_SERVER", "")
-        jira_token_default = st.session_state.get("jira_token") or os.getenv("JIRA_API_TOKEN", "")
+        srv_in = st.session_state.get("jira_server") or os.getenv("JIRA_SERVER", "")
+        tok_in = st.session_state.get("jira_token") or os.getenv("JIRA_API_TOKEN", "")
         jira_email_default = st.session_state.get("jira_email") or os.getenv("JIRA_EMAIL", "")
         jira_auth_default = st.session_state.get("jira_auth_method") or os.getenv("JIRA_AUTH_METHOD", "Personal Access Token (Bearer PAT)")
+        auth_in = jira_auth_default
+        mail_in = jira_email_default
 
         with st.expander("📈 Load and display Epic progress from Jira", expanded=False):
-            st.write("Configure your Jira credentials (stored temporarily in your session):")
-            col_jserv, col_jtok = st.columns(2)
-            with col_jserv:
-                srv_in = st.text_input("Jira Server URL:", value=jira_server_default, key="qp_jira_server")
-            with col_jtok:
-                tok_in = st.text_input("Jira API Token:", value=jira_token_default, type="password", key="qp_jira_token")
-            
-            col_jauth, col_jmail = st.columns(2)
-            with col_jauth:
-                auth_in = st.selectbox(
-                    "Jira Auth Method:",
-                    options=[
-                        "Personal Access Token (Bearer PAT)",
-                        "Corporate Login (Username + Password)",
-                        "Jira Cloud/Server Basic (Email/User + Token)"
-                    ],
-                    index=[
-                        "Personal Access Token (Bearer PAT)",
-                        "Corporate Login (Username + Password)",
-                        "Jira Cloud/Server Basic (Email/User + Token)"
-                    ].index(jira_auth_default),
-                    key="qp_jira_auth"
-                )
-            with col_jmail:
-                mail_in = st.text_input("Jira Email/Username (Optional):", value=jira_email_default, key="qp_jira_email")
-                
-            # Update session state credentials
-            st.session_state.jira_server = srv_in
-            st.session_state.jira_token = tok_in
-            st.session_state.jira_auth_method = auth_in
-            st.session_state.jira_email = mail_in
+            if srv_in:
+                st.info(f"🔌 Connected to Jira: `{srv_in}`")
+                st.caption("Jira credentials can be configured centrally on the **Home Hub** page under **Centralized Integrations**.")
+            else:
+                st.warning("⚠️ Jira server URL and credentials are not configured. Please set them up on the **Home Hub** page under **Centralized Integrations** tab.")
 
-            st.divider()
             
             # Module parameters
             committed_label_env = os.getenv("COMMITTED_LABEL", "RC2_committed")

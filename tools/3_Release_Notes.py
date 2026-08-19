@@ -2214,52 +2214,21 @@ if st.session_state.active_tab == "🔌 Ingestion":
     
     # Credentials block
 
-    st.markdown("**1. Secure Access Credentials**")
-    col_serv, col_tok = st.columns([1, 1])
-    with col_serv:
-        server_input = st.text_input(
-            "Jira Server URL:",
-            value=st.session_state.jira_server,
-            placeholder="https://company.atlassian.net",
-            help="Your corporate Jira Server local address (e.g., https://devstack.vwgroup.com/jira)"
-        )
-    with col_tok:
-        token_input = st.text_input(
-            "Jira Personal Access Token (PAT):",
-            value=st.session_state.jira_token,
-            type="password",
-            placeholder="Paste your secure PAT...",
-            help="Your secure Jira Server Personal Access Token (PAT)"
-        )
-        
-    if server_input != st.session_state.jira_server:
-        st.session_state.jira_server = server_input
-    if token_input != st.session_state.jira_token:
-        st.session_state.jira_token = token_input
+    # Centralized Integration Status
+    col_stat1, col_stat2 = st.columns([1, 1])
+    with col_stat1:
+        if st.session_state.jira_server:
+            st.info(f"🔌 Connected to Jira: `{st.session_state.jira_server}`")
+        else:
+            st.warning("⚠️ Jira server URL and credentials are not configured.")
+    with col_stat2:
+        if st.session_state.conf_server:
+            st.info(f"🔌 Connected to Confluence: `{st.session_state.conf_server}`")
+        else:
+            st.warning("⚠️ Confluence server URL and credentials are not configured.")
+            
+    st.caption("Credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
 
-    col_conf_serv, col_conf_tok = st.columns([1, 1])
-    with col_conf_serv:
-        conf_server_input = st.text_input(
-            "Confluence Server URL:",
-            value=st.session_state.conf_server,
-            placeholder="https://company.atlassian.net/wiki",
-            help="Uses the value in your local .env file by default. Change it only if you need another Confluence server."
-        )
-    with col_conf_tok:
-        conf_token_input = st.text_input(
-            "Confluence Personal Access Token (PAT):",
-            value=st.session_state.conf_token,
-            type="password",
-            placeholder="Paste your Confluence token...",
-            help="Uses the value in your local .env file by default. You can paste another token for this session."
-        )
-
-    if conf_server_input != st.session_state.conf_server:
-        st.session_state.conf_server = conf_server_input
-    if conf_token_input != st.session_state.conf_token:
-        st.session_state.conf_token = conf_token_input
-        
-    st.info("💡 **Security:** Credentials are loaded locally using secure dotenv files and are never saved publicly on git repositories.")
 
     st.subheader("📝 Prepare Release Note")
     st.write("Paste the Jira version link to load the release metadata, resolved issues, and known residual anomalies.")

@@ -13,6 +13,21 @@ if 'primary_color' not in st.session_state or st.session_state.get('prev_env_col
     st.session_state.primary_color = default_primary_color
     st.session_state.prev_env_color = default_primary_color
 
+# Initialize central credentials in session state if not set
+if "jira_server" not in st.session_state:
+    st.session_state.jira_server = os.getenv("JIRA_SERVER", "")
+if "jira_token" not in st.session_state:
+    st.session_state.jira_token = os.getenv("JIRA_API_TOKEN", "")
+if "jira_email" not in st.session_state:
+    st.session_state.jira_email = os.getenv("JIRA_EMAIL", "")
+if "jira_auth_method" not in st.session_state:
+    st.session_state.jira_auth_method = os.getenv("JIRA_AUTH_METHOD", "Personal Access Token (Bearer PAT)")
+if "conf_server" not in st.session_state:
+    st.session_state.conf_server = os.getenv("CONFLUENCE_SERVER", "")
+if "conf_token" not in st.session_state:
+    st.session_state.conf_token = os.getenv("CONFLUENCE_API_TOKEN", "")
+
+
 
 # 1. Define the page objects first so they are globally accessible
 planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner", icon="🎯")
@@ -199,40 +214,84 @@ def show_home():
 
     st.divider()
 
-    # Active Tools Section
-    st.subheader("🛠️ Available Tools")
+    tab_tools, tab_integrations = st.tabs(["🛠️ Available Tools", "🔌 Centralized Integrations"])
 
-    col1, col2, col3 = st.columns(3)
+    with tab_tools:
+        st.subheader("Available Tools")
+        col1, col2, col3 = st.columns(3)
 
-    with col1:
-        st.markdown("""
-            <div class="hub-card">
-                <span class="hub-badge">ACTIVE 🚀</span>
-                <h3>🎯 Quarterly Planner</h3>
-                <p>Create and customize high-level, interactive Gantt charts from your backlog data or Jira CSV exports.</p>
-            </div>
-        """, unsafe_allow_html=True)
-        st.page_link(planner_page, label="Open Planner", icon="🎯")
+        with col1:
+            st.markdown("""
+                <div class="hub-card">
+                    <span class="hub-badge">ACTIVE 🚀</span>
+                    <h3>🎯 Quarterly Planner</h3>
+                    <p>Create and customize high-level, interactive Gantt charts from your backlog data or Jira CSV exports.</p>
+                </div>
+            """, unsafe_allow_html=True)
+            st.page_link(planner_page, label="Open Planner", icon="🎯")
 
-    with col2:
-        st.markdown("""
-            <div class="hub-card">
-                <span class="hub-badge">ACTIVE 🚀</span>
-                <h3>📋 Sprint Review</h3>
-                <p>Extract Jira sprint data, edit items in a workbook, apply custom branding, and export PDF Sprint Review reports.</p>
-            </div>
-        """, unsafe_allow_html=True)
-        st.page_link(sprint_review_page, label="Open Sprint Review", icon="📋")
+        with col2:
+            st.markdown("""
+                <div class="hub-card">
+                    <span class="hub-badge">ACTIVE 🚀</span>
+                    <h3>📋 Sprint Review</h3>
+                    <p>Extract Jira sprint data, edit items in a workbook, apply custom branding, and export PDF Sprint Review reports.</p>
+                </div>
+            """, unsafe_allow_html=True)
+            st.page_link(sprint_review_page, label="Open Sprint Review", icon="📋")
 
-    with col3:
-        st.markdown("""
-            <div class="hub-card">
-                <span class="hub-badge">ACTIVE 🚀</span>
-                <h3>📣 Release Notes</h3>
-                <p>Compile completed features, write release highlight intro text, and export PDF Release Notes for customers and stakeholders.</p>
-            </div>
-        """, unsafe_allow_html=True)
-        st.page_link(release_notes_page, label="Open Release Notes", icon="📣")
+        with col3:
+            st.markdown("""
+                <div class="hub-card">
+                    <span class="hub-badge">ACTIVE 🚀</span>
+                    <h3>📣 Release Notes</h3>
+                    <p>Compile completed features, write release highlight intro text, and export PDF Release Notes for customers and stakeholders.</p>
+                </div>
+            """, unsafe_allow_html=True)
+            st.page_link(release_notes_page, label="Open Release Notes", icon="📣")
+
+    with tab_integrations:
+        st.subheader("🔌 Connection & Integrations Settings")
+        st.write("Configure your Jira and Confluence server details here. These settings are shared globally across all tools in the suite.")
+
+        col_jserv, col_jtok = st.columns(2)
+        with col_jserv:
+            srv_in = st.text_input("Jira Server URL:", value=st.session_state.jira_server, key="central_jira_server")
+        with col_jtok:
+            tok_in = st.text_input("Jira API Token:", value=st.session_state.jira_token, type="password", key="central_jira_token")
+
+        col_jauth, col_jmail = st.columns(2)
+        with col_jauth:
+            auth_options = [
+                "Personal Access Token (Bearer PAT)",
+                "Corporate Login (Username + Password)",
+                "Jira Cloud/Server Basic (Email/User + Token)"
+            ]
+            auth_in = st.selectbox(
+                "Jira Auth Method:",
+                options=auth_options,
+                index=auth_options.index(st.session_state.jira_auth_method) if st.session_state.jira_auth_method in auth_options else 0,
+                key="central_jira_auth"
+            )
+        with col_jmail:
+            mail_in = st.text_input("Jira Email/Username (Optional):", value=st.session_state.jira_email, key="central_jira_email")
+
+        st.markdown("---")
+        col_cserv, col_ctok = st.columns(2)
+        with col_cserv:
+            csrv_in = st.text_input("Confluence Server URL:", value=st.session_state.conf_server, key="central_conf_server")
+        with col_ctok:
+            ctok_in = st.text_input("Confluence Personal Access Token (PAT):", value=st.session_state.conf_token, type="password", key="central_conf_token")
+
+        # Save updates to session state
+        st.session_state.jira_server = srv_in
+        st.session_state.jira_token = tok_in
+        st.session_state.jira_auth_method = auth_in
+        st.session_state.jira_email = mail_in
+        st.session_state.conf_server = csrv_in
+        st.session_state.conf_token = ctok_in
+
+        st.success("Integrations updated and saved in active session! ✅")
 
 
 # 3. Define the page listing for navigation

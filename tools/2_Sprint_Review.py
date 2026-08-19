@@ -2393,30 +2393,12 @@ if st.session_state.active_tab == "🔌 Ingestion":
     
     # Credentials block
 
-    st.markdown("**1. Secure Access Credentials (Jira Server PAT)**")
-    col_serv, col_tok = st.columns([1, 1])
-    with col_serv:
-        server_input = st.text_input(
-            "Jira Server URL:",
-            value=st.session_state.jira_server,
-            placeholder="https://company.atlassian.net",
-            help="Your corporate Jira Server local address (e.g., https://devstack.vwgroup.com/jira)"
-        )
-    with col_tok:
-        token_input = st.text_input(
-            "Jira Personal Access Token (PAT):",
-            value=st.session_state.jira_token,
-            type="password",
-            placeholder="Paste your secure PAT...",
-            help="Your secure Jira Server Personal Access Token (PAT)"
-        )
-        
-    if server_input != st.session_state.jira_server:
-        st.session_state.jira_server = server_input
-    if token_input != st.session_state.jira_token:
-        st.session_state.jira_token = token_input
-        
-    st.info("💡 **Security:** Credentials are loaded locally using secure dotenv files and are never saved publicly on git repositories.")
+    # Centralized Integration Status
+    if st.session_state.jira_server:
+        st.info(f"🔌 Connected to Jira: `{st.session_state.jira_server}`")
+        st.caption("Jira credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
+    else:
+        st.warning("⚠️ Jira server URL and credentials are not configured. Please set them up on the **Home Hub** page under **Centralized Integrations** tab.")
 
     st.divider()
 
@@ -3669,21 +3651,13 @@ elif st.session_state.active_tab == "💾 Exporter":
             </div>
             """, unsafe_allow_html=True)
             
-            conf_server_input = st.text_input(
-                "Confluence Server URL:",
-                value=st.session_state.conf_server if st.session_state.conf_server else "https://devstack.vwgroup.com/confluence",
-                placeholder="https://devstack.vwgroup.com/confluence",
-                key="conf_server_url_input"
-            )
-            
-            conf_token_input = st.text_input(
-                "Confluence PAT Token:",
-                value=st.session_state.conf_token,
-                type="password",
-                placeholder="Enter Confluence Personal Access Token (PAT)...",
-                key="conf_api_token_input"
-            )
-            
+            # Centralized Confluence status
+            if st.session_state.conf_server:
+                st.info(f"🔌 Connected to Confluence: `{st.session_state.conf_server}`")
+                st.caption("Confluence credentials can be configured centrally on the **Home Hub** page under **Centralized Integrations**.")
+            else:
+                st.warning("⚠️ Confluence server URL and credentials are not configured. Please set them up on the **Home Hub** page under **Centralized Integrations** tab.")
+                
             col_space, col_page = st.columns([1, 2])
             with col_space:
                 conf_space_input = st.text_input(
@@ -3701,10 +3675,6 @@ elif st.session_state.active_tab == "💾 Exporter":
                 )
                 
             # Sync back to session state safely
-            if conf_server_input != st.session_state.conf_server:
-                st.session_state.conf_server = conf_server_input
-            if conf_token_input != st.session_state.conf_token:
-                st.session_state.conf_token = conf_token_input
             if conf_space_input != st.session_state.conf_space_key:
                 st.session_state.conf_space_key = conf_space_input
             if conf_page_title_input != st.session_state.conf_page_name:
