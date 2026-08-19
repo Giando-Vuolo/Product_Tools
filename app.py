@@ -2,10 +2,7 @@ import streamlit as st
 import os
 import requests
 from dotenv import load_dotenv
-from utils.tunnel import start_tunnel, get_tunnel_url
-
-# Start Cloudflare Tunnel automatically on port 8501
-start_tunnel(8501)
+from utils.tunnel import start_tunnel, get_tunnel_url, get_tunnel_error
 
 # Load environment variables
 load_dotenv(override=True)
@@ -313,12 +310,20 @@ def show_home():
                         resp = requests.get(f"{srv_in.rstrip('/')}/rest/api/2/myself", headers=headers, auth=auth, timeout=8)
                         if resp.status_code == 200:
                             user_name = resp.json().get("displayName", "User")
+                            st.session_state.jira_connection_status = "Success"
+                            st.session_state.jira_connection_msg = f"Connected as `{user_name}`"
                             st.success(f"✅ **Jira Connection Successful!** Connected as `{user_name}`.")
                         else:
+                            st.session_state.jira_connection_status = "Failed"
+                            st.session_state.jira_connection_msg = f"Auth Failed (HTTP {resp.status_code})"
                             st.error(f"❌ **Jira Authentication Failed (HTTP {resp.status_code})**. Check server URL and API token.")
                     except Exception as e:
+                        st.session_state.jira_connection_status = "Failed"
+                        st.session_state.jira_connection_msg = f"Connection Failed ({e})"
                         st.error(f"❌ **Jira Connection Failed**: Could not connect to server. ({e})")
             else:
+                st.session_state.jira_connection_status = "Failed"
+                st.session_state.jira_connection_msg = "Server URL or Token empty"
                 st.warning("⚠️ **Jira not tested**: Server URL or token is empty.")
 
             # 2. Test Confluence Connection
@@ -337,15 +342,24 @@ def show_home():
                         if "atlassian.net" in base_url and not base_url.endswith("/wiki"):
                             base_url = base_url + "/wiki"
                             
-                        resp = requests.get(f"{base_url}/rest/api/settings", headers=headers, auth=auth, timeout=8)
+                        resp = requests.get(f"{base_url}/rest/api/content?limit=1", headers=headers, auth=auth, timeout=8)
                         if resp.status_code == 200:
+                            st.session_state.conf_connection_status = "Success"
+                            st.session_state.conf_connection_msg = "Connected successfully"
                             st.success(f"✅ **Confluence Connection Successful!**")
                         else:
+                            st.session_state.conf_connection_status = "Failed"
+                            st.session_state.conf_connection_msg = f"Auth Failed (HTTP {resp.status_code})"
                             st.error(f"❌ **Confluence Authentication Failed (HTTP {resp.status_code})**. Check URL and token.")
                     except Exception as e:
+                        st.session_state.conf_connection_status = "Failed"
+                        st.session_state.conf_connection_msg = f"Connection Failed ({e})"
                         st.error(f"❌ **Confluence Connection Failed**: Could not connect to server. ({e})")
             else:
+                st.session_state.conf_connection_status = "Failed"
+                st.session_state.conf_connection_msg = "Server URL or Token empty"
                 st.warning("⚠️ **Confluence not tested**: Server URL or token is empty.")
+
 
 
 
@@ -358,17 +372,47 @@ st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
 
 # Display live collaboration tunnel link in the sidebar
 st.sidebar.markdown("### 🤝 Live Collaboration")
+
+if "tunnel_enabled" not in st.session_state:
+    st.session_state.tunnel_enabled = False
+
 tunnel_url = get_tunnel_url()
-if tunnel_url:
-    st.sidebar.success("Tunnel Active ✅")
-    st.sidebar.code(tunnel_url, language="text")
-    st.sidebar.link_button("🌐 Open Link", tunnel_url, use_container_width=True)
-    st.sidebar.caption("Click the copy icon in the box above or use the button to open the link.")
+
+if st.session_state.tunnel_enabled:
+    if not tunnel_url:
+        from utils.tunnel import start_tunnel
+        tunnel_url = start_tunnel(8501)
+        
+    if tunnel_url:
+        st.sidebar.success("Tunnel Active ✅")
+        st.sidebar.code(tunnel_url, language="text")
+        st.sidebar.link_button("🌐 Open Link", tunnel_url, use_container_width=True)
+        st.sidebar.caption("Share this URL with team members to collaborate in real-time.")
+    else:
+        tunnel_err = get_tunnel_error()
+        if tunnel_err:
+            st.sidebar.error("❌ Tunnel Error")
+            st.sidebar.warning(tunnel_err)
+            st.sidebar.caption("You can still use the app locally at http://localhost:8501")
+        else:
+            st.sidebar.info("🌀 Starting tunnel...")
+            from streamlit_autorefresh import st_autorefresh
+            st_autorefresh(interval=1000, limit=10, key="tunnel_startup_refresher")
+            
+    if st.sidebar.button("🛑 Stop Tunnel", use_container_width=True):
+        from utils.tunnel import stop_tunnel
+        stop_tunnel()
+        st.session_state.tunnel_enabled = False
+        st.rerun()
 else:
-    st.sidebar.info("🌀 Starting tunnel...")
-    st.sidebar.caption("Fetching Cloudflare public URL. The interface will update automatically once ready.")
-    from streamlit_autorefresh import st_autorefresh
-    st_autorefresh(interval=1000, limit=20, key="tunnel_startup_refresher")
+    if tunnel_url:
+        from utils.tunnel import stop_tunnel
+        stop_tunnel()
+        
+    st.sidebar.info("Cloudflare tunnel is disabled.")
+    if st.sidebar.button("🚀 Start Collaboration Tunnel", use_container_width=True):
+        st.session_state.tunnel_enabled = True
+        st.rerun()
 
 pg.run()
 

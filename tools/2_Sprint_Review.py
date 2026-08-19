@@ -2391,14 +2391,30 @@ if st.session_state.active_tab == "🔌 Ingestion":
     st.subheader("🔌 Dual Jira Backlog Ingestion")
     st.write("Configure connection details below to load both **Overview** (What We Did) and **Outlook** (What We Will Do) ticket datasets.")
     
+    # Ingestion Flash Feedback
+    if "ingestion_feedback" in st.session_state:
+        fb = st.session_state.ingestion_feedback
+        if fb.get("type") == "success":
+            st.success(fb.get("text"))
+        elif fb.get("type") == "error":
+            st.error(fb.get("text"))
+        elif fb.get("type") == "warning":
+            st.warning(fb.get("text"))
+        del st.session_state.ingestion_feedback
+    
     # Credentials block
 
-    # Centralized Integration Status
-    if st.session_state.jira_server:
-        st.info(f"🔌 Connected to Jira: `{st.session_state.jira_server}`")
-        st.caption("Jira credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
+    jira_status = st.session_state.get("jira_connection_status")
+    jira_msg = st.session_state.get("jira_connection_msg", "Not checked yet")
+    if not st.session_state.jira_server:
+        st.warning("⚠️ **Jira Connection**: Not configured. Go to **Home Hub** -> **Centralized Integrations** tab.")
+    elif jira_status == "Success":
+        st.success(f"🟢 **Jira Connected**: `{st.session_state.jira_server}` ({jira_msg})")
+    elif jira_status == "Failed":
+        st.error(f"🔴 **Jira Connection Failed**: `{st.session_state.jira_server}` ({jira_msg}). Fix it on the **Home Hub**.")
     else:
-        st.warning("⚠️ Jira server URL and credentials are not configured. Please set them up on the **Home Hub** page under **Centralized Integrations** tab.")
+        st.info(f"🟡 **Jira Configured**: `{st.session_state.jira_server}` (Status: {jira_msg}). Go to **Home Hub** to test connection.")
+    st.caption("Credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
 
     st.divider()
 
@@ -2470,7 +2486,13 @@ if st.session_state.active_tab == "🔌 Ingestion":
                         if not res_df.empty and not inc_all:
                             res_df = res_df[res_df["Type"].isin(selected_types)].reset_index(drop=True)
                         st.session_state.overview_df = res_df
-                        st.success(f"Success! Loaded {len(res_df)} Overview tickets.")
+                        if res_df.empty:
+                            st.session_state.ingestion_feedback = {"type": "warning", "text": "⚠️ JQL/Sprint query returned 0 tickets for Overview."}
+                        else:
+                            st.session_state.ingestion_feedback = {"type": "success", "text": f"🟢 Successfully loaded {len(res_df)} Overview tickets!"}
+                        st.rerun()
+                    else:
+                        st.session_state.ingestion_feedback = {"type": "error", "text": "❌ Failed to connect or load Overview tickets from Jira. Check server credentials or query parameters."}
                         st.rerun()
         
     with col_ot_query:
@@ -2507,7 +2529,13 @@ if st.session_state.active_tab == "🔌 Ingestion":
                         if not res_df.empty and not inc_all:
                             res_df = res_df[res_df["Type"].isin(selected_types)].reset_index(drop=True)
                         st.session_state.outlook_df = res_df
-                        st.success(f"Success! Loaded {len(res_df)} Outlook tickets.")
+                        if res_df.empty:
+                            st.session_state.ingestion_feedback = {"type": "warning", "text": "⚠️ JQL/Sprint query returned 0 tickets for Outlook."}
+                        else:
+                            st.session_state.ingestion_feedback = {"type": "success", "text": f"🟢 Successfully loaded {len(res_df)} Outlook tickets!"}
+                        st.rerun()
+                    else:
+                        st.session_state.ingestion_feedback = {"type": "error", "text": "❌ Failed to connect or load Outlook tickets from Jira. Check server credentials or query parameters."}
                         st.rerun()
     
     # Standard quarterly Epic progress table
@@ -2564,7 +2592,14 @@ if st.session_state.active_tab == "🔌 Ingestion":
                         st.session_state.custom_tables.append(new_table)
                     else:
                         st.session_state.custom_tables[existing_index] = new_table
-                    st.toast(f"Loaded {len(new_table['df'])} committed Epics for {quarterly_epic_label.strip()}.", icon="📈")
+                    
+                    df_len = len(new_table['df'])
+                    if df_len == 0:
+                        st.session_state.ingestion_feedback = {"type": "warning", "text": f"⚠️ Loaded 0 Epics from Jira for quarter label: '{quarterly_epic_label.strip()}'."}
+                    else:
+                        st.session_state.ingestion_feedback = {"type": "success", "text": f"🟢 Successfully loaded {df_len} committed Epics for {quarterly_epic_label.strip()}!"}
+                    st.rerun()
+                    st.session_state.ingestion_feedback = {"type": "error", "text": "❌ Failed to load Quarterly Epic Progress from Jira. Check server credentials or query parameters."}
                     st.rerun()
 
     # Ingestion of Additional Custom Report Tables (Jira or CSV)
@@ -3651,12 +3686,17 @@ elif st.session_state.active_tab == "💾 Exporter":
             </div>
             """, unsafe_allow_html=True)
             
-            # Centralized Confluence status
-            if st.session_state.conf_server:
-                st.info(f"🔌 Connected to Confluence: `{st.session_state.conf_server}`")
-                st.caption("Confluence credentials can be configured centrally on the **Home Hub** page under **Centralized Integrations**.")
+            conf_status = st.session_state.get("conf_connection_status")
+            conf_msg = st.session_state.get("conf_connection_msg", "Not checked yet")
+            if not st.session_state.conf_server:
+                st.warning("⚠️ **Confluence Connection**: Not configured. Go to **Home Hub** -> **Centralized Integrations** tab.")
+            elif conf_status == "Success":
+                st.success(f"🟢 **Confluence Connected**: `{st.session_state.conf_server}` ({conf_msg})")
+            elif conf_status == "Failed":
+                st.error(f"🔴 **Confluence Connection Failed**: `{st.session_state.conf_server}` ({conf_msg}). Fix it on the **Home Hub**.")
             else:
-                st.warning("⚠️ Confluence server URL and credentials are not configured. Please set them up on the **Home Hub** page under **Centralized Integrations** tab.")
+                st.info(f"🟡 **Confluence Configured**: `{st.session_state.conf_server}` (Status: {conf_msg}). Go to **Home Hub** to test connection.")
+            st.caption("Credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
                 
             col_space, col_page = st.columns([1, 2])
             with col_space:

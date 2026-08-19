@@ -2212,20 +2212,45 @@ if st.session_state.active_tab == "🔌 Ingestion":
     st.subheader("🔌 Jira Backlog Ingestion")
     st.write("Configure connection details below to load the **Overview** (What We Did) ticket dataset.")
     
+    # Ingestion Flash Feedback
+    if "ingestion_feedback" in st.session_state:
+        fb = st.session_state.ingestion_feedback
+        if fb.get("type") == "success":
+            st.success(fb.get("text"))
+        elif fb.get("type") == "error":
+            st.error(fb.get("text"))
+        elif fb.get("type") == "warning":
+            st.warning(fb.get("text"))
+        del st.session_state.ingestion_feedback
+    
     # Credentials block
 
     # Centralized Integration Status
+    jira_status = st.session_state.get("jira_connection_status")
+    jira_msg = st.session_state.get("jira_connection_msg", "Not checked yet")
+    conf_status = st.session_state.get("conf_connection_status")
+    conf_msg = st.session_state.get("conf_connection_msg", "Not checked yet")
+
     col_stat1, col_stat2 = st.columns([1, 1])
     with col_stat1:
-        if st.session_state.jira_server:
-            st.info(f"🔌 Connected to Jira: `{st.session_state.jira_server}`")
+        if not st.session_state.jira_server:
+            st.warning("⚠️ **Jira**: Not configured.")
+        elif jira_status == "Success":
+            st.success(f"🟢 **Jira Connected**: `{st.session_state.jira_server}` ({jira_msg})")
+        elif jira_status == "Failed":
+            st.error(f"🔴 **Jira Connection Failed**: `{st.session_state.jira_server}` ({jira_msg})")
         else:
-            st.warning("⚠️ Jira server URL and credentials are not configured.")
+            st.info(f"🟡 **Jira Configured**: `{st.session_state.jira_server}` (Status: {jira_msg})")
+            
     with col_stat2:
-        if st.session_state.conf_server:
-            st.info(f"🔌 Connected to Confluence: `{st.session_state.conf_server}`")
+        if not st.session_state.conf_server:
+            st.warning("⚠️ **Confluence**: Not configured.")
+        elif conf_status == "Success":
+            st.success(f"🟢 **Confluence Connected**: `{st.session_state.conf_server}` ({conf_msg})")
+        elif conf_status == "Failed":
+            st.error(f"🔴 **Confluence Connection Failed**: `{st.session_state.conf_server}` ({conf_msg})")
         else:
-            st.warning("⚠️ Confluence server URL and credentials are not configured.")
+            st.info(f"🟡 **Confluence Configured**: `{st.session_state.conf_server}` (Status: {conf_msg})")
             
     st.caption("Credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
 
@@ -2329,7 +2354,12 @@ if st.session_state.active_tab == "🔌 Ingestion":
                     if not res_df.empty and not inc_all:
                         res_df = res_df[res_df["Type"].isin(selected_types)].reset_index(drop=True)
                     st.session_state.overview_df = res_df
-                    st.success(f"Success! Loaded {len(res_df)} Overview tickets.")
+                    if res_df.empty:
+                        st.session_state.ingestion_feedback = {"type": "warning", "text": f"⚠️ JQL/FixVersion query returned 0 tickets for Overview."}
+                    else:
+                        st.session_state.ingestion_feedback = {"type": "success", "text": f"🟢 Successfully loaded {len(res_df)} Overview tickets!"}
+                    st.rerun()
+                    st.session_state.ingestion_feedback = {"type": "error", "text": "❌ Failed to connect or load Overview tickets from Jira. Check server credentials or query parameters."}
                     st.rerun()
     
     # Ingestion of Additional Custom Report Tables (Jira or CSV)

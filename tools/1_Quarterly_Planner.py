@@ -27,6 +27,7 @@ def sync_from_disk_if_modified():
                 df['Due Date'] = pd.to_datetime(df['Due Date'], errors='coerce')
                 st.session_state.main_df = df
                 st.session_state.last_backlog_mtime = mtime
+                st.session_state.editor_key_counter = st.session_state.get('editor_key_counter', 0) + 1
                 # Reset selected epic key if no longer present in dataset
                 if st.session_state.get('selected_epic_key') not in df['Key'].values:
                     st.session_state.selected_epic_key = None
@@ -61,6 +62,8 @@ if 'last_gantt_selection' not in st.session_state:
     st.session_state.last_gantt_selection = None
 if 'chart_key_counter' not in st.session_state:
     st.session_state.chart_key_counter = 0
+if 'editor_key_counter' not in st.session_state:
+    st.session_state.editor_key_counter = 0
 if 'just_reset_selection' not in st.session_state:
     st.session_state.just_reset_selection = False
 
@@ -302,6 +305,111 @@ def val_changed(v1, v2):
         return True
 
 
+def build_quarterly_plan_pdf(df, primary_color_hex):
+    import io
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+
+    pdf_buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        pdf_buffer,
+        pagesize=landscape(letter),
+        rightMargin=36,
+        leftMargin=36,
+        topMargin=36,
+        bottomMargin=36
+    )
+    
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=styles['Heading1'],
+        fontName='Helvetica-Bold',
+        fontSize=22,
+        textColor=colors.HexColor(primary_color_hex),
+        spaceAfter=12
+    )
+    
+    subtitle_style = ParagraphStyle(
+        'DocSubtitle',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=10,
+        textColor=colors.HexColor("#64748B"),
+        spaceAfter=20
+    )
+    
+    cell_style = ParagraphStyle(
+        'TableCell',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=9,
+        leading=11
+    )
+    
+    cell_bold_style = ParagraphStyle(
+        'TableCellBold',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=9,
+        leading=11
+    )
+
+    story = []
+    story.append(Paragraph("🎯 QUARTERLY PLAN ROADMAP", title_style))
+    proj_name = os.getenv("PROJECT_NAME", "RECALL2")
+    today_str = pd.Timestamp.today().strftime('%d-%b-%Y')
+    story.append(Paragraph(f"<b>Project:</b> {proj_name} | <b>Generated:</b> {today_str} | <b>Total Epics:</b> {len(df)}", subtitle_style))
+    
+    headers = ["Key", "Epic Name", "Status", "Sprint", "Size", "Quarter", "Cluster"]
+    table_data = [[Paragraph(f"<b>{h}</b>", cell_bold_style) for h in headers]]
+    
+    sorted_df = df.copy()
+    if 'Quarter' in sorted_df.columns:
+        sorted_df = sorted_df.sort_values(by=['Quarter', 'Cluster', 'Sprint'], na_position='last')
+        
+    for _, row in sorted_df.iterrows():
+        sprint_val = row.get("Sprint")
+        sprint_str = f"Sprint {int(float(sprint_val))}" if pd.notna(sprint_val) and str(sprint_val).strip() != "" and str(sprint_val).strip().lower() != "nan" else "-"
+        
+        row_cells = [
+            Paragraph(str(row.get("Key", "-")), cell_bold_style),
+            Paragraph(str(row.get("Epic Name", "-")), cell_style),
+            Paragraph(str(row.get("Status", "-")), cell_style),
+            Paragraph(sprint_str, cell_style),
+            Paragraph(str(row.get("Size", "-")), cell_style),
+            Paragraph(str(row.get("Quarter", "-")), cell_style),
+            Paragraph(str(row.get("Cluster", "-")), cell_style),
+        ]
+        table_data.append(row_cells)
+        
+    col_widths = [60, 260, 80, 80, 50, 90, 100]
+    t = Table(table_data, colWidths=col_widths, repeatRows=1)
+    
+    t_style = TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor(primary_color_hex)),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.HexColor("#FFFFFF"), colors.HexColor("#F8FAFC")]),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
+    ])
+    
+    for i in range(len(headers)):
+        table_data[0][i].style.textColor = colors.white
+        
+    t.setStyle(t_style)
+    story.append(t)
+    
+    doc.build(story)
+    pdf_buffer.seek(0)
+    return pdf_buffer
+
+
 def get_sprint_duration():
     return st.session_state.get("sprint_duration", 15)
 
@@ -410,7 +518,8 @@ def sync_sprint_calendar_changes():
 
 
 def sync_main_editor_changes():
-    edits = st.session_state.get("main_editor")
+    editor_key = f"main_editor_{st.session_state.get('editor_key_counter', 0)}"
+    edits = st.session_state.get(editor_key)
     if not edits or st.session_state.get("main_df") is None:
         return
     
@@ -520,25 +629,18 @@ def sync_main_editor_changes():
     except:
         pass
 
-
-
 st.title("🎯 Quarterly Planner")
 
-uploaded_file = st.file_uploader("Upload your data (CSV)", type=['csv'])
+# Load credentials and status
+jira_status = st.session_state.get("jira_connection_status")
+jira_msg = st.session_state.get("jira_connection_msg", "Not checked yet")
+jira_server = st.session_state.get("jira_server", "")
 
-if not uploaded_file and os.path.exists(SHARED_BACKLOG_PATH):
-    class DummyUploadedFile:
-        def __init__(self, name):
-            self.name = name
-    uploaded_file = DummyUploadedFile("shared_backlog.csv")
-
-if uploaded_file:
-    # 1. Data Ingestion & Normalization
-    if hasattr(uploaded_file, "name") and uploaded_file.name == "shared_backlog.csv":
-        df_raw = pd.read_csv(SHARED_BACKLOG_PATH)
-    else:
-        df_raw = pd.read_csv(uploaded_file)
-
+# ---------------------------------------------------------
+# Data Loader and Normalizer Helper
+# ---------------------------------------------------------
+def load_and_normalize_data(file_or_path):
+    df_raw = pd.read_csv(file_or_path)
     
     # Drop rows that are completely empty
     if not df_raw.empty:
@@ -601,13 +703,187 @@ if uploaded_file:
                 
     if 'Cluster Name' in df_raw.columns:
         df_raw['Cluster Name'] = df_raw['Cluster Name'].fillna("")
+        
+    # Fill missing dates automatically
+    if 'Start Date' not in df_raw.columns:
+        df_raw['Start Date'] = pd.NaT
+    if 'Due Date' not in df_raw.columns:
+        df_raw['Due Date'] = pd.NaT
+        
+    df_raw['Start Date'] = pd.to_datetime(df_raw['Start Date'], errors='coerce')
+    df_raw['Due Date'] = pd.to_datetime(df_raw['Due Date'], errors='coerce')
+    
+    mask_missing = df_raw['Start Date'].isna() | df_raw['Due Date'].isna()
+    if mask_missing.any():
+        calculated_dates = df_raw[mask_missing].apply(calculate_sequential_dates, axis=1, result_type='expand')
+        if not calculated_dates.empty:
+            df_raw.loc[mask_missing, ['Start Date', 'Due Date']] = calculated_dates
             
+    return df_raw
+
+# ---------------------------------------------------------
+# Sidebar Navigation Steps
+# ---------------------------------------------------------
+options_qp = ["🔌 Ingestion", "✍️ Workbook", "💾 Exporter"]
+
+if 'active_tab_qp' not in st.session_state or st.session_state.active_tab_qp not in options_qp:
+    st.session_state.active_tab_qp = "🔌 Ingestion"
+
+selected_nav = st.sidebar.radio(
+    "Select current step:",
+    options=options_qp,
+    index=options_qp.index(st.session_state.active_tab_qp)
+)
+
+if selected_nav != st.session_state.active_tab_qp:
+    st.session_state.active_tab_qp = selected_nav
+    st.rerun()
+
+# Auto-load shared backlog on startup if not already loaded
+if 'main_df' not in st.session_state:
+    if os.path.exists(SHARED_BACKLOG_PATH):
+        try:
+            st.session_state.main_df = load_and_normalize_data(SHARED_BACKLOG_PATH)
+            st.session_state.last_backlog_mtime = os.path.getmtime(SHARED_BACKLOG_PATH)
+        except:
+            pass
+
+# ---------------------------------------------------------
+# STEP 1: Ingestion
+# ---------------------------------------------------------
+if st.session_state.active_tab_qp == "🔌 Ingestion":
+    st.subheader("🔌 Dual Jira & CSV Backlog Ingestion")
+    st.write("Upload your product backlog CSV or connect to your Jira server parameters to get started.")
+    
+    # Ingestion Flash Feedback
+    if "ingestion_feedback" in st.session_state:
+        fb = st.session_state.ingestion_feedback
+        if fb.get("type") == "success":
+            st.success(fb.get("text"))
+        elif fb.get("type") == "error":
+            st.error(fb.get("text"))
+        elif fb.get("type") == "warning":
+            st.warning(fb.get("text"))
+        del st.session_state.ingestion_feedback
+    
+    # Connection status display
+    if not jira_server:
+        st.warning("⚠️ **Jira Connection**: Not configured. Set credentials in **Home Hub** -> **Centralized Integrations** tab.")
+    elif jira_status == "Success":
+        st.success(f"🟢 **Jira Connected**: `{jira_server}` ({jira_msg})")
+    elif jira_status == "Failed":
+        st.error(f"🔴 **Jira Connection Failed**: `{jira_server}` ({jira_msg}). Fix it on the **Home Hub**.")
+    else:
+        st.info(f"🟡 **Jira Configured**: `{jira_server}` (Status: {jira_msg}). Go to **Home Hub** to test connection.")
+        
+    st.divider()
+    
+    uploaded_file = st.file_uploader("Upload your data (CSV)", type=['csv'])
+    if uploaded_file:
+        try:
+            st.session_state.main_df = load_and_normalize_data(uploaded_file)
+            st.session_state.main_df.to_csv(SHARED_BACKLOG_PATH, index=False)
+            st.session_state.last_backlog_mtime = os.path.getmtime(SHARED_BACKLOG_PATH)
+            st.session_state.editor_key_counter = st.session_state.get('editor_key_counter', 0) + 1
+            st.session_state.ingestion_feedback = {"type": "success", "text": f"✅ Backlog of {len(st.session_state.main_df)} rows loaded and normalized successfully!"}
+            st.rerun()
+        except Exception as e:
+            st.session_state.ingestion_feedback = {"type": "error", "text": f"❌ Failed to parse CSV file: {e}"}
+            st.rerun()
+            
+    # Success indicator if data is loaded
+    if st.session_state.get("main_df") is not None:
+        st.info(f"📊 **Current Loaded Backlog:** `{len(st.session_state.main_df)}` rows found in active workspace.")
+        
+    st.markdown("### Don't have a file at hand?")
+    st.write("We have created a realistic mock file with simulated data so you can test the application with one click:")
+    try:
+        mock_path_parent = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "jira_mock.csv")
+        mock_path_tools = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jira_mock.csv")
+        mock_path = mock_path_parent if os.path.exists(mock_path_parent) else mock_path_tools
+        with open(mock_path, "r") as f:
+            mock_csv = f.read()
+        st.download_button(
+            label="⬇️ Download a Template", 
+            data=mock_csv.encode('utf-8'), 
+            file_name="jira_mock.csv", 
+            mime="text/csv"
+        )
+    except:
+        pass
+
+
+
+
+
+# ---------------------------------------------------------
+# STEP 2: Workbook
+# ---------------------------------------------------------
+elif st.session_state.active_tab_qp == "✍️ Workbook":
+    st.subheader("✍️ Backlog Workbook Editor")
+    st.write("Modify your epics, status, sprints, and period schedules directly in the high-fidelity table below.")
+    
+    if st.session_state.get("main_df") is None:
+        st.warning("⚠️ **No backlog data loaded**. Please complete Step 1: **Ingestion** or load a template backlog first.")
+    else:
+        # Search & Quick Filters inside the workbook page
+        st.write("### 🔍 Search Backlog")
+        wb_search = st.text_input("Filter table by text:", value="", placeholder="Type summary key or cluster...")
+        
+        df_editor_source = st.session_state.main_df.copy()
+        if wb_search:
+            q = wb_search.lower()
+            mask = (
+                df_editor_source['Epic Name'].astype(str).str.lower().str.contains(q) |
+                df_editor_source['Key'].astype(str).str.lower().str.contains(q) |
+                df_editor_source['Description'].astype(str).str.lower().str.contains(q) |
+                df_editor_source['Cluster'].astype(str).str.lower().str.contains(q)
+            )
+            df_editor_source = df_editor_source[mask]
+
+        column_config = {
+            "Key": st.column_config.TextColumn("id", width="medium"),
+            "Epic Name": st.column_config.TextColumn("Epic Name", width="large"),
+            "Status": st.column_config.SelectboxColumn("Status", options=["To Do", "In Progress", "Done", "Blocked", "Open", "Closed"]),
+            "Sprint": st.column_config.NumberColumn("Sprint", min_value=1, max_value=20, step=1),
+            "Size": st.column_config.SelectboxColumn("Size", options=["S", "M", "L", "XL"], default="M", width="small"),
+            "Quarter": st.column_config.TextColumn("Quarter"),
+            "Cluster": st.column_config.TextColumn("Cluster"),
+            "Cluster Name": st.column_config.TextColumn("Cluster Name"),
+            "Milestone": st.column_config.CheckboxColumn("Milestone", default=False),
+            "Start Date": st.column_config.DatetimeColumn("Start Date", format="DD-MM-YYYY"),
+            "Due Date": st.column_config.DatetimeColumn("Due Date", format="DD-MM-YYYY")
+        }
+        
+        st.data_editor(
+            df_editor_source, 
+            num_rows="dynamic", 
+            use_container_width=True,
+            column_config=column_config,
+            key=f"main_editor_{st.session_state.get('editor_key_counter', 0)}",
+            on_change=sync_main_editor_changes
+        )
+        
+        st.info("💡 **Tip:** Changes are saved automatically to the shared backlog workspace files in real time.")
+        
+        # Action: Recalculate all dates button
+        st.markdown("---")
+        st.markdown("#### 🔄 Recalculate Planning Dates")
+        st.write("Recalculate start and end planning dates for all backlog items based on their Sizes, Sprint calendars, and Quarter specifications:")
+        if st.button("Recalculate All Dates", use_container_width=True):
+            calculated = st.session_state.main_df.apply(calculate_sequential_dates, axis=1, result_type='expand')
+            st.session_state.main_df[['Start Date', 'Due Date']] = calculated
+            try:
+                st.session_state.main_df.to_csv(SHARED_BACKLOG_PATH, index=False)
+                st.session_state.last_backlog_mtime = os.path.getmtime(SHARED_BACKLOG_PATH)
+            except:
+                pass
+def show_timeline_gantt_tab():
+    df_for_filters = st.session_state.main_df
+    
     # 2. Sidebar: Gantt Filters (AND)
     st.sidebar.header("🔍 Gantt Filters")
-    
     search_query = st.sidebar.text_input("Search by Name or Key:", value="")
-    
-    df_for_filters = st.session_state.main_df if 'main_df' in st.session_state else df_raw
     
     # Dynamic filter by Quarter
     quarters_sel = []
@@ -653,7 +929,7 @@ if uploaded_file:
     # Initialize the Sprint Calendar in Session State if it doesn't exist
     if 'sprint_calendar' not in st.session_state:
         q_sample = "Q1 - 26"
-        non_null_q = df_raw['Quarter'].dropna()
+        non_null_q = df_for_filters['Quarter'].dropna()
         if not non_null_q.empty:
             q_sample = non_null_q.iloc[0]
             
@@ -700,73 +976,7 @@ if uploaded_file:
             on_change=sync_sprint_calendar_changes
         )
 
-
-    # Expander 4: Actions (Recalculate)
-    with st.sidebar.expander("🔄 Actions", expanded=False):
-        if st.button("Recalculate All Dates", use_container_width=True):
-            calculated = st.session_state.main_df.apply(calculate_sequential_dates, axis=1, result_type='expand')
-            st.session_state.main_df[['Start Date', 'Due Date']] = calculated
-            st.success("Dates synchronized with default settings!")
-            st.rerun()
-
-    # Initialize the main dataframe in Session State
-    if 'main_df' not in st.session_state or st.session_state.get('last_uploaded_name') != uploaded_file.name:
-        st.session_state.last_uploaded_name = uploaded_file.name
-        
-        # Fill missing dates
-        if 'Start Date' not in df_raw.columns:
-            df_raw['Start Date'] = pd.NaT
-        if 'Due Date' not in df_raw.columns:
-            df_raw['Due Date'] = pd.NaT
-            
-        df_raw['Start Date'] = pd.to_datetime(df_raw['Start Date'], errors='coerce')
-        df_raw['Due Date'] = pd.to_datetime(df_raw['Due Date'], errors='coerce')
-        
-        mask_missing = df_raw['Start Date'].isna() | df_raw['Due Date'].isna()
-        if mask_missing.any():
-            calculated_dates = df_raw[mask_missing].apply(calculate_sequential_dates, axis=1, result_type='expand')
-            if not calculated_dates.empty:
-                df_raw.loc[mask_missing, ['Start Date', 'Due Date']] = calculated_dates
-                
-        st.session_state.main_df = df_raw
-        # Save newly uploaded file to shared storage
-        if uploaded_file.name != "shared_backlog.csv":
-            try:
-                df_raw.to_csv(SHARED_BACKLOG_PATH, index=False)
-                st.session_state.last_backlog_mtime = os.path.getmtime(SHARED_BACKLOG_PATH)
-            except:
-                pass
-
-
-    # 4. Collapsible Backlog Editor
-    column_config = {
-        "Key": st.column_config.TextColumn("id", width="medium"),
-        "Epic Name": st.column_config.TextColumn("Epic Name", width="large"),
-        "Status": st.column_config.SelectboxColumn("Status", options=["To Do", "In Progress", "Done", "Blocked", "Open", "Closed"]),
-        "Sprint": st.column_config.NumberColumn("Sprint", min_value=1, max_value=20, step=1),
-        "Size": st.column_config.SelectboxColumn("Size", options=["S", "M", "L", "XL"], default="M", width="small"),
-        "Quarter": st.column_config.TextColumn("Quarter"),
-        "Cluster": st.column_config.TextColumn("Cluster"),
-        "Cluster Name": st.column_config.TextColumn("Cluster Name"),
-        "Milestone": st.column_config.CheckboxColumn("Milestone", default=False),
-        "Start Date": st.column_config.DatetimeColumn("Start Date", format="DD-MM-YYYY"),
-        "Due Date": st.column_config.DatetimeColumn("Due Date", format="DD-MM-YYYY")
-    }
-
-    # "Data" Collapsible Expandable Section
-    with st.expander("📊 Data", expanded=True):
-        st.write("Modify your epics and sprints directly in the table below:")
-        st.data_editor(
-            st.session_state.main_df, 
-            num_rows="dynamic", 
-            use_container_width=True,
-            column_config=column_config,
-            key="main_editor",
-            on_change=sync_main_editor_changes
-        )
-
-
-    # 5. Apply filters mask to a copy for visual display and analysis
+    # Apply filters mask to a copy for visual display and analysis
     filtered_df = st.session_state.main_df.copy()
     
     if search_query:
@@ -789,7 +999,7 @@ if uploaded_file:
     if status_sel:
         filtered_df = filtered_df[filtered_df['Status'].isin(status_sel)]
 
-    # 6. Real-time Quality Validation Engine
+    # Real-time Quality Validation Engine
     def validate_plan_data(df):
         errors = []
         warnings = []
@@ -817,26 +1027,23 @@ if uploaded_file:
                 if start < limit_start or due > limit_end:
                     warnings.append(f"⚠️ **{label}**: The scheduled dates exceed the reasonable limit of quarter **{quarter}** (deviation greater than 2 quarters). Please verify if the planning is correct.")
             
-            # Validation 3: Misalignment with dynamic Sprint calendar
+            # Validation 3: Date out of assigned Sprint bounds
             sprint_val = row.get('Sprint')
-            if pd.notna(sprint_val) and pd.notna(start) and pd.notna(due) and not row.get('Milestone', False):
+            if pd.notna(sprint_val) and 'sprint_calendar' in st.session_state:
                 try:
-                    s_num = int(float(sprint_val))
-                    cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == s_num]
+                    s_idx = int(float(sprint_val))
+                    cal_row = st.session_state.sprint_calendar[st.session_state.sprint_calendar['Sprint'] == s_idx]
                     if not cal_row.empty:
                         s_start = pd.to_datetime(cal_row.iloc[0]['Start Date'])
-                        s_end = pd.to_datetime(cal_row.iloc[0]['Due Date'])
-                        if start != s_start or due != s_end:
-                            warnings.append(f"ℹ️ **{label}**: Dates deviated from **Sprint {s_num}** ({s_start.strftime('%d-%m-%Y')} to {s_end.strftime('%d-%m-%Y')}). This is normal if you adjusted dates manually.")
+                        s_due = pd.to_datetime(cal_row.iloc[0]['Due Date'])
+                        if pd.notna(start) and (start < s_start or start >= s_due):
+                            warnings.append(f"⚠️ **{label}**: Start date ({start.strftime('%d-%m-%Y')}) lies outside the bounds of assigned Sprint {s_idx} ({s_start.strftime('%d-%m-%Y')} to {s_due.strftime('%d-%m-%Y')}).")
                 except:
                     pass
                     
         return errors, warnings
 
-    # Execute validation on active data
     critical_errors, control_warnings = validate_plan_data(st.session_state.main_df)
-    
-    st.divider()
     
     # Render validation anomalies if any exist
     if critical_errors or control_warnings:
@@ -858,6 +1065,7 @@ if uploaded_file:
                 st.warning("⚠️ **Warnings of Misalignment / Limits:**")
                 for adv in control_warnings:
                     st.markdown(f"- {adv}")
+
     
 # ---------------------------------------------------------
     # 7. Gantt Chart View (Plotly)
@@ -900,7 +1108,7 @@ if uploaded_file:
                 <style>
                 /* Apunta a las etiquetas del radio button */
                 div.stRadio > div[role="radiogroup"] p {{
-                    color: {primary_color} !important; /* Accent */
+                    color: {st.session_state.get("primary_color", "#3B82F6")} !important; /* Accent */
                     font-weight: 600 !important;
                     font-size: 1.05rem !important;
                 }}
@@ -1235,120 +1443,47 @@ if uploaded_file:
         else:
             st.info("No selectable epics found with active filters.")
 
-    # 9. CSV Re-usable Export Section (Without Title)
+    # Download buttons below the Gantt & Details
     st.divider()
-    export_df = st.session_state.main_df.copy()
+    st.subheader("💾 Export Roadmap")
+    col_pdf, col_csv = st.columns(2)
     
-    if 'Start Date' in export_df.columns: 
-        export_df['Start Date'] = export_df['Start Date'].dt.strftime('%d-%m-%Y')
-    if 'Due Date' in export_df.columns: 
-        export_df['Due Date'] = export_df['Due Date'].dt.strftime('%d-%m-%Y')
-        
-    csv_data = export_df.to_csv(index=False).encode('utf-8')
-    
-    st.download_button(
-        label="⬇ Download Plan (CSV)", 
-        data=csv_data, 
-        file_name="epics_sprints_jira_edited.csv", 
-        mime="text/csv"
-    )
-
-    # 10. Quarterly Epic Progress (Optional Jira Integration)
-    st.divider()
-    st.subheader("📈 Jira Quarterly Epic Progress")
-    
-    # Try importing build_quarterly_epic_progress_table from Sprint Review
-    import importlib
-    build_table_func = None
-    try:
-        sprint_review_module = importlib.import_module("tools.2_Sprint_Review")
-        build_table_func = sprint_review_module.build_quarterly_epic_progress_table
-    except Exception as e:
-        st.error(f"Could not load progress table engine from Sprint Review: {e}")
-        
-    if build_table_func:
-        # Load credentials
-        srv_in = st.session_state.get("jira_server") or os.getenv("JIRA_SERVER", "")
-        tok_in = st.session_state.get("jira_token") or os.getenv("JIRA_API_TOKEN", "")
-        jira_email_default = st.session_state.get("jira_email") or os.getenv("JIRA_EMAIL", "")
-        jira_auth_default = st.session_state.get("jira_auth_method") or os.getenv("JIRA_AUTH_METHOD", "Personal Access Token (Bearer PAT)")
-        auth_in = jira_auth_default
-        mail_in = jira_email_default
-
-        with st.expander("📈 Load and display Epic progress from Jira", expanded=False):
-            if srv_in:
-                st.info(f"🔌 Connected to Jira: `{srv_in}`")
-                st.caption("Jira credentials can be configured centrally on the **Home Hub** page under **Centralized Integrations**.")
-            else:
-                st.warning("⚠️ Jira server URL and credentials are not configured. Please set them up on the **Home Hub** page under **Centralized Integrations** tab.")
-
-            
-            # Module parameters
-            committed_label_env = os.getenv("COMMITTED_LABEL", "RC2_committed")
-            quarter_label_env = os.getenv("QUARTER_LABEL", "RC2_FB_18")
-            table_title_env = os.getenv("QUARTER_STATUS_TABLE_TITLE", "Epics Q3 - Current Progress")
-            
-            qp_col_l, qp_col_q, qp_col_t = st.columns([1, 1, 2])
-            with qp_col_l:
-                qp_committed_label = st.text_input("Committed label", value=committed_label_env, key="qp_committed_label")
-            with qp_col_q:
-                qp_quarter_label = st.text_input("Quarter label", value=quarter_label_env, key="qp_quarter_label")
-            with qp_col_t:
-                qp_table_title = st.text_input("Table title", value=table_title_env, key="qp_table_title")
-                
-            st.caption(f"Required label: {qp_committed_label.strip()}")
-            
-            if st.button("📈 Load Quarterly Epic Progress", key="qp_load_epic_progress_btn", use_container_width=True):
-                if not srv_in or not tok_in:
-                    st.error("Please provide Jira Server URL and API Token.")
-                elif not qp_quarter_label.strip():
-                    st.error("Enter the label used for the quarter before loading.")
-                elif not qp_committed_label.strip():
-                    st.error("Enter the committed label before loading.")
-                else:
-                    with st.spinner("Downloading quarterly Epics and calculating progress..."):
-                        progress_table = build_table_func(
-                            srv_in,
-                            tok_in,
-                            qp_committed_label.strip(),
-                            qp_quarter_label.strip(),
-                            qp_table_title.strip() or f"Epics {qp_quarter_label.strip()} - Current Progress",
-                            "Before Demo Table",
-                            auth_in,
-                            mail_in
-                        )
-                    if progress_table is not None:
-                        st.session_state.qp_progress_table = progress_table
-                        st.toast("Loaded committed Epics successfully!", icon="📈")
-                        st.rerun()
-            
-            # Display the table if loaded
-            if st.session_state.get("qp_progress_table") is not None:
-                st.write(f"#### {st.session_state.qp_progress_table['title']}")
-                df_render = st.session_state.qp_progress_table["df"]
-                
-                # drop Select/unwanted columns for cleaner display
-                display_cols = [c for c in df_render.columns if c not in ["Select", "Labels", "Assignee", "Fix Version"]]
-                st.dataframe(df_render[display_cols], use_container_width=True)
-
-else:
-    # Beautiful mock data welcome screen in English
-    st.info("👋 Upload your CSV file to get started.")
-    
-    st.write("### Don't have a file at hand?")
-    st.write("We have created a realistic mock file with simulated data so you can test the application with one click:")
-    
-    try:
-        mock_path_parent = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "jira_mock.csv")
-        mock_path_tools = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jira_mock.csv")
-        mock_path = mock_path_parent if os.path.exists(mock_path_parent) else mock_path_tools
-        with open(mock_path, "r") as f:
-            mock_csv = f.read()
-        st.download_button(
-            label="⬇️ Download a Template", 
-            data=mock_csv.encode('utf-8'), 
-            file_name="jira_mock.csv", 
-            mime="text/csv"
+    with col_pdf:
+        # Build PDF bytes
+        pdf_data = build_quarterly_plan_pdf(
+            st.session_state.main_df,
+            st.session_state.get("primary_color", "#0B2756")
         )
-    except:
-        pass
+        st.download_button(
+            label="⬇️ Download Plan (PDF)",
+            data=pdf_data,
+            file_name="quarterly_plan_roadmap.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+        
+    with col_csv:
+        export_df = st.session_state.main_df.copy()
+        if 'Start Date' in export_df.columns: 
+            export_df['Start Date'] = pd.to_datetime(export_df['Start Date']).dt.strftime('%d-%m-%Y')
+        if 'Due Date' in export_df.columns: 
+            export_df['Due Date'] = pd.to_datetime(export_df['Due Date']).dt.strftime('%d-%m-%Y')
+            
+        csv_data = export_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="⬇️ Download Plan (CSV)", 
+            data=csv_data, 
+            file_name="epics_sprints_jira_edited.csv", 
+            mime="text/csv",
+            use_container_width=True
+        )
+
+# ---------------------------------------------------------
+# STEP NAVIGATION EXECUTION
+# ---------------------------------------------------------
+if st.session_state.active_tab_qp == "💾 Exporter":
+    if st.session_state.get("main_df") is None:
+        st.warning("⚠️ **No backlog data loaded**. Please complete Step 1: **Ingestion** first.")
+    else:
+        show_timeline_gantt_tab()
+
