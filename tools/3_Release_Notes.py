@@ -1,5 +1,11 @@
 import streamlit as st
 import pandas as pd
+from utils.persistence import (
+    load_df_from_csv, save_df_to_csv, 
+    load_custom_tables_from_json, save_custom_tables_to_json, 
+    get_last_mtime, enable_auto_save, setup_autorefresh
+)
+from utils.jira_helpers import fetch_jira_tickets_dataset, map_jira_status
 import requests
 import os
 import io
@@ -19,53 +25,28 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen import canvas
 from reportlab.graphics.shapes import Drawing, Line, PolyLine
 
-class SmartKeepTogether(Flowable):
-    def __init__(self, flowables):
-        super().__init__()
-        if isinstance(flowables, Flowable):
-            self.flowables = [flowables]
-        else:
-            self.flowables = list(flowables)
-        self.has_been_deferred = False
-        
-    def wrap(self, availWidth, availHeight):
-        current_height = 0
-        max_width = 0
-        self.child_heights = []
-        for f in self.flowables:
-            w, h = f.wrap(availWidth, max(0, availHeight - current_height))
-            self.child_heights.append(h)
-            current_height += h
-            max_width = max(max_width, w)
-        self.width = max_width
-        self.height = current_height
-        return self.width, self.height
-        
-    def drawOn(self, canvas, x, y, *args, **kwargs):
-        current_y = y + self.height
-        for f, h in zip(self.flowables, self.child_heights):
-            current_y -= h
-            f.drawOn(canvas, x, current_y, *args, **kwargs)
-            
-    def split(self, availWidth, availHeight):
-        current_height = 0
-        for f in self.flowables:
-            _, h = f.wrap(availWidth, 99999)
-            current_height += h
-            
-        if current_height <= availHeight:
-            return self.flowables
-            
-        is_ls = (availWidth > 600)
-        full_frame_height = 504 if is_ls else 648
-        if availHeight >= 0.85 * full_frame_height:
-            return self.flowables
-            
-        if not self.has_been_deferred:
-            self.has_been_deferred = True
-            return []
-            
-        return self.flowables
+# Extracted PDF helper functions
+from utils.pdf_helpers import (
+    SmartKeepTogether, hex_to_reportlab_color, convert_markdown_to_pdf_rich_text,
+    split_bugs_and_topics, sort_items_by_label_priority, get_team_label, sort_items_by_type_and_epic,
+    draw_background_landscape, NumberedCanvas, build_demos_pdf_block, build_next_releases_pdf_block,
+    format_status_with_emoji, build_custom_extra_table_pdf_block, get_arrow_drawing
+)
+
+RN_FILES = [
+    "release_notes_overview.csv",
+    "release_notes_custom_tables.json",
+    "release_notes_next_release.csv"
+]
+
+def save_release_notes_shared():
+    save_df_to_csv(st.session_state.get("overview_df"), "release_notes_overview.csv")
+    save_custom_tables_to_json(st.session_state.get("custom_tables"), "release_notes_custom_tables.json")
+    save_df_to_csv(st.session_state.get("next_release_df"), "release_notes_next_release.csv")
+    st.session_state.release_notes_last_sync = get_last_mtime(RN_FILES)
+
+# Enable automatic background saves on st.rerun()
+enable_auto_save(save_release_notes_shared)
 
 
 # ---------------------------------------------------------
@@ -160,6 +141,7 @@ def sync_editor_changes(df_key, editor_key, display_df_indices):
         
     if has_real_edits:
         st.session_state[df_key] = df
+        save_release_notes_shared()
 
 def sync_custom_table_changes(table_idx, editor_key, display_df_indices):
     edits = st.session_state.get(editor_key)
@@ -200,6 +182,7 @@ def sync_custom_table_changes(table_idx, editor_key, display_df_indices):
         
     if has_real_edits:
         st.session_state.custom_tables[table_idx]["df"] = df
+        save_release_notes_shared()
 
 # ---------------------------------------------------------
 # 1. Environment Loading & Session Setup
@@ -350,6 +333,30 @@ if 'prepared_release_notes' not in st.session_state:
     st.session_state.prepared_release_notes = None
 if 'release_purpose' not in st.session_state:
     st.session_state.release_purpose = "The purpose of this release is to rollout the following functionalities:"
+
+# ---------------------------------------------------------
+# Shared Collaboration Sync Logic
+# ---------------------------------------------------------
+def load_release_notes_shared():
+    ov_df = load_df_from_csv("release_notes_overview.csv")
+    if ov_df is not None:
+        st.session_state.overview_df = ov_df
+    cust = load_custom_tables_from_json("release_notes_custom_tables.json")
+    if cust:
+        st.session_state.custom_tables = cust
+    nr_df = load_df_from_csv("release_notes_next_release.csv")
+    if nr_df is not None:
+        st.session_state.next_release_df = nr_df
+
+# Only run auto-refresh on the Workbook tab to prevent resource overhead and iframe blinking on other tabs
+if st.session_state.get("active_tab", "🔌 Ingestion") == "✍️ Workbook":
+    setup_autorefresh(
+        sync_interval_ms=10000, 
+        last_sync_key="release_notes_last_sync", 
+        watched_files=RN_FILES, 
+        load_callback=load_release_notes_shared
+    )
+
 
 
 # ---------------------------------------------------------
@@ -634,6 +641,7 @@ def load_mock_sprint_data():
         }
     ]
     st.toast("🚀 Loaded mock datasets successfully!", icon="🔥")
+    save_release_notes_shared()
 
 # ---------------------------------------------------------
 
@@ -1213,494 +1221,6 @@ def upload_pdf_to_confluence(server_url, auth_type, token, email, space_key, pag
     return page_link
 
 # Helper to transform Hex colors into ReportLab Color objects
-
-def hex_to_reportlab_color(hex_str, default="#3B82F6"):
-    if not hex_str:
-        return colors.HexColor(default)
-    try:
-        return colors.HexColor(hex_str)
-    except Exception:
-        return colors.HexColor(default)
-
-# Simple Markdown to HTML formatter for ReportLab
-def convert_markdown_to_pdf_rich_text(md_text):
-    if not md_text:
-        return ""
-    html = md_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    html = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', html)
-    html = re.sub(r'\*(.*?)\*', r'<i>\1</i>', html)
-    html = re.sub(r'^\*\s+(.*?)$', r'• \1', html, flags=re.MULTILINE)
-    html = re.sub(r'^-\s+(.*?)$', r'• \1', html, flags=re.MULTILINE)
-    html = html.replace("\n", "<br/>")
-    return html
-
-# Helper to separate bugs from other topics
-def split_bugs_and_topics(df):
-    if df is None or df.empty:
-        return pd.DataFrame(), pd.DataFrame()
-    if 'Type' not in df.columns:
-        return df.copy(), pd.DataFrame()
-    is_bug = df['Type'].astype(str).str.strip().str.lower() == 'bug'
-    bugs_df = df[is_bug]
-    topics_df = df[~is_bug]
-    return topics_df, bugs_df
-
-# Helper to sort items by Type order (User Story -> Task -> Technical Task) and then Epic
-def sort_items_by_type_and_epic(df):
-    if df is None or df.empty:
-        return df
-    if 'Type' not in df.columns:
-        return df.sort_values("Epic")
-        
-    def get_sort_order(item_type):
-        val = str(item_type).strip().lower()
-        if "story" in val:
-            return 1
-        elif "bug" in val:
-            return 4
-        elif "technical" in val:
-            return 3
-        elif "task" in val:
-            return 2
-        else:
-            return 3 # Default other types to Technical Task level
-            
-    df_copy = df.copy()
-    df_copy['_type_sort_order'] = df_copy['Type'].apply(get_sort_order)
-    df_copy.sort_values(by=['Epic', '_type_sort_order', 'Key'], inplace=True)
-    df_copy.drop(columns=['_type_sort_order'], inplace=True)
-    return df_copy
-
-# ---------------------------------------------------------
-# 5. PDF Generation Custom Canvas & Background Callbacks (Header, Footer, Branding)
-# ---------------------------------------------------------
-def draw_background_landscape(canvas_obj, doc_obj):
-    primary_color_hex = st.session_state.primary_color
-    primary_color = hex_to_reportlab_color(primary_color_hex)
-    
-    canvas_obj.saveState()
-    width, height = doc_obj.pagesize
-    
-    # Subtle corporate background color fill
-    canvas_obj.setFillColor(colors.HexColor("#F8FAFC"))
-    canvas_obj.rect(0, 0, width, height, stroke=0, fill=1)
-    
-    # Solid vertical branding accent band on the far left edge
-    canvas_obj.setFillColor(primary_color)
-    canvas_obj.rect(0, 0, 8, height, stroke=0, fill=1)
-    
-    if doc_obj.page == 1:
-        # Cover page background frame:
-        # Top banner of primary color
-        canvas_obj.setFillColor(primary_color)
-        canvas_obj.rect(8, height - 20, width - 8, 20, stroke=0, fill=1)
-        
-        # Dark gray bottom bar for footer metadata
-        canvas_obj.setFillColor(colors.HexColor("#E2E8F0"))
-        canvas_obj.rect(8, 0, width - 8, 30, stroke=0, fill=1)
-    else:
-        # Content slide top header banner background
-        canvas_obj.setFillColor(colors.white)
-        canvas_obj.rect(8, height - 48, width - 8, 48, stroke=0, fill=1)
-        
-        canvas_obj.setStrokeColor(colors.HexColor("#E2E8F0"))
-        canvas_obj.setLineWidth(1)
-        canvas_obj.line(8, height - 48, width, height - 48)
-        
-    canvas_obj.restoreState()
-
-class NumberedCanvas(canvas.Canvas):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._saved_page_states = []
-
-    def showPage(self):
-        self._saved_page_states.append(dict(self.__dict__))
-        self._startPage()
-
-    def save(self):
-        num_pages = len(self._saved_page_states)
-        for state in self._saved_page_states:
-            self.__dict__.update(state)
-            self.draw_page_decorations(num_pages)
-            super().showPage()
-        super().save()
-
-    def draw_page_decorations(self, page_count):
-        primary_color_hex = st.session_state.primary_color
-        primary_color = hex_to_reportlab_color(primary_color_hex)
-        project_name = (
-            "ReCall2 - Software Release Note"
-            if st.session_state.get("prepared_release_notes") is not None
-            else st.session_state.project_name
-        )
-        logo_path = st.session_state.rn_logo_temp_path
-        
-        self.saveState()
-        
-        # Get dynamic page dimensions
-        width, height = self._pagesize
-        is_landscape = width > height
-        
-        if is_landscape:
-            # --- LANDSCAPE SLIDES SETUP ---
-            if self._pageNumber == 1:
-                # Page 1 is the starting cover page.
-                self.restoreState()
-                return
-                
-            right_margin = width - 54
-            top_header_y = height - 28
-            logo_y = height - 36
-            logo_x = right_margin - 68
-            
-        else:
-            # --- STANDARD PORTRAIT PORTRAIT SETUP ---
-            if self._pageNumber == 1:
-                self.restoreState()
-                return
-                
-            right_margin = width - 54
-            top_header_y = height - 42
-            line_header_y = height - 52
-            logo_y = height - 35
-            logo_x = right_margin - 68
-            
-            # Horizontal branding separator line
-            self.setStrokeColor(primary_color)
-            self.setLineWidth(1)
-            self.line(54, line_header_y, right_margin, line_header_y)
-            
-        # 2. Draw Header Content
-        self.setFont("Helvetica-Bold", 9.5)
-        self.setFillColor(primary_color)
-        self.drawString(54, top_header_y, project_name.upper())
-        
-        self.setFont("Helvetica", 8.5)
-        self.setFillColor(colors.HexColor("#64748B"))
-        
-        # Draw logo image in header if loaded
-        if logo_path and os.path.exists(logo_path):
-            try:
-                self.drawImage(logo_path, logo_x, logo_y, width=68, height=22, mask='auto', preserveAspectRatio=True)
-            except Exception:
-                pass
-                
-        # 3. Draw Footer Content
-        self.setStrokeColor(colors.HexColor("#CBD5E1"))
-        self.setLineWidth(0.5)
-        self.line(54, 50, right_margin, 50)
-        
-        self.setFont("Helvetica", 8.5)
-        self.setFillColor(colors.HexColor("#94A3B8"))
-        self.drawRightString(right_margin, 36, f"Page {self._pageNumber} of {page_count}")
-        
-        # Date in the footer on the left
-        from datetime import datetime
-        current_date = datetime.now().strftime("%d-%m-%Y")
-        self.drawString(54, 36, f"Date: {current_date}")
-        
-        self.restoreState()
-
-# Helper to build "Apartado de Demos" block (common to both PDFs if items are selected)
-def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None, is_landscape=False):
-    demo_items = df[df["Demo"] == True] if "Demo" in df.columns else pd.DataFrame()
-    if demo_items.empty:
-        return []
-    block_elements = []
-    # Custom styling
-    # Let's adjust sizes for landscape presentation grade view
-    font_size_header = 9 if is_landscape else 8
-    font_size_body = 8.5 if is_landscape else 7.5
-    padding_val = 4 if is_landscape else 3
-    
-    section_title_style = ParagraphStyle(
-        'DemoSecTitle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=16 if is_landscape else 13,
-        leading=20 if is_landscape else 16,
-        textColor=primary_color,
-        spaceBefore=18,
-        spaceAfter=6
-    )
-    
-    intro_style = ParagraphStyle(
-        'DemoIntro',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=10 if is_landscape else 8.5,
-        leading=14 if is_landscape else 12,
-        textColor=colors.HexColor("#475569"),
-        spaceAfter=10
-    )
-    
-    cell_header_style = ParagraphStyle(
-        'DemoCellHeader',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=font_size_header,
-        leading=font_size_header + 3,
-        textColor=colors.white
-    )
-    
-    cell_body_style = ParagraphStyle(
-        'DemoCellBody',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=font_size_body,
-        leading=font_size_body + 3,
-        textColor=colors.HexColor("#1E293B")
-    )
-    
-    cell_body_bold_style = ParagraphStyle(
-        'DemoCellBodyBold',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=font_size_body,
-        leading=font_size_body + 3,
-        textColor=colors.HexColor("#1E293B")
-    )
-    
-    if sub_section_style is not None:
-        block_elements.append(Paragraph("Product Demos", sub_section_style))
-    else:
-        block_elements.append(Paragraph("Product Demos", section_title_style))
- 
-    block_elements.append(Paragraph(
-        "The following live product demonstrations have been scheduled. The listed feature owners will present these deliverables:",
-        intro_style
-    ))
-    
-    # Table layout
-    table_data = [[
-        Paragraph("Key", cell_header_style),
-        Paragraph("Summary", cell_header_style),
-        Paragraph("Epic", cell_header_style),
-        Paragraph("Presenter 👤", cell_header_style)
-    ]]
-    
-    for _, row in demo_items.iterrows():
-        presenter = str(row['Assignee']) if pd.notna(row['Assignee']) and str(row['Assignee']).strip() != "" else "Unassigned"
-        table_data.append([
-            Paragraph(str(row['Key']), cell_body_bold_style),
-            Paragraph(str(row['Summary']), cell_body_style),
-            Paragraph(str(row['Epic']), cell_body_style),
-            Paragraph(presenter, cell_body_bold_style)
-        ])
-        
-    # Col Widths: Total = 504pt (Portrait) or 684pt (Landscape)
-    if is_landscape:
-        col_widths = [95, 269, 160, 160]
-    else:
-        col_widths = [95, 169, 120, 120]
-        
-    demo_table = Table(
-        table_data,
-        colWidths=col_widths
-    )
-    
-    demo_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), padding_val),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), padding_val),
-        ('LEFTPADDING', (0, 0), (-1, -1), 8),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-        ('GRID', (0, 0), (-1, -1), 0.8 if is_landscape else 0.5, colors.HexColor("#E2E8F0") if is_landscape else colors.HexColor("#CBD5E1")),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-    ]))
-    
-    block_elements.append(demo_table)
-    block_elements.append(Spacer(1, 15))
-    
-    return [SmartKeepTogether(block_elements)]
-
-# Helper to build Target Release versions table block in PDFs (NEW requested table)
-def build_next_releases_pdf_block(df, primary_color, styles, is_landscape=False):
-    if df is None or df.empty:
-        return []
-        
-    block_elements = []
-    
-    font_size_header = 9 if is_landscape else 8
-    font_size_body = 8.5 if is_landscape else 7.5
-    padding_val = 4 if is_landscape else 3
-    
-    cell_header_style = ParagraphStyle(
-        'RelCellHeader',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=font_size_header,
-        leading=font_size_header + 3,
-        textColor=colors.white
-    )
-    
-    cell_body_style = ParagraphStyle(
-        'RelCellBody',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=font_size_body,
-        leading=font_size_body + 3,
-        textColor=colors.HexColor("#1E293B")
-    )
-    
-    cell_body_bold_style = ParagraphStyle(
-        'RelCellBodyBold',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=font_size_body,
-        leading=font_size_body + 3,
-        textColor=colors.HexColor("#1E293B")
-    )
-    
-    table_data = [[
-        Paragraph("Version", cell_header_style),
-        Paragraph("Target Date", cell_header_style),
-        Paragraph("Key Highlights & Scope Comments", cell_header_style)
-    ]]
-    
-    for _, row in df.iterrows():
-        version = str(row.get('Version', ''))
-        date = str(row.get('Target Date', ''))
-        comments = str(row.get('Comments', ''))
-        
-        table_data.append([
-            Paragraph(version, cell_body_bold_style),
-            Paragraph(date, cell_body_style),
-            Paragraph(comments, cell_body_style)
-        ])
-        
-    # Col Widths: Total = 504pt (Portrait) or 684pt (Landscape)
-    # Version: 80pt/100pt, Date: 80pt/100pt, Comments: 344pt/484pt
-    if is_landscape:
-        col_widths = [100, 100, 484]
-    else:
-        col_widths = [80, 80, 344]
-        
-    rel_table = Table(
-        table_data,
-        colWidths=col_widths
-    )
-    
-    rel_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), padding_val),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), padding_val),
-        ('LEFTPADDING', (0, 0), (-1, -1), 8),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-        ('GRID', (0, 0), (-1, -1), 0.8 if is_landscape else 0.5, colors.HexColor("#E2E8F0") if is_landscape else colors.HexColor("#CBD5E1")),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-    ]))
-    
-    block_elements.append(rel_table)
-    block_elements.append(Spacer(1, 10))
-    
-    return block_elements
-
-# Helper function to map Jira status strings to clean color-coded status bullets (PDF safe)
-def format_status_with_emoji(status_str):
-    if not status_str or not isinstance(status_str, str):
-        return '<font color="#3B82F6">●</font>'
-        
-    st_clean = status_str.strip().lower()
-    
-    if st_clean in ['done', 'closed', 'resolved', 'complete', 'acceptance test']:
-        return '<font color="#22C55E">●</font>'
-    elif st_clean in ['in progress', 'development', 'testing', 'review', 'in dev', 'dev', 'qa']:
-        return '<font color="#F59E0B">●</font>'
-    elif st_clean in ['blocked', 'on hold', 'impediment', 'delayed', 'hold']:
-        return '<font color="#EF4444">●</font>'
-    elif st_clean in ['to do', 'open', 'backlog', 'selected for development', 'new']:
-        return '<font color="#3B82F6">●</font>'
-    else:
-        return '<font color="#3B82F6">●</font>'
-
-# Helper function to dynamically build and format an uploaded custom table (non-Jira) in both landscape and portrait PDFs
-def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=False):
-    if df is None or df.empty:
-        return []
-        
-    block_elements = []
-    
-    # Dynamic styling matching the presentation grade
-    font_size_header = 9 if is_landscape else 8
-    font_size_body = 8.5 if is_landscape else 7.5
-    padding_val = 4 if is_landscape else 3
-    
-    cell_header_style = ParagraphStyle(
-        'ExtraHeader',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=font_size_header,
-        leading=font_size_header + 3,
-        textColor=colors.white
-    )
-    
-    cell_body_style = ParagraphStyle(
-        'ExtraBody',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=font_size_body,
-        leading=font_size_body + 3,
-        textColor=colors.HexColor("#1E293B")
-    )
-    
-    table_data = []
-    
-    # Column names as header
-    header_row = [Paragraph(str(col), cell_header_style) for col in df.columns]
-    table_data.append(header_row)
-    
-    # Data rows
-    for _, row in df.iterrows():
-        row_data = [Paragraph(str(val), cell_body_style) for val in row]
-        table_data.append(row_data)
-        
-    # Compute columns widths dynamically to fill the page printable width
-    total_width = 684 if is_landscape else 504
-    num_cols = len(df.columns)
-    col_widths = [total_width / num_cols] * num_cols
-    
-    extra_table = Table(
-        table_data,
-        colWidths=col_widths
-    )
-    
-    extra_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), padding_val),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), padding_val),
-        ('LEFTPADDING', (0, 0), (-1, -1), 8),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-        ('GRID', (0, 0), (-1, -1), 0.8 if is_landscape else 0.5, colors.HexColor("#E2E8F0") if is_landscape else colors.HexColor("#CBD5E1")),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-    ]))
-    
-    block_elements.append(extra_table)
-    block_elements.append(Spacer(1, 15))
-    return block_elements
-
-
-# ---------------------------------------------------------
-# 7. PDF Builder: Release Notes PDF (Consolidated Single Table)
-# ---------------------------------------------------------
-def get_arrow_drawing(color):
-    d = Drawing(10, 10)
-    # L-shape: bottom-right to bottom-left to top-left pointing up, smaller size (10x10) and black
-    d.add(PolyLine([(7, 2), (2, 2), (2, 8)], strokeColor=colors.black, strokeWidth=1.0))
-    d.add(Line(0, 6, 2, 8, strokeColor=colors.black, strokeWidth=1.0))
-    d.add(Line(4, 6, 2, 8, strokeColor=colors.black, strokeWidth=1.0))
-    return d
-
 def build_prepared_release_notes_pdf(prepared):
     """Generate the standard ReCall 2 Release Note from a prepared Jira version."""
     buffer = io.BytesIO()
@@ -2212,60 +1732,56 @@ if st.session_state.active_tab == "🔌 Ingestion":
     st.subheader("🔌 Jira Backlog Ingestion")
     st.write("Configure connection details below to load the **Overview** (What We Did) ticket dataset.")
     
+    # Ingestion Flash Feedback
+    if "ingestion_feedback" in st.session_state:
+        fb = st.session_state.ingestion_feedback
+        if fb.get("type") == "success":
+            st.success(fb.get("text"))
+        elif fb.get("type") == "error":
+            st.error(fb.get("text"))
+        elif fb.get("type") == "warning":
+            st.warning(fb.get("text"))
+        del st.session_state.ingestion_feedback
+    
     # Credentials block
 
-    st.markdown("**1. Secure Access Credentials**")
-    col_serv, col_tok = st.columns([1, 1])
-    with col_serv:
-        server_input = st.text_input(
-            "Jira Server URL:",
-            value=st.session_state.jira_server,
-            placeholder="https://company.atlassian.net",
-            help="Your corporate Jira Server local address (e.g., https://devstack.vwgroup.com/jira)"
-        )
-    with col_tok:
-        token_input = st.text_input(
-            "Jira Personal Access Token (PAT):",
-            value=st.session_state.jira_token,
-            type="password",
-            placeholder="Paste your secure PAT...",
-            help="Your secure Jira Server Personal Access Token (PAT)"
-        )
-        
-    if server_input != st.session_state.jira_server:
-        st.session_state.jira_server = server_input
-    if token_input != st.session_state.jira_token:
-        st.session_state.jira_token = token_input
+    # Centralized Integration Status
+    jira_status = st.session_state.get("jira_connection_status")
+    jira_msg = st.session_state.get("jira_connection_msg", "Not checked yet")
+    conf_status = st.session_state.get("conf_connection_status")
+    conf_msg = st.session_state.get("conf_connection_msg", "Not checked yet")
 
-    col_conf_serv, col_conf_tok = st.columns([1, 1])
-    with col_conf_serv:
-        conf_server_input = st.text_input(
-            "Confluence Server URL:",
-            value=st.session_state.conf_server,
-            placeholder="https://company.atlassian.net/wiki",
-            help="Uses the value in your local .env file by default. Change it only if you need another Confluence server."
-        )
-    with col_conf_tok:
-        conf_token_input = st.text_input(
-            "Confluence Personal Access Token (PAT):",
-            value=st.session_state.conf_token,
-            type="password",
-            placeholder="Paste your Confluence token...",
-            help="Uses the value in your local .env file by default. You can paste another token for this session."
-        )
+    col_stat1, col_stat2 = st.columns([1, 1])
+    with col_stat1:
+        if not st.session_state.jira_server:
+            st.warning("⚠️ **Jira**: Not configured.")
+        elif jira_status == "Success":
+            st.success(f"🟢 **Jira Connected**: `{st.session_state.jira_server}` ({jira_msg})")
+        elif jira_status == "Failed":
+            st.error(f"🔴 **Jira Connection Failed**: `{st.session_state.jira_server}` ({jira_msg})")
+        else:
+            st.info(f"🟡 **Jira Configured**: `{st.session_state.jira_server}` (Status: {jira_msg})")
+            
+    with col_stat2:
+        if not st.session_state.conf_server:
+            st.warning("⚠️ **Confluence**: Not configured.")
+        elif conf_status == "Success":
+            st.success(f"🟢 **Confluence Connected**: `{st.session_state.conf_server}` ({conf_msg})")
+        elif conf_status == "Failed":
+            st.error(f"🔴 **Confluence Connection Failed**: `{st.session_state.conf_server}` ({conf_msg})")
+        else:
+            st.info(f"🟡 **Confluence Configured**: `{st.session_state.conf_server}` (Status: {conf_msg})")
+            
+    st.caption("Credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
 
-    if conf_server_input != st.session_state.conf_server:
-        st.session_state.conf_server = conf_server_input
-    if conf_token_input != st.session_state.conf_token:
-        st.session_state.conf_token = conf_token_input
-        
-    st.info("💡 **Security:** Credentials are loaded locally using secure dotenv files and are never saved publicly on git repositories.")
 
     st.subheader("📝 Prepare Release Note")
     st.write("Paste the Jira version link to load the release metadata, resolved issues, and known residual anomalies.")
+    jira_version_link_base = os.getenv("JIRA_VERSION_LINK_BASE", "https://devstack.vwgroup.com/jira/projects/RECALLTWO/versions/")
     release_version_url = st.text_input(
         "Jira version link",
-        placeholder="https://devstack.vwgroup.com/jira/projects/RECALLTWO/versions/543216",
+        value=jira_version_link_base,
+        placeholder=f"{jira_version_link_base}543216",
         key="release_version_url"
     )
     purpose_in = st.text_area(
@@ -2358,7 +1874,12 @@ if st.session_state.active_tab == "🔌 Ingestion":
                     if not res_df.empty and not inc_all:
                         res_df = res_df[res_df["Type"].isin(selected_types)].reset_index(drop=True)
                     st.session_state.overview_df = res_df
-                    st.success(f"Success! Loaded {len(res_df)} Overview tickets.")
+                    if res_df.empty:
+                        st.session_state.ingestion_feedback = {"type": "warning", "text": f"⚠️ JQL/FixVersion query returned 0 tickets for Overview."}
+                    else:
+                        st.session_state.ingestion_feedback = {"type": "success", "text": f"🟢 Successfully loaded {len(res_df)} Overview tickets!"}
+                    st.rerun()
+                    st.session_state.ingestion_feedback = {"type": "error", "text": "❌ Failed to connect or load Overview tickets from Jira. Check server credentials or query parameters."}
                     st.rerun()
     
     # Ingestion of Additional Custom Report Tables (Jira or CSV)
@@ -2394,6 +1915,11 @@ if st.session_state.active_tab == "🔌 Ingestion":
                         "position": extra_table_position
                     }
                     st.session_state.custom_tables.append(new_table)
+                    ext_idx = len(st.session_state.custom_tables) - 1
+                    for key_prefix in ["rename_ext_", "pos_ext_", "editor_ext_", "cols_select_", "sort_ext_", "filter_ext_"]:
+                        for key in list(st.session_state.keys()):
+                            if key.startswith(f"{key_prefix}{ext_idx}"):
+                                del st.session_state[key]
                     st.toast(f"Custom table '{new_table['title']}' uploaded successfully!", icon="📊")
                     st.rerun()
                 except Exception as e:
@@ -2426,6 +1952,11 @@ if st.session_state.active_tab == "🔌 Ingestion":
                         "position": extra_table_position
                     }
                     st.session_state.custom_tables.append(new_table)
+                    ext_idx = len(st.session_state.custom_tables) - 1
+                    for key_prefix in ["rename_ext_", "pos_ext_", "editor_ext_", "cols_select_", "sort_ext_", "filter_ext_"]:
+                        for key in list(st.session_state.keys()):
+                            if key.startswith(f"{key_prefix}{ext_idx}"):
+                                del st.session_state[key]
                     st.toast(f"Success! Loaded {len(res_df)} tickets for custom table '{new_table['title']}'.", icon="📊")
                     st.rerun()
 
@@ -2543,6 +2074,14 @@ if st.session_state.active_tab == "🔌 Ingestion":
 # STEP 2: Worktable Workspace (Tabbed Data Editor)
 # ---------------------------------------------------------
 elif st.session_state.active_tab == "✍️ Workbook":
+    st.markdown(
+        f"<div style='background-color:#1E3A8A; padding:8px 12px; border-radius:8px; border:1px solid #3B82F6; margin-bottom:12px; font-size:14px; color:#F8FAFC; display:flex; align-items:center; gap:8px;'>"
+        f"<span style='color:#10B981; font-weight:bold;'>🟢 Connected to Shared Workbook</span> "
+        f"<span style='color:#94A3B8;'>|</span> "
+        f"<span style='color:#E2E8F0;'>Simultaneous collaboration enabled (auto-refresh active)</span>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
     if st.session_state.get("prepared_release_notes") is not None:
         st.subheader("✍️ Review Release Note data")
         st.write("Remove or adjust rows before export. These are the only two ticket tables used in the Release Note.")
@@ -3159,18 +2698,27 @@ elif st.session_state.active_tab == "💾 Exporter":
             st.markdown("### 👁️ Live Document Previewer")
             st.write("Release Notes PDF live preview:")
             
-            active_pdf_data = None
-            try:
-                active_pdf_data = build_release_notes_pdf(rn_ov_df)
-            except:
-                pass
-                    
-            if active_pdf_data is not None:
+            if "pdf_preview_trigger_rn" not in st.session_state:
+                st.session_state.pdf_preview_trigger_rn = True
+                
+            if st.button("🔄 Render / Refresh PDF Preview", key="btn_refresh_pdf_preview_rn", use_container_width=True):
+                st.session_state.pdf_preview_trigger_rn = True
+                
+            if st.session_state.get("pdf_preview_trigger_rn"):
+                active_pdf_data = None
                 try:
-                    base64_pdf = base64.b64encode(active_pdf_data.getvalue()).decode('utf-8')
-                    preview_iframe = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="520" type="application/pdf" style="border: 1px solid #3E3E4A; border-radius: 12px; background-color: #ffffff;"></iframe>'
-                    st.markdown(preview_iframe, unsafe_allow_html=True)
-                except Exception as e:
-                    st.error(f"Failed to render interactive base64 PDF: {str(e)}")
+                    active_pdf_data = build_release_notes_pdf(rn_ov_df)
+                except Exception as ex:
+                    st.error(f"Failed to build PDF preview: {str(ex)}")
+                        
+                if active_pdf_data is not None:
+                    try:
+                        base64_pdf = base64.b64encode(active_pdf_data.getvalue()).decode('utf-8')
+                        preview_iframe = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="520" type="application/pdf" style="border: 1px solid #3E3E4A; border-radius: 12px; background-color: #ffffff;"></iframe>'
+                        st.markdown(preview_iframe, unsafe_allow_html=True)
+                    except Exception as e:
+                        st.error(f"Failed to render interactive base64 PDF: {str(e)}")
+                else:
+                    st.info("Ingest data first to view live generated previews.")
             else:
-                st.info("Ingest data first to view live generated previews.")
+                st.info("💡 PDF rendering is paused. Click the button above to render or update the preview.")
