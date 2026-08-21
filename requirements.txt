@@ -7,4 +7,3 @@ Pillow
 reportlab
 pycloudflared
 streamlit-autorefresh
-

@@ -27,3 +27,7 @@ Thumbs.db
 # Local data cache
 data/
 *.csv
+
+# Agent state
+.gemini/
+

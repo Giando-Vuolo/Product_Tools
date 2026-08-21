@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import requests
 from dotenv import load_dotenv
-from utils.tunnel import start_tunnel, get_tunnel_url, get_tunnel_error
+from utils.tunnel import start_tunnel, get_tunnel_url, get_tunnel_error, set_tunnel_url
 
 # Load environment variables
 load_dotenv(override=True)
@@ -10,6 +10,47 @@ default_primary_color = os.getenv("PRIMARY_COLOR", "#3B82F6")
 if 'primary_color' not in st.session_state or st.session_state.get('prev_env_color') != default_primary_color:
     st.session_state.primary_color = default_primary_color
     st.session_state.prev_env_color = default_primary_color
+
+def save_credentials_to_env():
+    env_path = ".env"
+    lines = []
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+            
+    kv = {}
+    for line in lines:
+        line_strip = line.strip()
+        if line_strip and not line_strip.startswith("#") and "=" in line_strip:
+            parts = line_strip.split("=", 1)
+            kv[parts[0].strip()] = parts[1].strip()
+            
+    kv["JIRA_SERVER"] = st.session_state.jira_server
+    kv["JIRA_API_TOKEN"] = st.session_state.jira_token
+    kv["JIRA_AUTH_METHOD"] = st.session_state.jira_auth_method
+    kv["JIRA_EMAIL"] = st.session_state.jira_email
+    kv["CONFLUENCE_SERVER"] = st.session_state.conf_server
+    kv["CONFLUENCE_API_TOKEN"] = st.session_state.conf_token
+
+    new_lines = []
+    keys_written = set()
+    for line in lines:
+        line_strip = line.strip()
+        if line_strip and not line_strip.startswith("#") and "=" in line_strip:
+            parts = line_strip.split("=", 1)
+            k_clean = parts[0].strip()
+            if k_clean in kv:
+                new_lines.append(f"{k_clean}={kv[k_clean]}\n")
+                keys_written.add(k_clean)
+                continue
+        new_lines.append(line)
+        
+    for k, v in kv.items():
+        if k not in keys_written:
+            new_lines.append(f"{k}={v}\n")
+            
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
 
 # Initialize central credentials in session state if not set
 if "jira_server" not in st.session_state:
@@ -25,7 +66,67 @@ if "conf_server" not in st.session_state:
 if "conf_token" not in st.session_state:
     st.session_state.conf_token = os.getenv("CONFLUENCE_API_TOKEN", "")
 
+# Perform automatic connection checks on session initialization
+if "jira_connection_status" not in st.session_state:
+    st.session_state.jira_connection_status = "Not checked"
+    st.session_state.jira_connection_msg = ""
+    st.session_state.conf_connection_status = "Not checked"
+    st.session_state.conf_connection_msg = ""
 
+    # Test Jira Connection
+    srv = st.session_state.jira_server
+    tok = st.session_state.jira_token
+    auth_method = st.session_state.jira_auth_method
+    email = st.session_state.jira_email
+    if srv and tok:
+        try:
+            headers = {"Accept": "application/json"}
+            auth = None
+            token_clean = tok.strip().removeprefix("Bearer ").strip()
+            if auth_method in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"]:
+                auth = (email.strip(), token_clean)
+            else:
+                headers["Authorization"] = f"Bearer {token_clean}"
+            
+            resp = requests.get(f"{srv.rstrip('/')}/rest/api/2/myself", headers=headers, auth=auth, timeout=5)
+            if resp.status_code == 200:
+                user_name = resp.json().get("displayName", "User")
+                st.session_state.jira_connection_status = "Success"
+                st.session_state.jira_connection_msg = f"Connected as `{user_name}`"
+            else:
+                st.session_state.jira_connection_status = "Failed"
+                st.session_state.jira_connection_msg = f"Auth Failed (HTTP {resp.status_code})"
+        except Exception as e:
+            st.session_state.jira_connection_status = "Failed"
+            st.session_state.jira_connection_msg = f"Connection Failed ({e})"
+
+    # Test Confluence Connection
+    csrv = st.session_state.conf_server
+    ctok = st.session_state.conf_token
+    if csrv and ctok:
+        try:
+            headers = {"Accept": "application/json"}
+            auth = None
+            token_clean = ctok.strip().removeprefix("Bearer ").strip()
+            if auth_method in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"]:
+                auth = (email.strip(), token_clean)
+            else:
+                headers["Authorization"] = f"Bearer {token_clean}"
+                
+            base_url = csrv.rstrip("/")
+            if "atlassian.net" in base_url and not base_url.endswith("/wiki"):
+                base_url = base_url + "/wiki"
+                
+            resp = requests.get(f"{base_url}/rest/api/content?limit=1", headers=headers, auth=auth, timeout=5)
+            if resp.status_code == 200:
+                st.session_state.conf_connection_status = "Success"
+                st.session_state.conf_connection_msg = "Connected successfully"
+            else:
+                st.session_state.conf_connection_status = "Failed"
+                st.session_state.conf_connection_msg = f"Auth Failed (HTTP {resp.status_code})"
+        except Exception as e:
+            st.session_state.conf_connection_status = "Failed"
+            st.session_state.conf_connection_msg = f"Connection Failed ({e})"
 
 # 1. Define the page objects first so they are globally accessible
 planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner", icon="🎯")
@@ -134,7 +235,7 @@ def show_home():
                 transition: all 0.2s ease-in-out !important;
                 margin-top: 15px !important;
                 width: fit-content !important;
-                height: 2.25rem !important; /* Force standard height matching other buttons */
+                height: 2.25rem !important;
                 box-sizing: border-box !important;
             }
             
@@ -170,7 +271,7 @@ def show_home():
                 line-height: 1 !important;
             }
             
-            /* Hide page link icon completely to match clean text style of other buttons */
+            /* Hide page link icon completely */
             div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] img,
             div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] svg,
             div[data-testid="column"]:has(.hub-card) [data-testid="stPageLink"] [data-testid="stIcon"],
@@ -215,7 +316,7 @@ def show_home():
     tab_tools, tab_integrations = st.tabs(["🛠️ Available Tools", "🔌 Centralized Integrations"])
 
     with tab_tools:
-        st.subheader("Available Tools")
+        st.subheader("🛠️ Available Tools")
         col1, col2, col3 = st.columns(3)
 
         with col1:
@@ -249,14 +350,37 @@ def show_home():
             st.page_link(release_notes_page, label="Open Release Notes", icon="📣")
 
     with tab_integrations:
-        st.subheader("🔌 Connection & Integrations Settings")
-        st.write("Configure your Jira and Confluence server details here. These settings are shared globally across all tools in the suite.")
+        st.subheader("🔌 Centralized Integrations")
+        st.write("Configure connection configurations for Jira and Confluence servers below.")
+
+        # Display current status in nice columns
+        stat_col1, stat_col2 = st.columns(2)
+        with stat_col1:
+            j_status = st.session_state.get("jira_connection_status", "Not checked")
+            j_msg = st.session_state.get("jira_connection_msg", "")
+            if j_status == "Success":
+                st.success(f"🟢 **Jira Connected**: {j_msg}")
+            elif j_status == "Failed":
+                st.error(f"🔴 **Jira Disconnected**: {j_msg}")
+            else:
+                st.warning(f"🟡 **Jira Integration**: {j_status}")
+        with stat_col2:
+            c_status = st.session_state.get("conf_connection_status", "Not checked")
+            c_msg = st.session_state.get("conf_connection_msg", "")
+            if c_status == "Success":
+                st.success(f"🟢 **Confluence Connected**: {c_msg}")
+            elif c_status == "Failed":
+                st.error(f"🔴 **Confluence Disconnected**: {c_msg}")
+            else:
+                st.warning(f"🟡 **Confluence Integration**: {c_status}")
+
+        st.markdown("---")
 
         col_jserv, col_jtok = st.columns(2)
         with col_jserv:
-            srv_in = st.text_input("Jira Server URL:", value=st.session_state.jira_server, key="central_jira_server")
+            srv_in = st.text_input("Jira Server Base URL:", value=st.session_state.jira_server, key="central_jira_server")
         with col_jtok:
-            tok_in = st.text_input("Jira API Token:", value=st.session_state.jira_token, type="password", key="central_jira_token")
+            tok_in = st.text_input("Jira Personal Access Token (PAT):", value=st.session_state.jira_token, type="password", key="central_jira_token")
 
         col_jauth, col_jmail = st.columns(2)
         with col_jauth:
@@ -288,8 +412,10 @@ def show_home():
         st.session_state.jira_email = mail_in
         st.session_state.conf_server = csrv_in
         st.session_state.conf_token = ctok_in
+        
+        save_credentials_to_env()
 
-        st.success("Integrations updated and saved in active session! ✅")
+        st.success("Integrations updated and saved centrally! ✅")
 
         st.markdown("<br/>", unsafe_allow_html=True)
         if st.button("🔌 Check Integration Status", use_container_width=True):
@@ -361,8 +487,6 @@ def show_home():
                 st.warning("⚠️ **Confluence not tested**: Server URL or token is empty.")
 
 
-
-
 # 3. Define the page listing for navigation
 home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
 
@@ -373,14 +497,39 @@ st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
 # Display live collaboration tunnel link in the sidebar
 st.sidebar.markdown("### 🤝 Live Collaboration")
 
-if "tunnel_enabled" not in st.session_state:
-    st.session_state.tunnel_enabled = False
+# Auto-detect tunnel URL from request headers if accessed via Cloudflare
+headers = {}
+try:
+    if hasattr(st, "context") and hasattr(st.context, "headers"):
+        headers = st.context.headers or {}
+    else:
+        from streamlit.web.server.websocket_headers import _get_websocket_headers
+        headers = _get_websocket_headers() or {}
+except Exception:
+    pass
+
+host = headers.get("Host", "")
+x_forwarded_host = headers.get("X-Forwarded-Host", "")
+tunnel_host = None
+if "trycloudflare.com" in host:
+    tunnel_host = host
+elif "trycloudflare.com" in x_forwarded_host:
+    tunnel_host = x_forwarded_host
+
+if tunnel_host:
+    detected_url = f"https://{tunnel_host}"
+    set_tunnel_url(detected_url)
 
 tunnel_url = get_tunnel_url()
 
+if tunnel_url:
+    st.session_state.tunnel_enabled = True
+
+if "tunnel_enabled" not in st.session_state:
+    st.session_state.tunnel_enabled = False
+
 if st.session_state.tunnel_enabled:
     if not tunnel_url:
-        from utils.tunnel import start_tunnel
         tunnel_url = start_tunnel(8501)
         
     if tunnel_url:
@@ -408,12 +557,9 @@ else:
     if tunnel_url:
         from utils.tunnel import stop_tunnel
         stop_tunnel()
-        
     st.sidebar.info("Cloudflare tunnel is disabled.")
     if st.sidebar.button("🚀 Start Collaboration Tunnel", use_container_width=True):
         st.session_state.tunnel_enabled = True
         st.rerun()
 
 pg.run()
-
-

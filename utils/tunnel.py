@@ -16,6 +16,12 @@ def get_tunnel_url():
     global _tunnel_url
     return _tunnel_url
 
+def set_tunnel_url(url):
+    """Sets the active tunnel URL manually (e.g. from sniffer headers)."""
+    global _tunnel_url
+    _tunnel_url = url
+
+
 def get_tunnel_error():
     """Returns any startup or runtime errors occurred, or None."""
     global _tunnel_error
