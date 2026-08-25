@@ -41,6 +41,8 @@ Before launching, configure your corporate server details:
    * `QUARTER_LABEL`: The label identifying the current quarter (defaults to `RC2_FB_18`).
    * `QUARTER_STATUS_TABLE_TITLE`: The title of the Epic progress status table.
    * `JIRA_VERSION_LINK_BASE`: The base project URL for version links in Release Notes.
+   * **Sprint KPIs Configs:** Set `JIRA_STORY_POINTS_FIELD`, `JIRA_SEVERITY_A_LABEL`, and `JIRA_STATUS_IN_PROGRESS` to match your Jira workflows. 
+   * **Confluence Publisher:** Configure `CONFLUENCE_SPACE`, `CONFLUENCE_PAGE` (for Sprint Reviews), and `CONFLUENCE_KPI_PAGE` (for KPIs) to automate wiki exports.
    > [!NOTE]
    > The `.env` file is secure and ignored by Git so that your passwords and personal tokens are never saved publicly.
 

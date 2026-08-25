@@ -132,6 +132,7 @@ if "jira_connection_status" not in st.session_state:
 planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner", icon="🎯")
 sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", icon="📋")
 release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
+sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
 
 # 2. Define the Home Page rendering function
 def show_home():
@@ -317,7 +318,7 @@ def show_home():
 
     with tab_tools:
         st.subheader("🛠️ Available Tools")
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             st.markdown("""
@@ -348,6 +349,16 @@ def show_home():
                 </div>
             """, unsafe_allow_html=True)
             st.page_link(release_notes_page, label="Open Release Notes", icon="📣")
+
+        with col4:
+            st.markdown("""
+                <div class="hub-card">
+                    <span class="hub-badge">ACTIVE 🚀</span>
+                    <h3>📊 Sprint KPIs</h3>
+                    <p>Calculate specific KPIs from Jira such as cycle times, committed vs achieved points, and releases.</p>
+                </div>
+            """, unsafe_allow_html=True)
+            st.page_link(sprint_kpis_page, label="Open Sprint KPIs", icon="📊")
 
     with tab_integrations:
         st.subheader("🔌 Centralized Integrations")
@@ -491,7 +502,7 @@ def show_home():
 home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
 
 # 4. Setup and run navigation
-pg = st.navigation([home_page, planner_page, sprint_review_page, release_notes_page])
+pg = st.navigation([home_page, planner_page, sprint_review_page, release_notes_page, sprint_kpis_page])
 st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
 
 # Display live collaboration tunnel link in the sidebar
