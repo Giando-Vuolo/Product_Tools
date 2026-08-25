@@ -2497,21 +2497,6 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 st.session_state.custom_tables[table_idx]["df"]["Select"] = False
                 save_sprint_review_shared()
 
-        # Subtabs for separating Overview, Outlook, and optional Custom Table editing
-        tabs_list = [
-            "🚀 Overview Dataset (What We Have Done)",
-            "🔮 Outlook Dataset (What We Will Do next)"
-        ]
-        for idx, table in enumerate(st.session_state.custom_tables):
-            # Use a friendly display title even if the stored title is blank
-            tab_display_title = table['title'].strip() if table['title'].strip() else f"Custom Table {idx + 1}"
-            tabs_list.append(f"📊 Custom: {tab_display_title}")
-            
-        tabs = st.tabs(tabs_list)
-        work_subtab_ov = tabs[0]
-        work_subtab_ot = tabs[1]
-        work_subtabs_ext = tabs[2:]
-        
         # Ensure 'Select' and 'Labels' columns are initialized
         if st.session_state.overview_df is not None:
             if 'Select' not in st.session_state.overview_df.columns:
@@ -2526,13 +2511,16 @@ elif st.session_state.active_tab == "✍️ Workbook":
 
         # The chosen order is used by every Sprint Review PDF table.
         label_sources = [df for df in [st.session_state.overview_df, st.session_state.outlook_df] if df is not None and "Labels" in df.columns]
-        available_labels = sorted({
+        found_labels = {
             label.strip()
             for df in label_sources
             for labels in df["Labels"].dropna()
             for label in str(labels).split(",")
             if label.strip()
-        }, key=str.lower)
+        }
+        preset_defaults = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
+        available_labels = sorted(list(found_labels.union(preset_defaults).union(set(st.session_state.get("sprint_review_label_order", [])))), key=str.lower)
+
         st.markdown("#### 🏷️ Sprint Review team order")
         st.caption("Select team labels in the presentation order. Matching items are grouped first in every Sprint Review PDF table; all other items follow afterwards.")
         if "sprint_review_label_order_input" not in st.session_state:
@@ -2547,6 +2535,22 @@ elif st.session_state.active_tab == "✍️ Workbook":
             placeholder="Choose labels in presentation order...",
             on_change=save_sprint_review_label_order
         )
+        st.divider()
+
+        # Subtabs for separating Overview, Outlook, and optional Custom Table editing
+        tabs_list = [
+            "🚀 Overview Dataset (What We Have Done)",
+            "🔮 Outlook Dataset (What We Will Do next)"
+        ]
+        for idx, table in enumerate(st.session_state.custom_tables):
+            # Use a friendly display title even if the stored title is blank
+            tab_display_title = table['title'].strip() if table['title'].strip() else f"Custom Table {idx + 1}"
+            tabs_list.append(f"📊 Custom: {tab_display_title}")
+            
+        tabs = st.tabs(tabs_list)
+        work_subtab_ov = tabs[0]
+        work_subtab_ot = tabs[1]
+        work_subtabs_ext = tabs[2:]
         
         # Overview Dataset Workspace
         with work_subtab_ov:
@@ -3040,17 +3044,32 @@ elif st.session_state.active_tab == "🎨 Branding":
         if os.path.exists(logo_dir):
             default_logos = [f for f in os.listdir(logo_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg'))]
             
-        selected_default_logo = None
+        if "sr_logo_preset" not in st.session_state:
+            st.session_state.sr_logo_preset = "None (Upload only or blank)"
+
         if default_logos:
             st.markdown("**Logo Preset Options**")
             logo_options = ["None (Upload only or blank)"] + default_logos
+            
+            logo_index = 0
+            if st.session_state.sr_logo_preset in logo_options:
+                logo_index = logo_options.index(st.session_state.sr_logo_preset)
+                
             selected_logo_opt = st.selectbox(
                 "Select a default Logo Preset from 'assets/logos/':",
                 options=logo_options,
+                index=logo_index,
+                key="sr_logo_preset_selector",
                 help="Add image files inside the 'assets/logos/' directory to populate this list dynamically"
             )
-            if selected_logo_opt != "None (Upload only or blank)":
-                selected_default_logo = os.path.join(logo_dir, selected_logo_opt)
+            
+            if selected_logo_opt != st.session_state.sr_logo_preset:
+                st.session_state.sr_logo_preset = selected_logo_opt
+                if selected_logo_opt != "None (Upload only or blank)":
+                    st.session_state.sr_logo_temp_path = os.path.join(logo_dir, selected_logo_opt)
+                else:
+                    st.session_state.sr_logo_temp_path = None
+                st.rerun()
                 
         # Brand Logo Image uploader
         logo_file = st.file_uploader(
@@ -3065,25 +3084,26 @@ elif st.session_state.active_tab == "🎨 Branding":
                 logo_temp = "sr_temp_logo.png"
                 logo_image.save(logo_temp)
                 st.session_state.sr_logo_temp_path = logo_temp
-                st.image(logo_image, caption="Preview of uploaded brand logo", width=150)
+                st.session_state.sr_logo_preset = "Uploaded Logo"
             except Exception as e:
                 st.error(f"Error processing upload image logo: {str(e)}")
-        else:
-            if selected_default_logo:
-                st.session_state.sr_logo_temp_path = selected_default_logo
-                try:
-                    default_img = PILImage.open(selected_default_logo)
-                    st.image(default_img, caption=f"Preview of logo preset: {os.path.basename(selected_default_logo)}", width=150)
-                except Exception as e:
-                    st.error(f"Error loading logo preset: {str(e)}")
-            else:
-                if st.session_state.sr_logo_temp_path == "sr_temp_logo.png":
-                    if os.path.exists("sr_temp_logo.png"):
+
+        # Active Logo Preview & Controls
+        if st.session_state.get("sr_logo_temp_path") and os.path.exists(st.session_state.sr_logo_temp_path):
+            try:
+                active_logo_img = PILImage.open(st.session_state.sr_logo_temp_path)
+                st.image(active_logo_img, caption=f"Active Brand Logo: {os.path.basename(st.session_state.sr_logo_temp_path)}", width=150)
+                if st.button("🗑️ Clear / Remove Logo", key="btn_clear_sr_logo"):
+                    if st.session_state.sr_logo_temp_path == "sr_temp_logo.png" and os.path.exists("sr_temp_logo.png"):
                         try:
                             os.remove("sr_temp_logo.png")
-                        except:
+                        except Exception:
                             pass
-                st.session_state.sr_logo_temp_path = None
+                    st.session_state.sr_logo_temp_path = None
+                    st.session_state.sr_logo_preset = "None (Upload only or blank)"
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error displaying brand logo preview: {str(e)}")
                 
         # Scan covers folder for presets
         cover_dir = "assets/covers"
@@ -3091,19 +3111,34 @@ elif st.session_state.active_tab == "🎨 Branding":
         if os.path.exists(cover_dir):
             default_covers = [f for f in os.listdir(cover_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg'))]
             
-        selected_default_cover = None
+        if "sr_cover_preset" not in st.session_state:
+            st.session_state.sr_cover_preset = "None (Upload only or blank)"
+
         if default_covers:
             st.markdown("**Cover Image Preset Options**")
             cover_options = ["None (Upload only or blank)"] + default_covers
+            
+            cover_index = 0
+            if st.session_state.sr_cover_preset in cover_options:
+                cover_index = cover_options.index(st.session_state.sr_cover_preset)
+
             selected_cover_opt = st.selectbox(
                 "Select a default Cover Preset from 'assets/covers/':",
                 options=cover_options,
+                index=cover_index,
+                key="sr_cover_preset_selector",
                 help="Add image files inside the 'assets/covers/' directory to populate this list dynamically"
             )
-            if selected_cover_opt != "None (Upload only or blank)":
-                selected_default_cover = os.path.join(cover_dir, selected_cover_opt)
+            
+            if selected_cover_opt != st.session_state.sr_cover_preset:
+                st.session_state.sr_cover_preset = selected_cover_opt
+                if selected_cover_opt != "None (Upload only or blank)":
+                    st.session_state.sr_cover_temp_path = os.path.join(cover_dir, selected_cover_opt)
+                else:
+                    st.session_state.sr_cover_temp_path = None
+                st.rerun()
                 
-        # Cover Page Hero Image uploader (NEW cover image requested uploader)
+        # Cover Page Hero Image uploader
         st.markdown("**Starting Page Hero / Cover Image**")
         cover_file = st.file_uploader(
             "Or upload a new Custom Starting Page Cover Image (PNG, JPEG):",
@@ -3117,25 +3152,26 @@ elif st.session_state.active_tab == "🎨 Branding":
                 cover_temp = "sr_temp_cover.png"
                 cover_image.save(cover_temp)
                 st.session_state.sr_cover_temp_path = cover_temp
-                st.image(cover_image, caption="Preview of uploaded cover image", width=180)
+                st.session_state.sr_cover_preset = "Uploaded Cover"
             except Exception as e:
                 st.error(f"Error processing cover image: {str(e)}")
-        else:
-            if selected_default_cover:
-                st.session_state.sr_cover_temp_path = selected_default_cover
-                try:
-                    default_cimg = PILImage.open(selected_default_cover)
-                    st.image(default_cimg, caption=f"Preview of cover preset: {os.path.basename(selected_default_cover)}", width=180)
-                except Exception as e:
-                    st.error(f"Error loading cover preset: {str(e)}")
-            else:
-                if st.session_state.sr_cover_temp_path == "sr_temp_cover.png":
-                    if os.path.exists("sr_temp_cover.png"):
+
+        # Active Cover Preview & Controls
+        if st.session_state.get("sr_cover_temp_path") and os.path.exists(st.session_state.sr_cover_temp_path):
+            try:
+                active_cover_img = PILImage.open(st.session_state.sr_cover_temp_path)
+                st.image(active_cover_img, caption=f"Active Cover Image: {os.path.basename(st.session_state.sr_cover_temp_path)}", width=180)
+                if st.button("🗑️ Clear / Remove Cover Image", key="btn_clear_sr_cover"):
+                    if st.session_state.sr_cover_temp_path == "sr_temp_cover.png" and os.path.exists("sr_temp_cover.png"):
                         try:
                             os.remove("sr_temp_cover.png")
-                        except:
+                        except Exception:
                             pass
-                st.session_state.sr_cover_temp_path = None
+                    st.session_state.sr_cover_temp_path = None
+                    st.session_state.sr_cover_preset = "None (Upload only or blank)"
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error displaying cover image preview: {str(e)}")
 
         # Document Export File Names Configuration
         st.markdown("**📄 Document Export File Names Base**")

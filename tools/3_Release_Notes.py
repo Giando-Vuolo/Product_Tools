@@ -2466,17 +2466,32 @@ elif st.session_state.active_tab == "🎨 Branding":
         if os.path.exists(logo_dir):
             default_logos = [f for f in os.listdir(logo_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg'))]
             
-        selected_default_logo = None
+        if "rn_logo_preset" not in st.session_state:
+            st.session_state.rn_logo_preset = "None (Upload only or blank)"
+
         if default_logos:
             st.markdown("**Logo Preset Options**")
             logo_options = ["None (Upload only or blank)"] + default_logos
+            
+            logo_index = 0
+            if st.session_state.rn_logo_preset in logo_options:
+                logo_index = logo_options.index(st.session_state.rn_logo_preset)
+
             selected_logo_opt = st.selectbox(
                 "Select a default Logo Preset from 'assets/logos/':",
                 options=logo_options,
+                index=logo_index,
+                key="rn_logo_preset_selector",
                 help="Add image files inside the 'assets/logos/' directory to populate this list dynamically"
             )
-            if selected_logo_opt != "None (Upload only or blank)":
-                selected_default_logo = os.path.join(logo_dir, selected_logo_opt)
+            
+            if selected_logo_opt != st.session_state.rn_logo_preset:
+                st.session_state.rn_logo_preset = selected_logo_opt
+                if selected_logo_opt != "None (Upload only or blank)":
+                    st.session_state.rn_logo_temp_path = os.path.join(logo_dir, selected_logo_opt)
+                else:
+                    st.session_state.rn_logo_temp_path = None
+                st.rerun()
                 
         # Brand Logo Image uploader
         logo_file = st.file_uploader(
@@ -2491,25 +2506,26 @@ elif st.session_state.active_tab == "🎨 Branding":
                 logo_temp = "rn_temp_logo.png"
                 logo_image.save(logo_temp)
                 st.session_state.rn_logo_temp_path = logo_temp
-                st.image(logo_image, caption="Preview of uploaded brand logo", width=150)
+                st.session_state.rn_logo_preset = "Uploaded Logo"
             except Exception as e:
                 st.error(f"Error processing upload image logo: {str(e)}")
-        else:
-            if selected_default_logo:
-                st.session_state.rn_logo_temp_path = selected_default_logo
-                try:
-                    default_img = PILImage.open(selected_default_logo)
-                    st.image(default_img, caption=f"Preview of logo preset: {os.path.basename(selected_default_logo)}", width=150)
-                except Exception as e:
-                    st.error(f"Error loading logo preset: {str(e)}")
-            else:
-                if st.session_state.rn_logo_temp_path == "rn_temp_logo.png":
-                    if os.path.exists("rn_temp_logo.png"):
+
+        # Active Logo Preview & Controls
+        if st.session_state.get("rn_logo_temp_path") and os.path.exists(st.session_state.rn_logo_temp_path):
+            try:
+                active_logo_img = PILImage.open(st.session_state.rn_logo_temp_path)
+                st.image(active_logo_img, caption=f"Active Brand Logo: {os.path.basename(st.session_state.rn_logo_temp_path)}", width=150)
+                if st.button("🗑️ Clear / Remove Logo", key="btn_clear_rn_logo"):
+                    if st.session_state.rn_logo_temp_path == "rn_temp_logo.png" and os.path.exists("rn_temp_logo.png"):
                         try:
                             os.remove("rn_temp_logo.png")
-                        except:
+                        except Exception:
                             pass
-                st.session_state.rn_logo_temp_path = None
+                    st.session_state.rn_logo_temp_path = None
+                    st.session_state.rn_logo_preset = "None (Upload only or blank)"
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error displaying brand logo preview: {str(e)}")
                 
         # Scan covers folder for presets
         cover_dir = "assets/covers"
@@ -2517,19 +2533,34 @@ elif st.session_state.active_tab == "🎨 Branding":
         if os.path.exists(cover_dir):
             default_covers = [f for f in os.listdir(cover_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg'))]
             
-        selected_default_cover = None
+        if "rn_cover_preset" not in st.session_state:
+            st.session_state.rn_cover_preset = "None (Upload only or blank)"
+
         if default_covers:
             st.markdown("**Cover Image Preset Options**")
             cover_options = ["None (Upload only or blank)"] + default_covers
+            
+            cover_index = 0
+            if st.session_state.rn_cover_preset in cover_options:
+                cover_index = cover_options.index(st.session_state.rn_cover_preset)
+
             selected_cover_opt = st.selectbox(
                 "Select a default Cover Preset from 'assets/covers/':",
                 options=cover_options,
+                index=cover_index,
+                key="rn_cover_preset_selector",
                 help="Add image files inside the 'assets/covers/' directory to populate this list dynamically"
             )
-            if selected_cover_opt != "None (Upload only or blank)":
-                selected_default_cover = os.path.join(cover_dir, selected_cover_opt)
+            
+            if selected_cover_opt != st.session_state.rn_cover_preset:
+                st.session_state.rn_cover_preset = selected_cover_opt
+                if selected_cover_opt != "None (Upload only or blank)":
+                    st.session_state.rn_cover_temp_path = os.path.join(cover_dir, selected_cover_opt)
+                else:
+                    st.session_state.rn_cover_temp_path = None
+                st.rerun()
                 
-        # Cover Page Hero Image uploader (NEW cover image requested uploader)
+        # Cover Page Hero Image uploader
         st.markdown("**Starting Page Hero / Cover Image**")
         cover_file = st.file_uploader(
             "Or upload a new Custom Starting Page Cover Image (PNG, JPEG):",
@@ -2543,25 +2574,26 @@ elif st.session_state.active_tab == "🎨 Branding":
                 cover_temp = "rn_temp_cover.png"
                 cover_image.save(cover_temp)
                 st.session_state.rn_cover_temp_path = cover_temp
-                st.image(cover_image, caption="Preview of uploaded cover image", width=180)
+                st.session_state.rn_cover_preset = "Uploaded Cover"
             except Exception as e:
                 st.error(f"Error processing cover image: {str(e)}")
-        else:
-            if selected_default_cover:
-                st.session_state.rn_cover_temp_path = selected_default_cover
-                try:
-                    default_cimg = PILImage.open(selected_default_cover)
-                    st.image(default_cimg, caption=f"Preview of cover preset: {os.path.basename(selected_default_cover)}", width=180)
-                except Exception as e:
-                    st.error(f"Error loading cover preset: {str(e)}")
-            else:
-                if st.session_state.rn_cover_temp_path == "rn_temp_cover.png":
-                    if os.path.exists("rn_temp_cover.png"):
+
+        # Active Cover Preview & Controls
+        if st.session_state.get("rn_cover_temp_path") and os.path.exists(st.session_state.rn_cover_temp_path):
+            try:
+                active_cover_img = PILImage.open(st.session_state.rn_cover_temp_path)
+                st.image(active_cover_img, caption=f"Active Cover Image: {os.path.basename(st.session_state.rn_cover_temp_path)}", width=180)
+                if st.button("🗑️ Clear / Remove Cover Image", key="btn_clear_rn_cover"):
+                    if st.session_state.rn_cover_temp_path == "rn_temp_cover.png" and os.path.exists("rn_temp_cover.png"):
                         try:
                             os.remove("rn_temp_cover.png")
-                        except:
+                        except Exception:
                             pass
-                st.session_state.rn_cover_temp_path = None
+                    st.session_state.rn_cover_temp_path = None
+                    st.session_state.rn_cover_preset = "None (Upload only or blank)"
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error displaying cover image preview: {str(e)}")
  
         # Document Export File Names Configuration (NEW requested configuration)
         st.markdown("**📄 Document Export File Names Base**")

@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import os
 import re
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, landscape
@@ -495,6 +496,45 @@ def format_status_with_emoji(status_str):
     else:
         return '<font color="#3B82F6">●</font>'
 
+from reportlab.graphics.shapes import Drawing, Line, PolyLine, Rect, String
+
+def get_progress_bar_drawing(pct_val, primary_color, width=48, height=18):
+    if pct_val is None:
+        return None
+    val_str = str(pct_val).strip()
+    if not val_str or val_str == "-":
+        return None
+        
+    try:
+        num_str = val_str.replace("%", "").strip()
+        num = float(num_str)
+        if 0.0 <= num <= 1.0 and "." in num_str:
+            pct = int(round(num * 100))
+        else:
+            pct = int(round(num))
+        pct = max(0, min(100, pct))
+    except Exception:
+        return None
+
+    d = Drawing(width, height)
+    
+    # 1. Percentage text above the bar
+    txt = String(width / 2.0, 10.0, f"{pct}%", fontName="Helvetica-Bold", fontSize=7, textAnchor="middle", fillColor=colors.HexColor("#1E293B"))
+    d.add(txt)
+    
+    # 2. Sleek, slim progress bar below (height 5pt, y 2pt)
+    bg_rect = Rect(0, 2, width, 5, rx=2.5, ry=2.5, fillColor=colors.HexColor("#E2E8F0"), strokeColor=None)
+    d.add(bg_rect)
+    
+    fill_w = (pct / 100.0) * width
+    if fill_w > 0:
+        bar_color = colors.HexColor("#22C55E") if pct == 100 else primary_color
+        fill_w = max(fill_w, 3)
+        fg_rect = Rect(0, 2, fill_w, 5, rx=2.5, ry=2.5, fillColor=bar_color, strokeColor=None)
+        d.add(fg_rect)
+        
+    return d
+
 # Helper function to dynamically build and format an uploaded custom table (non-Jira) in both landscape and portrait PDFs
 def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=False):
     if df is None or df.empty:
@@ -519,6 +559,12 @@ def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=F
         leading=font_size_header + 3,
         textColor=colors.white
     )
+
+    cell_header_center_style = ParagraphStyle(
+        'ExtraHeaderCenter',
+        parent=cell_header_style,
+        alignment=1 # Center
+    )
     
     cell_body_style = ParagraphStyle(
         'ExtraBody',
@@ -528,29 +574,98 @@ def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=F
         leading=font_size_body + 3,
         textColor=colors.HexColor("#1E293B")
     )
+
+    cell_body_center_style = ParagraphStyle(
+        'ExtraBodyCenter',
+        parent=cell_body_style,
+        alignment=1 # Center
+    )
+
+    cell_body_bold_style = ParagraphStyle(
+        'ExtraBodyBold',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=font_size_body,
+        leading=font_size_body + 3,
+        textColor=colors.HexColor("#1E293B")
+    )
     
     table_data = []
     
     # Column names as header
-    header_row = [Paragraph(str(col), cell_header_style) for col in df.columns]
+    header_row = []
+    status_col_idx = None
+    completion_col_idx = None
+    for idx, col in enumerate(df.columns):
+        c_clean = str(col).strip().lower()
+        if c_clean == "status":
+            status_col_idx = idx
+            header_row.append(Paragraph(str(col), cell_header_center_style))
+        elif c_clean == "completion":
+            completion_col_idx = idx
+            header_row.append(Paragraph(str(col), cell_header_center_style))
+        else:
+            header_row.append(Paragraph(str(col), cell_header_style))
     table_data.append(header_row)
     
     # Data rows
     for _, row in df.iterrows():
-        row_data = [Paragraph(str(val), cell_body_style) for val in row]
+        row_data = []
+        for col in df.columns:
+            val = row[col]
+            c_clean = str(col).strip().lower()
+            if c_clean == "status":
+                row_data.append(Paragraph(format_status_with_emoji(str(val) if pd.notna(val) else ""), cell_body_center_style))
+            elif c_clean == "completion":
+                bar_drawing = get_progress_bar_drawing(val, primary_color, width=48 if is_landscape else 40, height=18)
+                if bar_drawing:
+                    row_data.append(bar_drawing)
+                else:
+                    row_data.append(Paragraph(str(val) if pd.notna(val) and str(val).strip() != "" else "-", cell_body_center_style))
+            elif c_clean in ["key", "version"]:
+                row_data.append(Paragraph(str(val) if pd.notna(val) else "", cell_body_bold_style))
+            else:
+                row_data.append(Paragraph(str(val) if pd.notna(val) else "", cell_body_style))
         table_data.append(row_data)
         
     # Compute columns widths dynamically to fill the page printable width
     total_width = 684 if is_landscape else 504
     num_cols = len(df.columns)
-    col_widths = [total_width / num_cols] * num_cols
+    
+    if ("Status" in df.columns or "Completion" in df.columns) and num_cols > 2:
+        col_widths = []
+        fixed_width_total = 0
+        flexible_cols = 0
+        for col in df.columns:
+            c_name = str(col).strip().lower()
+            if c_name == "status":
+                col_widths.append(50 if is_landscape else 45)
+                fixed_width_total += (50 if is_landscape else 45)
+            elif c_name == "completion":
+                col_widths.append(65 if is_landscape else 55)
+                fixed_width_total += (65 if is_landscape else 55)
+            elif c_name == "key":
+                col_widths.append(85 if is_landscape else 75)
+                fixed_width_total += (85 if is_landscape else 75)
+            elif c_name == "team":
+                col_widths.append(95 if is_landscape else 80)
+                fixed_width_total += (95 if is_landscape else 80)
+            else:
+                col_widths.append(None)
+                flexible_cols += 1
+        
+        rem_width = max(total_width - fixed_width_total, 100)
+        per_flex = rem_width / max(flexible_cols, 1)
+        col_widths = [w if w is not None else per_flex for w in col_widths]
+    else:
+        col_widths = [total_width / num_cols] * num_cols
     
     extra_table = Table(
         table_data,
         colWidths=col_widths
     )
     
-    extra_table.setStyle(TableStyle([
+    table_styles_list = [
         ('BACKGROUND', (0, 0), (-1, 0), primary_color),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
@@ -561,7 +676,13 @@ def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=F
         ('RIGHTPADDING', (0, 0), (-1, -1), 8),
         ('GRID', (0, 0), (-1, -1), 0.8 if is_landscape else 0.5, colors.HexColor("#E2E8F0") if is_landscape else colors.HexColor("#CBD5E1")),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-    ]))
+    ]
+    if status_col_idx is not None:
+        table_styles_list.append(('ALIGN', (status_col_idx, 0), (status_col_idx, -1), 'CENTER'))
+    if completion_col_idx is not None:
+        table_styles_list.append(('ALIGN', (completion_col_idx, 0), (completion_col_idx, -1), 'CENTER'))
+        
+    extra_table.setStyle(TableStyle(table_styles_list))
     
     block_elements.append(extra_table)
     block_elements.append(Spacer(1, 15))
