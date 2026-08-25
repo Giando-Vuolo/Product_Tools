@@ -97,7 +97,11 @@ def sort_items_by_label_priority(df, secondary_columns):
 
     selected_labels = st.session_state.get("sprint_review_label_order", [])
     if not selected_labels:
-        selected_labels = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
+        env_labels = os.getenv("TEAM_LABELS", "")
+        if env_labels:
+            selected_labels = [l.strip() for l in env_labels.split(",") if l.strip()]
+        else:
+            selected_labels = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
         
     if "Labels" not in df.columns:
         return df.sort_values(secondary_columns, kind="stable")
@@ -118,7 +122,11 @@ def get_team_label(labels):
     """Return the first selected team label assigned to an item."""
     selected_labels = st.session_state.get("sprint_review_label_order", [])
     if not selected_labels:
-        selected_labels = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
+        env_labels = os.getenv("TEAM_LABELS", "")
+        if env_labels:
+            selected_labels = [l.strip() for l in env_labels.split(",") if l.strip()]
+        else:
+            selected_labels = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
     item_labels = {label.strip().lower() for label in re.split(r'[\s,]+', str(labels)) if label.strip()}
     return next((label for label in selected_labels if label.strip().lower() in item_labels), "-")
 
@@ -165,23 +173,27 @@ def draw_background_landscape(canvas_obj, doc_obj):
     canvas_obj.setFillColor(primary_color)
     canvas_obj.rect(0, 0, 8, height, stroke=0, fill=1)
     
+    # Solid vertical branding accent band on the far right edge
+    canvas_obj.setFillColor(primary_color)
+    canvas_obj.rect(width - 8, 0, 8, height, stroke=0, fill=1)
+    
     if doc_obj.page == 1:
         # Cover page background frame:
         # Top banner of primary color
         canvas_obj.setFillColor(primary_color)
-        canvas_obj.rect(8, height - 20, width - 8, 20, stroke=0, fill=1)
+        canvas_obj.rect(8, height - 20, width - 16, 20, stroke=0, fill=1)
         
         # Dark gray bottom bar for footer metadata
         canvas_obj.setFillColor(colors.HexColor("#E2E8F0"))
-        canvas_obj.rect(8, 0, width - 8, 30, stroke=0, fill=1)
+        canvas_obj.rect(8, 0, width - 16, 30, stroke=0, fill=1)
     else:
         # Content slide top header banner background
         canvas_obj.setFillColor(colors.white)
-        canvas_obj.rect(8, height - 48, width - 8, 48, stroke=0, fill=1)
+        canvas_obj.rect(54, height - 48, width - 108, 48, stroke=0, fill=1)
         
         canvas_obj.setStrokeColor(colors.HexColor("#E2E8F0"))
         canvas_obj.setLineWidth(1)
-        canvas_obj.line(8, height - 48, width, height - 48)
+        canvas_obj.line(54, height - 48, width - 54, height - 48)
         
     canvas_obj.restoreState()
 
@@ -357,7 +369,7 @@ def build_demos_pdf_block(df, primary_color, styles, sub_section_style=None, is_
     for _, row in demo_items.iterrows():
         presenter = str(row['Assignee']) if pd.notna(row['Assignee']) and str(row['Assignee']).strip() != "" else "Unassigned"
         table_data.append([
-            Paragraph(str(row['Key']), cell_body_bold_style),
+            get_jira_link_paragraph(row['Key'], cell_body_bold_style),
             Paragraph(str(row['Summary']), cell_body_style),
             Paragraph(str(row['Epic']), cell_body_style),
             Paragraph(presenter, cell_body_bold_style),
@@ -477,6 +489,15 @@ def build_next_releases_pdf_block(df, primary_color, styles, is_landscape=False)
     block_elements.append(Spacer(1, 10))
     
     return block_elements
+
+def get_jira_link_paragraph(ticket_key, style):
+    jira_server = st.session_state.get('jira_server', '').rstrip('/')
+    key_str = str(ticket_key).strip() if pd.notna(ticket_key) else ""
+    if jira_server and key_str and key_str != "-":
+        link_url = f"{jira_server}/browse/{key_str}"
+        content = f'<link href="{link_url}"><font color="#3B82F6"><u>{key_str}</u></font></link>'
+        return Paragraph(content, style)
+    return Paragraph(key_str, style)
 
 # Helper function to map Jira status strings to clean color-coded status bullets (PDF safe)
 def format_status_with_emoji(status_str):
@@ -622,7 +643,9 @@ def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=F
                     row_data.append(bar_drawing)
                 else:
                     row_data.append(Paragraph(str(val) if pd.notna(val) and str(val).strip() != "" else "-", cell_body_center_style))
-            elif c_clean in ["key", "version"]:
+            elif c_clean == "key":
+                row_data.append(get_jira_link_paragraph(val, cell_body_bold_style))
+            elif c_clean == "version":
                 row_data.append(Paragraph(str(val) if pd.notna(val) else "", cell_body_bold_style))
             else:
                 row_data.append(Paragraph(str(val) if pd.notna(val) else "", cell_body_style))

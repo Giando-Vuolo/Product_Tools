@@ -27,7 +27,7 @@ from utils.pdf_helpers import (
     SmartKeepTogether, hex_to_reportlab_color, convert_markdown_to_pdf_rich_text,
     split_bugs_and_topics, sort_items_by_label_priority, get_team_label, sort_items_by_type_and_epic,
     draw_background_landscape, NumberedCanvas, build_demos_pdf_block, build_next_releases_pdf_block,
-    format_status_with_emoji, build_custom_extra_table_pdf_block, get_arrow_drawing
+    format_status_with_emoji, build_custom_extra_table_pdf_block, get_arrow_drawing, get_jira_link_paragraph
 )
 
 
@@ -391,8 +391,13 @@ if 'extra_table_title' not in st.session_state:
     st.session_state.extra_table_title = ""
 if 'custom_tables' not in st.session_state:
     st.session_state.custom_tables = []
+
 if 'sprint_review_label_order' not in st.session_state:
-    st.session_state.sprint_review_label_order = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
+    env_labels = os.getenv("TEAM_LABELS", "")
+    if env_labels:
+        st.session_state.sprint_review_label_order = [l.strip() for l in env_labels.split(",") if l.strip()]
+    else:
+        st.session_state.sprint_review_label_order = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
 
 # ---------------------------------------------------------
 # Shared Collaboration Sync Logic
@@ -1492,7 +1497,7 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                     
                 table_data.append([
                     epic_cell,
-                    Paragraph(str(row['Key']), cell_body_bold_style),
+                    get_jira_link_paragraph(row['Key'], cell_body_bold_style),
                     Paragraph(str(row['Summary']), cell_body_style),
                     Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
                     Paragraph(fv_val, cell_body_style),
@@ -1563,7 +1568,7 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                     
                 bug_data.append([
                     epic_cell,
-                    Paragraph(str(row['Key']), cell_body_bold_style),
+                    get_jira_link_paragraph(row['Key'], cell_body_bold_style),
                     Paragraph(str(row['Summary']), cell_body_style),
                     Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
                     Paragraph(fv_val, cell_body_style),
@@ -1699,7 +1704,7 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                     
                 table_data_outlook.append([
                     epic_cell,
-                    Paragraph(str(row['Key']), cell_body_bold_style),
+                    get_jira_link_paragraph(row['Key'], cell_body_bold_style),
                     Paragraph(str(row['Summary']), cell_body_style),
                     Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
                     Paragraph(fv_val, cell_body_style),
@@ -1770,7 +1775,7 @@ def build_sprint_review_pdf(overview_df, outlook_df):
                     
                 bug_data_outlook.append([
                     epic_cell,
-                    Paragraph(str(row['Key']), cell_body_bold_style),
+                    get_jira_link_paragraph(row['Key'], cell_body_bold_style),
                     Paragraph(str(row['Summary']), cell_body_style),
                     Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
                     Paragraph(fv_val, cell_body_style),
@@ -2485,6 +2490,16 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 st.session_state.outlook_df["Select"] = False
                 save_sprint_review_shared()
 
+        def reset_ov_filters():
+            st.session_state.sort_ov_col = "🔍 Sort by..."
+            st.session_state.sort_ov_dir = "Ascending"
+            st.session_state.filter_ov_label = ""
+
+        def reset_ot_filters():
+            st.session_state.sort_ot_col = "🔍 Sort by..."
+            st.session_state.sort_ot_dir = "Ascending"
+            st.session_state.filter_ot_label = ""
+
         def trigger_sort_ext(table_idx):
             col = st.session_state.get(f"sort_ext_{table_idx}_col", "🔍 Sort by...")
             direction = st.session_state.get(f"sort_ext_{table_idx}_dir", "Ascending")
@@ -2518,7 +2533,12 @@ elif st.session_state.active_tab == "✍️ Workbook":
             for label in str(labels).split(",")
             if label.strip()
         }
-        preset_defaults = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
+        import os
+        env_labels = os.getenv("TEAM_LABELS", "")
+        if env_labels:
+            preset_defaults = [l.strip() for l in env_labels.split(",") if l.strip()]
+        else:
+            preset_defaults = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
         available_labels = sorted(list(found_labels.union(preset_defaults).union(set(st.session_state.get("sprint_review_label_order", [])))), key=str.lower)
 
         st.markdown("#### 🏷️ Sprint Review team order")
@@ -2581,17 +2601,19 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 has_selected_ov = check_any_selected("overview_df", "editor_ov_refined", list(st.session_state.overview_df.index))
                 
                 # Sorting & Filtering controls
-                sc_col1, sc_col2, sc_col3 = st.columns([4.0, 4.0, 4.0])
+                sc_col1, sc_col2, sc_col3, sc_col4 = st.columns([3.5, 3.5, 3.5, 1.5])
                 with sc_col1:
                     sort_col = st.selectbox("Sort by:", ["🔍 Sort by...", "Key", "Epic", "Status", "Type", "Fix Version", "Labels"], key="sort_ov_col", label_visibility="collapsed", on_change=trigger_sort_ov)
                 with sc_col2:
                     sort_dir = st.selectbox("Order:", ["Ascending", "Descending"], key="sort_ov_dir", label_visibility="collapsed", on_change=trigger_sort_ov)
                 with sc_col3:
                     filter_label = st.text_input("Filter by Label:", key="filter_ov_label", placeholder="🔍 Filter by label...", label_visibility="collapsed")
+                with sc_col4:
+                    st.button("🔄 Reset", key="btn_reset_ov", use_container_width=True, help="Restore default team order", on_click=reset_ov_filters)
   
                 # Apply filter to display
                 display_df = st.session_state.overview_df
-                if st.session_state.get("sprint_review_label_order", []):
+                if st.session_state.get("sprint_review_label_order", []) and st.session_state.get("sort_ov_col", "🔍 Sort by...") == "🔍 Sort by...":
                     display_df = sort_items_by_type_and_epic(display_df)
                     st.caption("Previewing the Sprint Review team order. This view does not change the saved workbook order.")
                 if "Labels" in display_df.columns and filter_label.strip() != "":
@@ -2711,17 +2733,19 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 }
                 
                 # Sorting & Filtering controls
-                sc_col1, sc_col2, sc_col3 = st.columns([4.0, 4.0, 4.0])
+                sc_col1, sc_col2, sc_col3, sc_col4 = st.columns([3.5, 3.5, 3.5, 1.5])
                 with sc_col1:
                     sort_col = st.selectbox("Sort by:", ["🔍 Sort by...", "Key", "Epic", "Status", "Type", "Fix Version", "Labels"], key="sort_ot_col", label_visibility="collapsed", on_change=trigger_sort_ot)
                 with sc_col2:
                     sort_dir = st.selectbox("Order:", ["Ascending", "Descending"], key="sort_ot_dir", label_visibility="collapsed", on_change=trigger_sort_ot)
                 with sc_col3:
                     filter_label_ot = st.text_input("Filter by Label:", key="filter_ot_label", placeholder="🔍 Filter by label...", label_visibility="collapsed")
+                with sc_col4:
+                    st.button("🔄 Reset", key="btn_reset_ot", use_container_width=True, help="Restore default team order", on_click=reset_ot_filters)
    
                 # Apply filter to display
                 display_df_ot = st.session_state.outlook_df
-                if display_df_ot is not None and st.session_state.get("sprint_review_label_order", []):
+                if display_df_ot is not None and st.session_state.get("sprint_review_label_order", []) and st.session_state.get("sort_ot_col", "🔍 Sort by...") == "🔍 Sort by...":
                     display_df_ot = sort_items_by_type_and_epic(display_df_ot)
                     st.caption("Previewing the Sprint Review team order. This view does not change the saved workbook order.")
                 if display_df_ot is not None and "Labels" in display_df_ot.columns and filter_label_ot.strip() != "":
