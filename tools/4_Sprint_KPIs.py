@@ -411,15 +411,23 @@ def fetch_sprint_kpi_dataset():
                     pass
             releases_count = len(released_version_ids)
                             
-        # Now fetch global open bugs for the projects
+        # Now fetch open bugs for the projects that were open during the sprint date range
         global_open_bugs = 0
         global_critical_bugs = 0
         search_url = f"{server.rstrip('/')}/rest/api/2/search"
         
         projects_jql = ", ".join([f'"{pk}"' for pk in project_keys])
         
-        # Query 1: All Open Sev A + Sev B Bugs
-        jql_all_bugs = f'project in ({projects_jql}) AND issuetype = "Bug" AND resolution is EMPTY AND labels in ("{sev_a_label}", "{sev_b_label}")'
+        if sprint_start is not None and sprint_end is not None and pd.notna(sprint_start) and pd.notna(sprint_end):
+            sprint_start_str = sprint_start.strftime('%Y-%m-%d %H:%M')
+            sprint_end_str = sprint_end.strftime('%Y-%m-%d %H:%M')
+            jql_all_bugs = f'project in ({projects_jql}) AND issuetype = "Bug" AND labels in ("{sev_a_label}", "{sev_b_label}") AND created <= "{sprint_end_str}" AND (resolution is EMPTY OR resolutiondate >= "{sprint_start_str}")'
+            jql_crit_bugs = f'project in ({projects_jql}) AND issuetype = "Bug" AND labels = "{sev_a_label}" AND created <= "{sprint_end_str}" AND (resolution is EMPTY OR resolutiondate >= "{sprint_start_str}")'
+        else:
+            jql_all_bugs = f'project in ({projects_jql}) AND issuetype = "Bug" AND resolution is EMPTY AND labels in ("{sev_a_label}", "{sev_b_label}")'
+            jql_crit_bugs = f'project in ({projects_jql}) AND issuetype = "Bug" AND resolution is EMPTY AND labels = "{sev_a_label}"'
+
+        # Query 1: All Open Sev A + Sev B Bugs during sprint
         params_all_bugs = {"jql": jql_all_bugs, "maxResults": 0}
         try:
             resp_all = requests.get(search_url, headers=headers, params=params_all_bugs, auth=auth, timeout=10) if auth else requests.get(search_url, headers=headers, params=params_all_bugs, timeout=10)
@@ -430,8 +438,7 @@ def fetch_sprint_kpi_dataset():
         except Exception as e:
             st.session_state.kpi_error += f"\nWarning: Query 1 Exception: {str(e)}"
             
-        # Query 2: All Critical Open Sev A Bugs
-        jql_crit_bugs = f'project in ({projects_jql}) AND issuetype = "Bug" AND resolution is EMPTY AND labels = "{sev_a_label}"'
+        # Query 2: All Critical Open Sev A Bugs during sprint
         params_crit_bugs = {"jql": jql_crit_bugs, "maxResults": 0}
         try:
             resp_crit = requests.get(search_url, headers=headers, params=params_crit_bugs, auth=auth, timeout=10) if auth else requests.get(search_url, headers=headers, params=params_crit_bugs, timeout=10)
@@ -461,6 +468,251 @@ def fetch_sprint_kpi_dataset():
         st.session_state.kpi_error = f"Exception during fetch: {e}\n{traceback.format_exc()}"
         st.session_state.kpi_loading = False
 
+def upload_confluence_attachment(server_url, auth, headers, page_id, file_path, file_name):
+    base_url = server_url.rstrip("/")
+    if "atlassian.net" in base_url and not base_url.endswith("/wiki"):
+        base_url = base_url + "/wiki"
+
+    upload_headers = {
+        "Accept": "application/json",
+        "X-Atlassian-Token": "no-check"
+    }
+    if headers and "Authorization" in headers:
+        upload_headers["Authorization"] = headers["Authorization"]
+
+    # Check if attachment already exists
+    check_url = f"{base_url}/rest/api/content/{page_id}/child/attachment"
+    params = {"filename": file_name}
+    
+    try:
+        resp = requests.get(check_url, headers=upload_headers, params=params, auth=auth, timeout=15)
+        if resp.status_code == 200:
+            results = resp.json().get("results", [])
+            if results:
+                attachment_id = results[0]["id"]
+                # Update existing attachment
+                update_url = f"{base_url}/rest/api/content/{page_id}/child/attachment/{attachment_id}/data"
+                with open(file_path, "rb") as f:
+                    files = {"file": (file_name, f, "image/png")}
+                    u_resp = requests.post(update_url, headers=upload_headers, files=files, auth=auth, timeout=15)
+                    if u_resp.status_code != 200:
+                        raise Exception(f"Failed to update attachment {file_name} ({u_resp.status_code}): {u_resp.text}")
+                return
+    except Exception as e:
+        # Fall back to new upload if check or update failed
+        pass
+
+    # Create new attachment
+    create_url = f"{base_url}/rest/api/content/{page_id}/child/attachment"
+    with open(file_path, "rb") as f:
+        files = {"file": (file_name, f, "image/png")}
+        c_resp = requests.post(create_url, headers=upload_headers, files=files, auth=auth, timeout=15)
+        if c_resp.status_code not in (200, 201):
+            raise Exception(f"Failed to upload attachment {file_name} ({c_resp.status_code}): {c_resp.text}")
+
+def sort_df_chronologically(df, sprint_col):
+    if df.empty:
+        return df
+    # Try to sort by sprint number
+    sprint_nums = []
+    for val in df[sprint_col].astype(str):
+        match = re.search(r'\d+', val)
+        if match:
+            sprint_nums.append(int(match.group()))
+        else:
+            sprint_nums.append(None)
+    if all(x is not None for x in sprint_nums):
+        df_copy = df.copy()
+        df_copy["_sort_key"] = sprint_nums
+        return df_copy.sort_values(by="_sort_key", ascending=True).drop(columns=["_sort_key"]).reset_index(drop=True)
+        
+    # Try to sort by date
+    date_col = None
+    for col in df.columns:
+        if "date" in col.lower():
+            date_col = col
+            break
+    if date_col:
+        dates = []
+        for val in df[date_col].astype(str):
+            match = re.search(r'\d{4}-\d{2}-\d{2}', val)
+            if match:
+                dates.append(pd.to_datetime(match.group()))
+            else:
+                dates.append(pd.NaT)
+        if not all(pd.isna(x) for x in dates):
+            df_copy = df.copy()
+            df_copy["_sort_key"] = dates
+            return df_copy.sort_values(by="_sort_key", ascending=True).drop(columns=["_sort_key"]).reset_index(drop=True)
+    return df.reset_index(drop=True)
+
+def generate_and_save_kpi_charts(df_hist):
+    if df_hist is None or df_hist.empty:
+        return []
+
+    import altair as alt
+    import pandas as pd
+    
+    df_plot = df_hist.copy()
+
+    # Determine sprint column label for X axis
+    sprint_col = None
+    for pattern in ["sprint name", "sprint", "target dates"]:
+        for c in df_plot.columns:
+            if pattern in c.lower():
+                sprint_col = c
+                break
+        if sprint_col:
+            break
+    if not sprint_col:
+        sprint_col = df_plot.columns[0]
+
+    def find_column(df_target, patterns):
+        cols = list(df_target.columns)
+        for p in patterns:
+            p_lower = p.lower()
+            for c in cols:
+                if p_lower == c.lower().strip():
+                    return c
+        for p in patterns:
+            p_lower = p.lower()
+            for c in cols:
+                if p_lower in c.lower():
+                    return c
+        return None
+
+    def extract_numeric_col(df_target, patterns):
+        matched_col = find_column(df_target, patterns)
+        if matched_col:
+            s = df_target[matched_col].astype(str)
+            s_clean = s.str.replace("%", "", regex=False).str.replace(",", ".", regex=False).str.strip()
+            num = pd.to_numeric(s_clean, errors="coerce")
+            return num
+        return pd.Series(dtype=float, index=df_target.index)
+
+    def format_sprint_label(label, max_len=12):
+        s = str(label).strip()
+        if len(s) <= max_len:
+            return s
+        return "..." + s[-(max_len - 3):]
+
+    # Sort chronologically ascending
+    df_plot = sort_df_chronologically(df_plot, sprint_col)
+
+    df_plot["Sprint Display"] = df_plot[sprint_col].apply(lambda x: format_sprint_label(x, 12))
+
+    # Keep at most the last 5 sprints for the chart
+    df_plot = df_plot.tail(5)
+
+    df_plot["Committed SP"] = extract_numeric_col(df_plot, ["committed sp (at start)", "committed sp", "committed"])
+    df_plot["Delivered SP"] = extract_numeric_col(df_plot, ["delivered sp (total)", "delivered sp", "delivered", "achieved"])
+    df_plot["Delivery %"] = extract_numeric_col(df_plot, ["delivery %", "delivery", "pct", "entrega", "cumplimiento"])
+    
+    # Fallback calculation if Delivery % is NaN or missing in table
+    if "Committed SP" in df_plot.columns and "Delivered SP" in df_plot.columns:
+        calc_pct = (df_plot["Delivered SP"] / df_plot["Committed SP"] * 100).round(1)
+        df_plot["Delivery %"] = df_plot["Delivery %"].fillna(calc_pct)
+
+    df_plot["Avg Cycle Time (Days)"] = extract_numeric_col(df_plot, ["avg cycle time (days)", "avg cycle time", "cycle time"])
+    df_plot["Open Bugs (Sev A+B)"] = extract_numeric_col(df_plot, ["open bugs (sev a+b)", "open bugs"])
+    df_plot["Critical Bugs (Sev A)"] = extract_numeric_col(df_plot, ["critical bugs (sev a)", "critical bugs"])
+
+    saved_files = []
+
+    # 1. Velocity Chart
+    df_sp = df_plot[["Sprint Display", "Committed SP", "Delivered SP"]].dropna(subset=["Committed SP", "Delivered SP"], how="all")
+    if not df_sp.empty:
+        df_sp_melted = df_sp.melt(id_vars=["Sprint Display"], value_vars=["Committed SP", "Delivered SP"], var_name="Metric", value_name="Story Points")
+        bars_sp = alt.Chart(df_sp_melted).mark_bar().encode(
+            x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0), sort=None),
+            xOffset="Metric:N",
+            y=alt.Y("Story Points:Q", title="Story Points"),
+            color=alt.Color("Metric:N", legend=alt.Legend(orient="top", title=None), scale=alt.Scale(range=["#42a5f5", "#66bb6a"])),
+            tooltip=["Sprint Display", "Metric", "Story Points"]
+        )
+        text_sp = bars_sp.mark_text(
+            align='center',
+            baseline='bottom',
+            dy=-5
+        ).encode(
+            text=alt.Text("Story Points:Q", format=".0f")
+        )
+        chart_sp = (bars_sp + text_sp).properties(width=500, height=280)
+        
+        path_sp = "temp_velocity_chart.png"
+        chart_sp.save(path_sp)
+        saved_files.append((path_sp, "velocity_chart.png"))
+
+    # 2. Delivery % Chart
+    df_pct = df_plot[["Sprint Display", "Delivery %"]].dropna(subset=["Delivery %"])
+    if not df_pct.empty:
+        bars_pct = alt.Chart(df_pct).mark_bar(color="#ab47bc").encode(
+            x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0), sort=None),
+            y=alt.Y("Delivery %:Q", title="Delivery %"),
+            tooltip=["Sprint Display", "Delivery %"]
+        )
+        text_pct = bars_pct.mark_text(
+            align='center',
+            baseline='bottom',
+            dy=-5,
+            color='#ab47bc'
+        ).encode(
+            text=alt.Text("Delivery %:Q", format=".1f")
+        )
+        chart_pct = (bars_pct + text_pct).properties(width=500, height=280)
+        
+        path_pct = "temp_delivery_chart.png"
+        chart_pct.save(path_pct)
+        saved_files.append((path_pct, "delivery_chart.png"))
+
+    # 3. Cycle Time Chart
+    df_ct = df_plot[["Sprint Display", "Avg Cycle Time (Days)"]].dropna(subset=["Avg Cycle Time (Days)"])
+    if not df_ct.empty:
+        bars_ct = alt.Chart(df_ct).mark_bar(color="#ffa726").encode(
+            x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0), sort=None),
+            y=alt.Y("Avg Cycle Time (Days):Q", title="Days"),
+            tooltip=["Sprint Display", "Avg Cycle Time (Days)"]
+        )
+        text_ct = bars_ct.mark_text(
+            align='center',
+            baseline='bottom',
+            dy=-5,
+            color='#ffa726'
+        ).encode(
+            text=alt.Text("Avg Cycle Time (Days):Q", format=".1f")
+        )
+        chart_ct = (bars_ct + text_ct).properties(width=500, height=280)
+        
+        path_ct = "temp_cycle_time_chart.png"
+        chart_ct.save(path_ct)
+        saved_files.append((path_ct, "cycle_time_chart.png"))
+
+    # 4. Bugs Chart
+    df_bugs = df_plot[["Sprint Display", "Open Bugs (Sev A+B)", "Critical Bugs (Sev A)"]].dropna(subset=["Open Bugs (Sev A+B)", "Critical Bugs (Sev A)"], how="all")
+    if not df_bugs.empty:
+        df_bugs_melted = df_bugs.melt(id_vars=["Sprint Display"], value_vars=["Open Bugs (Sev A+B)", "Critical Bugs (Sev A)"], var_name="Bug Type", value_name="Count")
+        bars_bugs = alt.Chart(df_bugs_melted).mark_bar().encode(
+            x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0), sort=None),
+            xOffset="Bug Type:N",
+            y=alt.Y("Count:Q", title="Bugs"),
+            color=alt.Color("Bug Type:N", legend=alt.Legend(orient="top", title=None), scale=alt.Scale(range=["#29b6f6", "#b71c1c"])),
+            tooltip=["Sprint Display", "Bug Type", "Count"]
+        )
+        text_bugs = bars_bugs.mark_text(
+            align='center',
+            baseline='bottom',
+            dy=-5
+        ).encode(
+            text=alt.Text("Count:Q", format=".0f")
+        )
+        chart_bugs = (bars_bugs + text_bugs).properties(width=500, height=280)
+        
+        path_bugs = "temp_bugs_chart.png"
+        chart_bugs.save(path_bugs)
+        saved_files.append((path_bugs, "bugs_chart.png"))
+
+    return saved_files
+
 def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, page_title, sprint_val, sprint_name, metrics):
     if not server_url or not token or not space_key or not page_title:
         raise Exception("Required configuration fields (URL, Token, Space Key, Page Title) cannot be empty.")
@@ -471,7 +723,7 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         
     headers = {"Accept": "application/json"}
     auth = None
-    if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud (Email + API Token)"]:
+    if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud (Email + API Token)", "Jira Cloud/Server Basic (Email/User + Token)"]:
         if not email:
             raise Exception("Username/Email is required for Confluence Basic authentication.")
         auth = (email, token)
@@ -539,6 +791,38 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         </tbody>
     </table>
     """
+
+    image_markup = """
+    <p><strong>Historical KPI Evolution</strong></p>
+    <table class="wrapped">
+        <tbody>
+            <tr>
+                <td>
+                    <ac:image ac:original-height="280" ac:original-width="500">
+                        <ri:attachment ri:filename="velocity_chart.png" />
+                    </ac:image>
+                </td>
+                <td>
+                    <ac:image ac:original-height="280" ac:original-width="500">
+                        <ri:attachment ri:filename="delivery_chart.png" />
+                    </ac:image>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <ac:image ac:original-height="280" ac:original-width="500">
+                        <ri:attachment ri:filename="cycle_time_chart.png" />
+                    </ac:image>
+                </td>
+                <td>
+                    <ac:image ac:original-height="280" ac:original-width="500">
+                        <ri:attachment ri:filename="bugs_chart.png" />
+                    </ac:image>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    """
     
     if results:
         page_id = results[0]["id"]
@@ -548,14 +832,17 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         # Check if existing table has 10 columns (contains both Sprint and Sprint Name)
         is_double_header = "<th>Sprint Name</th>" in current_body and "<th>Sprint</th>" in current_body
         row_to_insert = new_row_double if is_double_header else new_row_single
-
         # Append row to existing table if present
         if "</tbody>" in current_body:
-            new_body = current_body.replace("</tbody>", f"{row_to_insert}</tbody>")
+            new_body = current_body.replace("</tbody>", f"{row_to_insert}</tbody>", 1)
         elif "</table>" in current_body:
-            new_body = current_body.replace("</table>", f"{row_to_insert}</table>")
+            new_body = current_body.replace("</table>", f"{row_to_insert}</table>", 1)
         else:
             new_body = current_body + "<br/>" + base_table
+
+        # Add image markup if not present
+        if "velocity_chart.png" not in new_body:
+            new_body = new_body + "<br/>" + image_markup
             
         update_url = f"{base_url}/rest/api/content/{page_id}"
         update_payload = {
@@ -576,11 +863,12 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
             
     else:
         create_url = f"{base_url}/rest/api/content"
+        new_body = f"<p>Sprint KPIs Overview</p>{base_table}<br/>{image_markup}"
         create_payload = {
             "type": "page",
             "title": page_title,
             "space": {"key": space_key},
-            "body": {"storage": {"value": f"<p>Sprint KPIs Overview</p>{base_table}", "representation": "storage"}}
+            "body": {"storage": {"value": new_body, "representation": "storage"}}
         }
         
         create_headers = headers.copy()
@@ -591,6 +879,27 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
             raise Exception(f"Failed to create new Confluence page ({c_resp.status_code}): {c_resp.text}")
         
         page_id = c_resp.json().get("id")
+
+    # Generate PNG charts from the updated table body and upload them
+    df_hist = parse_confluence_html_table(new_body)
+    if df_hist is not None:
+        try:
+            saved_files = generate_and_save_kpi_charts(df_hist)
+            for temp_path, target_filename in saved_files:
+                try:
+                    upload_confluence_attachment(
+                        server_url=server_url,
+                        auth=auth,
+                        headers=headers,
+                        page_id=page_id,
+                        file_path=temp_path,
+                        file_name=target_filename
+                    )
+                finally:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+        except Exception as chart_ex:
+            raise Exception(f"KPI table uploaded, but failed to generate/upload charts: {chart_ex}")
         
     return f"{base_url}/pages/viewpage.action?pageId={page_id}"
 
@@ -601,24 +910,30 @@ class TableParser(HTMLParser):
         self.current_row = []
         self.current_cell = []
         self.in_cell = False
+        self.table_count = 0
 
     def handle_starttag(self, tag, attrs):
-        if tag in ('td', 'th'):
-            self.in_cell = True
-            self.current_cell = []
-        elif tag == 'tr':
-            self.current_row = []
+        if tag == 'table':
+            self.table_count += 1
+            
+        if self.table_count == 1:
+            if tag in ('td', 'th'):
+                self.in_cell = True
+                self.current_cell = []
+            elif tag == 'tr':
+                self.current_row = []
 
     def handle_endtag(self, tag):
-        if tag in ('td', 'th'):
-            self.in_cell = False
-            self.current_row.append(''.join(self.current_cell).strip())
-        elif tag == 'tr':
-            if self.current_row:
-                self.rows.append(self.current_row)
+        if self.table_count == 1:
+            if tag in ('td', 'th'):
+                self.in_cell = False
+                self.current_row.append(''.join(self.current_cell).strip())
+            elif tag == 'tr':
+                if self.current_row:
+                    self.rows.append(self.current_row)
 
     def handle_data(self, data):
-        if self.in_cell:
+        if self.table_count == 1 and self.in_cell:
             self.current_cell.append(data)
 
 def parse_confluence_html_table(html_body):
@@ -631,7 +946,9 @@ def parse_confluence_html_table(html_body):
             return None
         headers = parser.rows[0]
         data_rows = parser.rows[1:]
-        return pd.DataFrame(data_rows, columns=headers)
+        # Filter out rows that do not match header length for safety
+        valid_rows = [r for r in data_rows if len(r) == len(headers)]
+        return pd.DataFrame(valid_rows, columns=headers)
     except Exception:
         return None
 
@@ -694,6 +1011,45 @@ def render_confluence_kpi_charts(df_hist):
     if not sprint_col:
         sprint_col = df_plot.columns[0]
 
+    # Dynamically append currently calculated sprint metrics if not already present in the history
+    current_metrics = st.session_state.get("current_sprint_metrics")
+    if current_metrics:
+        sprint_name_val = current_metrics["sprint_name"]
+        sprint_exists = False
+        for col in df_plot.columns:
+            if "sprint" in col.lower():
+                if sprint_name_val in df_plot[col].astype(str).values:
+                    sprint_exists = True
+                    break
+        
+        if not sprint_exists:
+            new_row = {}
+            for col in df_plot.columns:
+                col_lower = col.lower().strip()
+                if "sprint name" in col_lower:
+                    new_row[col] = sprint_name_val
+                elif "sprint" in col_lower:
+                    new_row[col] = sprint_name_val
+                elif "dates" in col_lower or "target dates" in col_lower:
+                    new_row[col] = current_metrics["dates"]
+                elif "committed sp" in col_lower or "committed" in col_lower:
+                    new_row[col] = current_metrics["total_sp"]
+                elif "delivered sp" in col_lower or "delivered" in col_lower or "achieved" in col_lower:
+                    new_row[col] = current_metrics["achieved_sp"]
+                elif "delivery" in col_lower or "pct" in col_lower or "cumplimiento" in col_lower:
+                    new_row[col] = current_metrics["sprint_pct"]
+                elif "releases" in col_lower:
+                    new_row[col] = current_metrics["releases"]
+                elif "critical bugs" in col_lower or "crit" in col_lower:
+                    new_row[col] = current_metrics["crit_bugs"]
+                elif "open bugs" in col_lower or "bugs" in col_lower:
+                    new_row[col] = current_metrics["open_bugs"]
+                elif "cycle time" in col_lower:
+                    new_row[col] = current_metrics["cycle_time"]
+                else:
+                    new_row[col] = ""
+            df_plot = pd.concat([df_plot, pd.DataFrame([new_row])], ignore_index=True)
+
     def find_column(df_target, patterns):
         cols = list(df_target.columns)
         # Exact match first
@@ -719,7 +1075,13 @@ def render_confluence_kpi_charts(df_hist):
             return num
         return pd.Series(dtype=float, index=df_target.index)
 
+    # Sort chronologically ascending
+    df_plot = sort_df_chronologically(df_plot, sprint_col)
+
     df_plot["Sprint Display"] = df_plot[sprint_col].apply(lambda x: format_sprint_label(x, 12))
+
+    # Keep at most the last 5 sprints for the chart
+    df_plot = df_plot.tail(5)
 
     df_plot["Committed SP"] = extract_numeric_col(df_plot, ["committed sp (at start)", "committed sp", "committed"])
     df_plot["Delivered SP"] = extract_numeric_col(df_plot, ["delivered sp (total)", "delivered sp", "delivered", "achieved"])
@@ -734,63 +1096,99 @@ def render_confluence_kpi_charts(df_hist):
     df_plot["Open Bugs (Sev A+B)"] = extract_numeric_col(df_plot, ["open bugs (sev a+b)", "open bugs"])
     df_plot["Critical Bugs (Sev A)"] = extract_numeric_col(df_plot, ["critical bugs (sev a)", "critical bugs"])
 
-    tab1, tab2, tab3 = st.tabs(["📊 Velocity & Delivery %", "⏱️ Cycle Time Trend", "🐛 Bugs & Quality"])
+    # Render charts in a 2x2 grid layout (2 rows with 2 columns)
+    r1_col1, r1_col2 = st.columns(2)
+    with r1_col1:
+        st.caption("Committed vs Delivered Story Points")
+        df_sp = df_plot[["Sprint Display", "Committed SP", "Delivered SP"]].dropna(subset=["Committed SP", "Delivered SP"], how="all")
+        if not df_sp.empty:
+            df_sp_melted = df_sp.melt(id_vars=["Sprint Display"], value_vars=["Committed SP", "Delivered SP"], var_name="Metric", value_name="Story Points")
+            bars_sp = alt.Chart(df_sp_melted).mark_bar().encode(
+                x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0), sort=None),
+                xOffset="Metric:N",
+                y=alt.Y("Story Points:Q", title="Story Points"),
+                color=alt.Color("Metric:N", legend=alt.Legend(orient="top", title=None), scale=alt.Scale(range=["#42a5f5", "#66bb6a"])),
+                tooltip=["Sprint Display", "Metric", "Story Points"]
+            )
+            text_sp = bars_sp.mark_text(
+                align='center',
+                baseline='bottom',
+                dy=-5
+            ).encode(
+                text=alt.Text("Story Points:Q", format=".0f")
+            )
+            chart_sp = (bars_sp + text_sp).properties(height=280)
+            st.altair_chart(chart_sp, use_container_width=True)
+        else:
+            st.info("No Story Points data found in table.")
 
-    with tab1:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.caption("Committed vs Delivered Story Points")
-            df_sp = df_plot[["Sprint Display", "Committed SP", "Delivered SP"]].dropna(subset=["Committed SP", "Delivered SP"], how="all")
-            if not df_sp.empty:
-                df_sp_melted = df_sp.melt(id_vars=["Sprint Display"], value_vars=["Committed SP", "Delivered SP"], var_name="Metric", value_name="Story Points")
-                chart_sp = alt.Chart(df_sp_melted).mark_bar().encode(
-                    x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0)),
-                    xOffset="Metric:N",
-                    y=alt.Y("Story Points:Q", title="Story Points"),
-                    color=alt.Color("Metric:N", legend=alt.Legend(orient="top", title=None), scale=alt.Scale(range=["#42a5f5", "#66bb6a"])),
-                    tooltip=["Sprint Display", "Metric", "Story Points"]
-                ).properties(height=280)
-                st.altair_chart(chart_sp, use_container_width=True)
-            else:
-                st.info("No Story Points data found in table.")
-        with c2:
-            st.caption("Delivery % Trend")
-            df_pct = df_plot[["Sprint Display", "Delivery %"]].dropna(subset=["Delivery %"])
-            if not df_pct.empty:
-                chart_pct = alt.Chart(df_pct).mark_bar(color="#ab47bc").encode(
-                    x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0)),
-                    y=alt.Y("Delivery %:Q", title="Delivery %", scale=alt.Scale(domain=[0, 100])),
-                    tooltip=["Sprint Display", "Delivery %"]
-                ).properties(height=280)
-                st.altair_chart(chart_pct, use_container_width=True)
-            else:
-                st.info("No Delivery % data found in table.")
+    with r1_col2:
+        st.caption("Delivery % Trend")
+        df_pct = df_plot[["Sprint Display", "Delivery %"]].dropna(subset=["Delivery %"])
+        if not df_pct.empty:
+            bars_pct = alt.Chart(df_pct).mark_bar(color="#ab47bc").encode(
+                x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0), sort=None),
+                y=alt.Y("Delivery %:Q", title="Delivery %"),
+                tooltip=["Sprint Display", "Delivery %"]
+            )
+            text_pct = bars_pct.mark_text(
+                align='center',
+                baseline='bottom',
+                dy=-5,
+                color='#ab47bc'
+            ).encode(
+                text=alt.Text("Delivery %:Q", format=".1f")
+            )
+            chart_pct = (bars_pct + text_pct).properties(height=280)
+            st.altair_chart(chart_pct, use_container_width=True)
+        else:
+            st.info("No Delivery % data found in table.")
 
-    with tab2:
+    st.markdown("<br/>", unsafe_allow_html=True)
+
+    r2_col1, r2_col2 = st.columns(2)
+    with r2_col1:
         st.caption("Average Cycle Time (Days)")
         df_ct = df_plot[["Sprint Display", "Avg Cycle Time (Days)"]].dropna(subset=["Avg Cycle Time (Days)"])
         if not df_ct.empty:
-            chart_ct = alt.Chart(df_ct).mark_bar(color="#ffa726").encode(
-                x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0)),
+            bars_ct = alt.Chart(df_ct).mark_bar(color="#ffa726").encode(
+                x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0), sort=None),
                 y=alt.Y("Avg Cycle Time (Days):Q", title="Days"),
                 tooltip=["Sprint Display", "Avg Cycle Time (Days)"]
-            ).properties(height=280)
+            )
+            text_ct = bars_ct.mark_text(
+                align='center',
+                baseline='bottom',
+                dy=-5,
+                color='#ffa726'
+            ).encode(
+                text=alt.Text("Avg Cycle Time (Days):Q", format=".1f")
+            )
+            chart_ct = (bars_ct + text_ct).properties(height=280)
             st.altair_chart(chart_ct, use_container_width=True)
         else:
             st.info("No Cycle Time data found in table.")
 
-    with tab3:
+    with r2_col2:
         st.caption("Open & Critical Bugs Trend")
         df_bugs = df_plot[["Sprint Display", "Open Bugs (Sev A+B)", "Critical Bugs (Sev A)"]].dropna(subset=["Open Bugs (Sev A+B)", "Critical Bugs (Sev A)"], how="all")
         if not df_bugs.empty:
             df_bugs_melted = df_bugs.melt(id_vars=["Sprint Display"], value_vars=["Open Bugs (Sev A+B)", "Critical Bugs (Sev A)"], var_name="Bug Type", value_name="Count")
-            chart_bugs = alt.Chart(df_bugs_melted).mark_bar().encode(
-                x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0)),
+            bars_bugs = alt.Chart(df_bugs_melted).mark_bar().encode(
+                x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0), sort=None),
                 xOffset="Bug Type:N",
                 y=alt.Y("Count:Q", title="Bugs"),
-                color=alt.Color("Bug Type:N", legend=alt.Legend(orient="top", title=None), scale=alt.Scale(range=["#ef5350", "#b71c1c"])),
+                color=alt.Color("Bug Type:N", legend=alt.Legend(orient="top", title=None), scale=alt.Scale(range=["#29b6f6", "#b71c1c"])),
                 tooltip=["Sprint Display", "Bug Type", "Count"]
-            ).properties(height=280)
+            )
+            text_bugs = bars_bugs.mark_text(
+                align='center',
+                baseline='bottom',
+                dy=-5
+            ).encode(
+                text=alt.Text("Count:Q", format=".0f")
+            )
+            chart_bugs = (bars_bugs + text_bugs).properties(height=280)
             st.altair_chart(chart_bugs, use_container_width=True)
         else:
             st.info("No Bugs data found in table.")
@@ -842,6 +1240,20 @@ def render_dashboard():
         avg_cycle_time = round(avg_cycle_time, 2) if pd.notnull(avg_cycle_time) else 0
     else:
         avg_cycle_time = 0
+        
+    # Store calculated metrics in session state so charts can include the current un-published sprint
+    date_str = f"{s_start.strftime('%Y-%m-%d')} to {s_end.strftime('%Y-%m-%d')}" if (s_start and s_end) else "Unknown"
+    st.session_state.current_sprint_metrics = {
+        "sprint_name": st.session_state.get("kpi_sprint_name") or st.session_state.get("kpi_sprint_query"),
+        "dates": date_str,
+        "total_sp": total_sp,
+        "achieved_sp": achieved_sp,
+        "sprint_pct": f"{sprint_pct:.1f}%",
+        "releases": releases_count,
+        "open_bugs": open_bugs,
+        "crit_bugs": open_critical_bugs,
+        "cycle_time": avg_cycle_time
+    }
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
