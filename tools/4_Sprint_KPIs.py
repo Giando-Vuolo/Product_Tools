@@ -741,7 +741,7 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
     
     display_sprint = sprint_name if sprint_name else sprint_val
 
-    # Standard single Sprint column format (9 columns)
+    # Standard single Sprint column format (10 columns)
     new_row_single = f"""
     <tr>
         <td>{display_sprint}</td>
@@ -752,11 +752,12 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         <td>{metrics['releases']}</td>
         <td>{metrics['open_bugs']}</td>
         <td>{metrics['crit_bugs']}</td>
+        <td>{metrics['resolved_bugs']}</td>
         <td>{metrics['cycle_time']}</td>
     </tr>
     """
 
-    # Double Sprint column format (10 columns - for compatibility with pages containing both Sprint and Sprint Name)
+    # Double Sprint column format (11 columns - for compatibility with pages containing both Sprint and Sprint Name)
     new_row_double = f"""
     <tr>
         <td>{sprint_val}</td>
@@ -768,13 +769,14 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         <td>{metrics['releases']}</td>
         <td>{metrics['open_bugs']}</td>
         <td>{metrics['crit_bugs']}</td>
+        <td>{metrics['resolved_bugs']}</td>
         <td>{metrics['cycle_time']}</td>
     </tr>
     """
 
     base_table = f"""
     <table class="wrapped">
-        <colgroup><col/><col/><col/><col/><col/><col/><col/><col/><col/></colgroup>
+        <colgroup><col/><col/><col/><col/><col/><col/><col/><col/><col/><col/></colgroup>
         <tbody>
             <tr>
                 <th>Sprint</th>
@@ -785,6 +787,7 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
                 <th>Releases</th>
                 <th>Open Bugs (Sev A+B)</th>
                 <th>Critical Bugs (Sev A)</th>
+                <th>Resolved Bugs</th>
                 <th>Avg Cycle Time (Days)</th>
             </tr>
             {new_row_single}
@@ -1042,6 +1045,8 @@ def render_confluence_kpi_charts(df_hist):
                     new_row[col] = current_metrics["releases"]
                 elif "critical bugs" in col_lower or "crit" in col_lower:
                     new_row[col] = current_metrics["crit_bugs"]
+                elif "resolved bugs" in col_lower:
+                    new_row[col] = current_metrics.get("resolved_bugs", "")
                 elif "open bugs" in col_lower or "bugs" in col_lower:
                     new_row[col] = current_metrics["open_bugs"]
                 elif "cycle time" in col_lower:
@@ -1252,6 +1257,7 @@ def render_dashboard():
         "releases": releases_count,
         "open_bugs": open_bugs,
         "crit_bugs": open_critical_bugs,
+        "resolved_bugs": resolved_bugs,
         "cycle_time": avg_cycle_time
     }
     
@@ -1345,6 +1351,7 @@ def render_dashboard():
                         "releases": str(releases_count),
                         "open_bugs": str(open_bugs),
                         "crit_bugs": str(open_critical_bugs),
+                        "resolved_bugs": str(resolved_bugs),
                         "cycle_time": f"{avg_cycle_time:.1f}" if pd.notna(avg_cycle_time) else "N/A"
                     }
                     
