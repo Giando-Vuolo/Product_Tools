@@ -5,6 +5,8 @@ import os
 import re
 from datetime import datetime
 import numpy as np
+from html.parser import HTMLParser
+import altair as alt
 
 def get_auth_headers(server, token, auth_type, email):
     headers = {
@@ -225,16 +227,21 @@ def fetch_sprint_kpi_dataset():
             except:
                 story_points = 0
                 
-            labels = [l.lower() for l in fields_data.get("labels", [])]
+            raw_labels = fields_data.get("labels", [])
+            labels_str = ", ".join(raw_labels) if isinstance(raw_labels, list) else ""
+            labels = [l.lower() for l in raw_labels]
             
             is_sev_a = sev_a_label.lower() in labels
             is_sev_b = sev_b_label.lower() in labels
             
+            # Resolve date and Achieved logic
+            res_date_str = fields_data.get("resolutiondate")
+            res_date = pd.to_datetime(res_date_str).tz_localize(None) if res_date_str else None
+
             # Changelog for cycle time
             changelog = issue.get("changelog", {}).get("histories", [])
             
-            first_in_progress = None
-            last_acceptance_test = None
+            last_in_progress = None
             
             # Sort chronologically
             changelog = sorted(changelog, key=lambda x: x.get("created", ""))
@@ -244,15 +251,16 @@ def fetch_sprint_kpi_dataset():
                 if not created_str: continue
                 dt = pd.to_datetime(created_str).tz_localize(None)
                 
+                # Consider transitions up to resolution date
+                if res_date and dt > res_date:
+                    continue
+
                 for item in history.get("items", []):
                     if item.get("field") == "status":
                         to_str = item.get("toString", "").lower()
-                        if to_str == in_prog_status and first_in_progress is None:
-                            first_in_progress = dt
-            # Resolve date and Achieved logic
-            res_date_str = fields_data.get("resolutiondate")
-            res_date = pd.to_datetime(res_date_str).tz_localize(None) if res_date_str else None
-            
+                        if to_str == in_prog_status:
+                            last_in_progress = dt
+
             # For Sprint KPIs, an issue is only 'achieved' if it was resolved before the sprint ended
             # If the sprint is still active (no sprint_end or sprint_end is in the future), we use its current resolution status
             is_achieved_in_sprint = False
@@ -264,28 +272,33 @@ def fetch_sprint_kpi_dataset():
                     is_achieved_in_sprint = True
 
             # EazyBI matching Cycle Time: 
-            # DateDiffWorkdays(Transition to status first date In Progress, Resolved at)
+            # DateDiffWorkdays(Transition to status last date In Progress before resolution, Resolved at)
             cycle_time_end = res_date if is_achieved_in_sprint else None
             
-            if first_in_progress is None and cycle_time_end is not None:
+            if last_in_progress is None and cycle_time_end is not None:
                 # Using sprint_start as a proxy for when work ACTUALLY started if they skipped In Progress
                 if sprint_start and sprint_start <= cycle_time_end:
-                    first_in_progress = sprint_start
+                    last_in_progress = sprint_start
                     
             cycle_time_days = None
-            if first_in_progress and cycle_time_end and first_in_progress <= cycle_time_end:
-                cycle_time_days = calculate_business_days(first_in_progress, cycle_time_end)
+            if last_in_progress and cycle_time_end and last_in_progress <= cycle_time_end:
+                cycle_time_days = calculate_business_days(last_in_progress, cycle_time_end)
+
+            server_clean = server.rstrip('/') if server else ""
+            jira_url = f"{server_clean}/browse/{key}" if server_clean else key
 
             rows.append({
                 "Key": key,
+                "Jira URL": jira_url,
                 "Type": issuetype,
                 "Status": status_name,
+                "Labels": labels_str,
                 "Resolved": is_achieved_in_sprint,
                 "Story Points": story_points,
                 "Is Bug": issuetype.lower() == "bug",
                 "Is Sev A": is_sev_a,
                 "Is Sev B": is_sev_b,
-                "First In Progress": first_in_progress,
+                "First In Progress": last_in_progress,
                 "Resolved At": cycle_time_end,
                 "Cycle Time (Days)": cycle_time_days
             })
@@ -293,6 +306,7 @@ def fetch_sprint_kpi_dataset():
         df = pd.DataFrame(rows)
         
         most_common_id = None
+        sprint_name = None
         # Robustly detect the sprint dates by finding the most common sprint across all returned issues
         if sprint_start is None and issues:
             from collections import Counter
@@ -332,26 +346,32 @@ def fetch_sprint_kpi_dataset():
                         s_json = s_resp.json()
                         s_str = s_json.get("startDate")
                         e_str = s_json.get("endDate")
+                        if s_json.get("name"):
+                            sprint_name = s_json.get("name")
                         if s_str: sprint_start = pd.to_datetime(s_str).tz_localize(None)
                         if e_str: sprint_end = pd.to_datetime(e_str).tz_localize(None)
                 except Exception as e:
                     pass
                     
                 # 2. Fallback to regex parsing the string
-                if sprint_start is None:
-                    best_sprint = sprint_map[most_common_id]
+                if sprint_start is None or sprint_name is None:
+                    best_sprint = sprint_map.get(most_common_id)
                     if isinstance(best_sprint, str):
-                        sprint_start, sprint_end = extract_sprint_dates(best_sprint)
+                        if not sprint_name:
+                            name_match = re.search(r'name=([^,]+)', best_sprint)
+                            if name_match: sprint_name = name_match.group(1)
+                        if sprint_start is None:
+                            sprint_start, sprint_end = extract_sprint_dates(best_sprint)
                     elif isinstance(best_sprint, dict):
+                        if not sprint_name:
+                            sprint_name = best_sprint.get("name")
                         s_str = best_sprint.get("startDate")
                         e_str = best_sprint.get("endDate")
-                        if s_str:
-                            try:
-                                sprint_start = pd.to_datetime(s_str).tz_localize(None)
+                        if s_str and sprint_start is None:
+                            try: sprint_start = pd.to_datetime(s_str).tz_localize(None)
                             except: pass
-                        if e_str:
-                            try:
-                                sprint_end = pd.to_datetime(e_str).tz_localize(None)
+                        if e_str and sprint_end is None:
+                            try: sprint_end = pd.to_datetime(e_str).tz_localize(None)
                             except: pass
                             
                 # 3. Log debug info if STILL failing
@@ -433,6 +453,7 @@ def fetch_sprint_kpi_dataset():
         st.session_state.kpi_global_critical_bugs = global_critical_bugs
         st.session_state.kpi_sprint_start = sprint_start
         st.session_state.kpi_sprint_end = sprint_end
+        st.session_state.kpi_sprint_name = sprint_name or sprint_query
         st.session_state.kpi_loading = False
         
     except Exception as e:
@@ -440,7 +461,7 @@ def fetch_sprint_kpi_dataset():
         st.session_state.kpi_error = f"Exception during fetch: {e}\n{traceback.format_exc()}"
         st.session_state.kpi_loading = False
 
-def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, page_title, sprint_val, metrics):
+def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, page_title, sprint_val, sprint_name, metrics):
     if not server_url or not token or not space_key or not page_title:
         raise Exception("Required configuration fields (URL, Token, Space Key, Page Title) cannot be empty.")
         
@@ -466,9 +487,12 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         
     results = resp.json().get("results", [])
     
-    new_row = f"""
+    display_sprint = sprint_name if sprint_name else sprint_val
+
+    # Standard single Sprint column format (9 columns)
+    new_row_single = f"""
     <tr>
-        <td>{sprint_val}</td>
+        <td>{display_sprint}</td>
         <td>{metrics['dates']}</td>
         <td>{metrics['total_sp']}</td>
         <td>{metrics['achieved_sp']}</td>
@@ -479,7 +503,23 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         <td>{metrics['cycle_time']}</td>
     </tr>
     """
-    
+
+    # Double Sprint column format (10 columns - for compatibility with pages containing both Sprint and Sprint Name)
+    new_row_double = f"""
+    <tr>
+        <td>{sprint_val}</td>
+        <td>{sprint_name}</td>
+        <td>{metrics['dates']}</td>
+        <td>{metrics['total_sp']}</td>
+        <td>{metrics['achieved_sp']}</td>
+        <td>{metrics['sprint_pct']}</td>
+        <td>{metrics['releases']}</td>
+        <td>{metrics['open_bugs']}</td>
+        <td>{metrics['crit_bugs']}</td>
+        <td>{metrics['cycle_time']}</td>
+    </tr>
+    """
+
     base_table = f"""
     <table class="wrapped">
         <colgroup><col/><col/><col/><col/><col/><col/><col/><col/><col/></colgroup>
@@ -495,7 +535,7 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
                 <th>Critical Bugs (Sev A)</th>
                 <th>Avg Cycle Time (Days)</th>
             </tr>
-            {new_row}
+            {new_row_single}
         </tbody>
     </table>
     """
@@ -505,11 +545,15 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         current_version = results[0]["version"]["number"]
         current_body = results[0]["body"]["storage"]["value"]
         
+        # Check if existing table has 10 columns (contains both Sprint and Sprint Name)
+        is_double_header = "<th>Sprint Name</th>" in current_body and "<th>Sprint</th>" in current_body
+        row_to_insert = new_row_double if is_double_header else new_row_single
+
         # Append row to existing table if present
         if "</tbody>" in current_body:
-            new_body = current_body.replace("</tbody>", f"{new_row}</tbody>")
+            new_body = current_body.replace("</tbody>", f"{row_to_insert}</tbody>")
         elif "</table>" in current_body:
-            new_body = current_body.replace("</table>", f"{new_row}</table>")
+            new_body = current_body.replace("</table>", f"{row_to_insert}</table>")
         else:
             new_body = current_body + "<br/>" + base_table
             
@@ -549,6 +593,207 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         page_id = c_resp.json().get("id")
         
     return f"{base_url}/pages/viewpage.action?pageId={page_id}"
+
+class TableParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self.current_row = []
+        self.current_cell = []
+        self.in_cell = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ('td', 'th'):
+            self.in_cell = True
+            self.current_cell = []
+        elif tag == 'tr':
+            self.current_row = []
+
+    def handle_endtag(self, tag):
+        if tag in ('td', 'th'):
+            self.in_cell = False
+            self.current_row.append(''.join(self.current_cell).strip())
+        elif tag == 'tr':
+            if self.current_row:
+                self.rows.append(self.current_row)
+
+    def handle_data(self, data):
+        if self.in_cell:
+            self.current_cell.append(data)
+
+def parse_confluence_html_table(html_body):
+    if not html_body or '<table' not in html_body:
+        return None
+    try:
+        parser = TableParser()
+        parser.feed(html_body)
+        if not parser.rows or len(parser.rows) < 2:
+            return None
+        headers = parser.rows[0]
+        data_rows = parser.rows[1:]
+        return pd.DataFrame(data_rows, columns=headers)
+    except Exception:
+        return None
+
+def fetch_confluence_kpi_history(server_url, auth_type, token, email, space_key, page_title):
+    if not server_url or not token or not space_key or not page_title:
+        return None
+        
+    base_url = server_url.rstrip("/")
+    if "atlassian.net" in base_url and not base_url.endswith("/wiki"):
+        base_url = base_url + "/wiki"
+        
+    headers = {"Accept": "application/json"}
+    auth = None
+    if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud (Email + API Token)"]:
+        if not email:
+            return None
+        auth = (email, token)
+    else:
+        headers["Authorization"] = f"Bearer {token}"
+        
+    find_url = f"{base_url}/rest/api/content"
+    params = {"title": page_title, "spaceKey": space_key, "expand": "body.storage"}
+    
+    try:
+        resp = requests.get(find_url, headers=headers, params=params, auth=auth, timeout=15) if auth else requests.get(find_url, headers=headers, params=params, timeout=15)
+        if resp.status_code != 200:
+            return None
+            
+        results = resp.json().get("results", [])
+        if not results:
+            return None
+            
+        html_body = results[0].get("body", {}).get("storage", {}).get("value", "")
+        return parse_confluence_html_table(html_body)
+    except Exception:
+        return None
+
+def format_sprint_label(label, max_len=12):
+    s = str(label).strip()
+    if len(s) <= max_len:
+        return s
+    return "..." + s[-(max_len - 3):]
+
+def render_confluence_kpi_charts(df_hist):
+    if df_hist is None or df_hist.empty:
+        st.info("No historical KPI data found on Confluence.")
+        return
+
+    df_plot = df_hist.copy()
+
+    # Determine sprint column label for X axis
+    sprint_col = None
+    for pattern in ["sprint name", "sprint", "target dates"]:
+        for c in df_plot.columns:
+            if pattern in c.lower():
+                sprint_col = c
+                break
+        if sprint_col:
+            break
+    if not sprint_col:
+        sprint_col = df_plot.columns[0]
+
+    def find_column(df_target, patterns):
+        cols = list(df_target.columns)
+        # Exact match first
+        for p in patterns:
+            p_lower = p.lower()
+            for c in cols:
+                if p_lower == c.lower().strip():
+                    return c
+        # Substring match fallback
+        for p in patterns:
+            p_lower = p.lower()
+            for c in cols:
+                if p_lower in c.lower():
+                    return c
+        return None
+
+    def extract_numeric_col(df_target, patterns):
+        matched_col = find_column(df_target, patterns)
+        if matched_col:
+            s = df_target[matched_col].astype(str)
+            s_clean = s.str.replace("%", "", regex=False).str.replace(",", ".", regex=False).str.strip()
+            num = pd.to_numeric(s_clean, errors="coerce")
+            return num
+        return pd.Series(dtype=float, index=df_target.index)
+
+    df_plot["Sprint Display"] = df_plot[sprint_col].apply(lambda x: format_sprint_label(x, 12))
+
+    df_plot["Committed SP"] = extract_numeric_col(df_plot, ["committed sp (at start)", "committed sp", "committed"])
+    df_plot["Delivered SP"] = extract_numeric_col(df_plot, ["delivered sp (total)", "delivered sp", "delivered", "achieved"])
+    df_plot["Delivery %"] = extract_numeric_col(df_plot, ["delivery %", "delivery", "pct", "entrega", "cumplimiento"])
+    
+    # Fallback calculation if Delivery % is NaN or missing in table
+    if "Committed SP" in df_plot.columns and "Delivered SP" in df_plot.columns:
+        calc_pct = (df_plot["Delivered SP"] / df_plot["Committed SP"] * 100).round(1)
+        df_plot["Delivery %"] = df_plot["Delivery %"].fillna(calc_pct)
+
+    df_plot["Avg Cycle Time (Days)"] = extract_numeric_col(df_plot, ["avg cycle time (days)", "avg cycle time", "cycle time"])
+    df_plot["Open Bugs (Sev A+B)"] = extract_numeric_col(df_plot, ["open bugs (sev a+b)", "open bugs"])
+    df_plot["Critical Bugs (Sev A)"] = extract_numeric_col(df_plot, ["critical bugs (sev a)", "critical bugs"])
+
+    tab1, tab2, tab3 = st.tabs(["📊 Velocity & Delivery %", "⏱️ Cycle Time Trend", "🐛 Bugs & Quality"])
+
+    with tab1:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("Committed vs Delivered Story Points")
+            df_sp = df_plot[["Sprint Display", "Committed SP", "Delivered SP"]].dropna(subset=["Committed SP", "Delivered SP"], how="all")
+            if not df_sp.empty:
+                df_sp_melted = df_sp.melt(id_vars=["Sprint Display"], value_vars=["Committed SP", "Delivered SP"], var_name="Metric", value_name="Story Points")
+                chart_sp = alt.Chart(df_sp_melted).mark_bar().encode(
+                    x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0)),
+                    xOffset="Metric:N",
+                    y=alt.Y("Story Points:Q", title="Story Points"),
+                    color=alt.Color("Metric:N", legend=alt.Legend(orient="top", title=None), scale=alt.Scale(range=["#42a5f5", "#66bb6a"])),
+                    tooltip=["Sprint Display", "Metric", "Story Points"]
+                ).properties(height=280)
+                st.altair_chart(chart_sp, use_container_width=True)
+            else:
+                st.info("No Story Points data found in table.")
+        with c2:
+            st.caption("Delivery % Trend")
+            df_pct = df_plot[["Sprint Display", "Delivery %"]].dropna(subset=["Delivery %"])
+            if not df_pct.empty:
+                chart_pct = alt.Chart(df_pct).mark_bar(color="#ab47bc").encode(
+                    x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("Delivery %:Q", title="Delivery %", scale=alt.Scale(domain=[0, 100])),
+                    tooltip=["Sprint Display", "Delivery %"]
+                ).properties(height=280)
+                st.altair_chart(chart_pct, use_container_width=True)
+            else:
+                st.info("No Delivery % data found in table.")
+
+    with tab2:
+        st.caption("Average Cycle Time (Days)")
+        df_ct = df_plot[["Sprint Display", "Avg Cycle Time (Days)"]].dropna(subset=["Avg Cycle Time (Days)"])
+        if not df_ct.empty:
+            chart_ct = alt.Chart(df_ct).mark_bar(color="#ffa726").encode(
+                x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("Avg Cycle Time (Days):Q", title="Days"),
+                tooltip=["Sprint Display", "Avg Cycle Time (Days)"]
+            ).properties(height=280)
+            st.altair_chart(chart_ct, use_container_width=True)
+        else:
+            st.info("No Cycle Time data found in table.")
+
+    with tab3:
+        st.caption("Open & Critical Bugs Trend")
+        df_bugs = df_plot[["Sprint Display", "Open Bugs (Sev A+B)", "Critical Bugs (Sev A)"]].dropna(subset=["Open Bugs (Sev A+B)", "Critical Bugs (Sev A)"], how="all")
+        if not df_bugs.empty:
+            df_bugs_melted = df_bugs.melt(id_vars=["Sprint Display"], value_vars=["Open Bugs (Sev A+B)", "Critical Bugs (Sev A)"], var_name="Bug Type", value_name="Count")
+            chart_bugs = alt.Chart(df_bugs_melted).mark_bar().encode(
+                x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0)),
+                xOffset="Bug Type:N",
+                y=alt.Y("Count:Q", title="Bugs"),
+                color=alt.Color("Bug Type:N", legend=alt.Legend(orient="top", title=None), scale=alt.Scale(range=["#ef5350", "#b71c1c"])),
+                tooltip=["Sprint Display", "Bug Type", "Count"]
+            ).properties(height=280)
+            st.altair_chart(chart_bugs, use_container_width=True)
+        else:
+            st.info("No Bugs data found in table.")
 
 def render_dashboard():
     df = st.session_state.kpi_data
@@ -615,8 +860,34 @@ def render_dashboard():
     st.divider()
     
     st.markdown("#### 📋 Issue Details (Cycle Times)")
-    disp_df = df[["Key", "Type", "Status", "Story Points", "Resolved", "Cycle Time (Days)"]].copy()
-    st.dataframe(disp_df, use_container_width=True)
+    
+    server_clean = st.session_state.get("jira_server", "").rstrip("/")
+    if "Jira URL" not in df.columns:
+        df["Jira URL"] = df["Key"].apply(lambda k: f"{server_clean}/browse/{k}" if server_clean else k)
+    if "Labels" not in df.columns:
+        df["Labels"] = ""
+
+    disp_df = df[["Jira URL", "Type", "Status", "Labels", "Story Points", "Resolved", "First In Progress", "Resolved At", "Cycle Time (Days)"]].copy()
+    disp_df["First In Progress"] = disp_df["First In Progress"].apply(lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else "-")
+    disp_df["Resolved At"] = disp_df["Resolved At"].apply(lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else "-")
+    disp_df = disp_df.rename(columns={
+        "Jira URL": "Key",
+        "First In Progress": "Start Date",
+        "Resolved At": "Resolved Date"
+    })
+    
+    disp_df = disp_df.sort_values(by="Cycle Time (Days)", ascending=False, na_position="last")
+
+    st.dataframe(
+        disp_df,
+        use_container_width=True,
+        column_config={
+            "Key": st.column_config.LinkColumn(
+                "Key",
+                display_text=r".*/browse/(.*)"
+            )
+        }
+    )
     
     st.divider()
     
@@ -641,7 +912,16 @@ def render_dashboard():
         with col_p:
             page_title = st.text_input("Page Title", value=default_conf_page, key="kpi_conf_page")
             
-        if st.button("🚀 Append KPIs to Confluence", use_container_width=True):
+        col_btn1, col_btn2 = st.columns([2, 1])
+        with col_btn1:
+            append_clicked = st.button("🚀 Append KPIs to Confluence", use_container_width=True)
+        with col_btn2:
+            fetch_clicked = st.button("🔄 Fetch Confluence History", use_container_width=True)
+
+        auth_type = st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)")
+        email = st.session_state.get("jira_email", "")
+
+        if append_clicked:
             with st.spinner("Publishing to Confluence..."):
                 try:
                     date_str = f"{s_start.strftime('%Y-%m-%d')} to {s_end.strftime('%Y-%m-%d')}" if (s_start and s_end) else "Unknown"
@@ -656,10 +936,9 @@ def render_dashboard():
                         "cycle_time": f"{avg_cycle_time:.1f}" if pd.notna(avg_cycle_time) else "N/A"
                     }
                     
-                    # We use Jira auth settings since Confluence often shares the same Atlassian Cloud account
-                    auth_type = st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)")
-                    email = st.session_state.get("jira_email", "")
-                    
+                    sprint_query_val = st.session_state.get("kpi_sprint_query", "Current Sprint")
+                    sprint_name_val = st.session_state.get("kpi_sprint_name", sprint_query_val)
+
                     page_url = publish_kpis_to_confluence(
                         server_url=conf_server,
                         auth_type=auth_type,
@@ -667,13 +946,35 @@ def render_dashboard():
                         email=email,
                         space_key=space_key,
                         page_title=page_title,
-                        sprint_val=st.session_state.get("kpi_sprint_query", "Current Sprint"),
+                        sprint_val=sprint_query_val,
+                        sprint_name=sprint_name_val,
                         metrics=metrics
                     )
                     st.success("🎉 **KPIs successfully appended to Confluence!**")
                     st.markdown(f"[👉 Click here to view Confluence Page]({page_url})")
+
+                    # Automatically fetch updated history for charts
+                    df_hist = fetch_confluence_kpi_history(conf_server, auth_type, conf_token, email, space_key, page_title)
+                    if df_hist is not None:
+                        st.session_state["conf_kpi_history"] = df_hist
                 except Exception as ex:
                     st.error(f"Failed to publish to Confluence: {str(ex)}")
+
+        if fetch_clicked:
+            with st.spinner("Fetching KPI history from Confluence..."):
+                df_hist = fetch_confluence_kpi_history(conf_server, auth_type, conf_token, email, space_key, page_title)
+                if df_hist is not None and not df_hist.empty:
+                    st.session_state["conf_kpi_history"] = df_hist
+                    st.success(f"Fetched {len(df_hist)} sprint entries from Confluence!")
+                else:
+                    st.error("Could not fetch KPI history table from Confluence page.")
+
+        # Render evolution charts if history exists
+        df_hist = st.session_state.get("conf_kpi_history")
+        if df_hist is not None and not df_hist.empty:
+            st.divider()
+            st.markdown("#### 📊 Historical KPI Evolution (from Confluence Page)")
+            render_confluence_kpi_charts(df_hist)
 
 
 if "kpi_data" not in st.session_state:
