@@ -218,7 +218,7 @@ class NumberedCanvas(canvas.Canvas):
         primary_color_hex = st.session_state.primary_color
         primary_color = hex_to_reportlab_color(primary_color_hex)
         project_name = st.session_state.project_name
-        logo_path = st.session_state.sr_logo_temp_path
+        logo_path = st.session_state.get('sr_logo_temp_path') or st.session_state.get('rn_logo_temp_path')
         
         self.saveState()
         
@@ -504,7 +504,7 @@ def format_status_with_emoji(status_str):
     if not status_str or not isinstance(status_str, str):
         return '<font color="#3B82F6">●</font>'
         
-    st_clean = status_str.strip().lower()
+    st_clean = status_str.split(" [")[0].strip().lower()
     
     if st_clean in ['done', 'closed', 'resolved', 'complete', 'acceptance test']:
         return '<font color="#22C55E">●</font>'

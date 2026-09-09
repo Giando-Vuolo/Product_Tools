@@ -884,6 +884,10 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
             # Status
             status_obj = fields.get("status") or {}
             status = map_jira_status(status_obj.get("name", "To Do"))
+            resolution_obj = fields.get("resolution") or {}
+            res_name = resolution_obj.get("name")
+            if res_name:
+                status = f"{status} [{res_name}]"
             
             # Fix Version
             fix_versions = fields.get("fixVersions", [])

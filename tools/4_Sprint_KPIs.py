@@ -215,6 +215,9 @@ def fetch_sprint_kpi_dataset():
             resolution = fields_data.get("resolution")
             is_resolved = resolution is not None
             
+            if resolution and resolution.get("name"):
+                status_name = f"{status_name} [{resolution.get('name')}]"
+            
             # Check dynamic field, then fallbacks
             story_points = fields_data.get(sp_field)
             if story_points is None:
@@ -298,7 +301,7 @@ def fetch_sprint_kpi_dataset():
                 "Is Bug": issuetype.lower() == "bug",
                 "Is Sev A": is_sev_a,
                 "Is Sev B": is_sev_b,
-                "First In Progress": last_in_progress,
+                "Last In Progress": last_in_progress,
                 "Resolved At": cycle_time_end,
                 "Cycle Time (Days)": cycle_time_days
             })
@@ -1204,6 +1207,22 @@ def render_dashboard():
         st.info("No data found for this sprint.")
         return
         
+    if "Include" not in df.columns:
+        df["Include"] = True
+
+    sort_order_df = df[["Key", "Cycle Time (Days)"]].sort_values(by="Cycle Time (Days)", ascending=False, na_position="last").reset_index(drop=True)
+    editor_state = st.session_state.get("kpi_editor", {})
+    if "edited_rows" in editor_state:
+        for idx_str, edits in editor_state["edited_rows"].items():
+            if "Include" in edits:
+                row_idx = int(idx_str)
+                if row_idx < len(sort_order_df):
+                    edited_key = sort_order_df.loc[row_idx, "Key"]
+                    df.loc[df["Key"] == edited_key, "Include"] = edits["Include"]
+    
+    st.session_state.kpi_data = df
+    df_calc = df[df["Include"] == True]
+
     st.markdown("### 📈 Sprint KPIs Overview")
     
     s_start = st.session_state.get("kpi_sprint_start")
@@ -1217,10 +1236,10 @@ def render_dashboard():
     
     # "Committed SP (at Start)": Exclude any issue that was added after the sprint started (scope creep)
     # This ensures we respect the user's Issue Type filters (e.g. if they unchecked "Task")
-    total_sp = df[~df["Key"].isin(gh_added_keys)]["Story Points"].sum()
+    total_sp = df_calc[~df_calc["Key"].isin(gh_added_keys)]["Story Points"].sum()
     
     # "Delivered SP (Total)": Sum of all resolved issues (including scope creep)
-    achieved_sp = df[df["Resolved"] == True]["Story Points"].sum()
+    achieved_sp = df_calc[df_calc["Resolved"] == True]["Story Points"].sum()
     
     if gh_added_keys:
         st.caption("✨ Committed SP accurately excludes scope creep tickets added mid-sprint.")
@@ -1229,7 +1248,7 @@ def render_dashboard():
     
     releases_count = st.session_state.get("kpi_releases_count", 0)
     
-    bugs = df[df["Is Bug"] == True]
+    bugs = df_calc[df_calc["Is Bug"] == True]
     resolved_bugs = len(bugs[bugs["Resolved"] == True])
     open_bugs_df = bugs[bugs["Resolved"] == False]
     
@@ -1240,8 +1259,8 @@ def render_dashboard():
     open_critical_bugs = st.session_state.get("kpi_global_critical_bugs", sev_a_open)
     open_bugs = st.session_state.get("kpi_global_open_bugs", sev_a_open + sev_b_open)
     
-    if len(df) > 0 and "Cycle Time (Days)" in df.columns:
-        avg_cycle_time = df["Cycle Time (Days)"].mean()
+    if len(df_calc) > 0 and "Cycle Time (Days)" in df_calc.columns:
+        avg_cycle_time = df_calc["Cycle Time (Days)"].mean()
         avg_cycle_time = round(avg_cycle_time, 2) if pd.notnull(avg_cycle_time) else 0
     else:
         avg_cycle_time = 0
@@ -1285,21 +1304,24 @@ def render_dashboard():
     if "Labels" not in df.columns:
         df["Labels"] = ""
 
-    disp_df = df[["Jira URL", "Type", "Status", "Labels", "Story Points", "Resolved", "First In Progress", "Resolved At", "Cycle Time (Days)"]].copy()
-    disp_df["First In Progress"] = disp_df["First In Progress"].apply(lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else "-")
+    disp_df = df[["Include", "Jira URL", "Type", "Status", "Labels", "Story Points", "Resolved", "Last In Progress", "Resolved At", "Cycle Time (Days)"]].copy()
+    disp_df["Last In Progress"] = disp_df["Last In Progress"].apply(lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else "-")
     disp_df["Resolved At"] = disp_df["Resolved At"].apply(lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else "-")
     disp_df = disp_df.rename(columns={
         "Jira URL": "Key",
-        "First In Progress": "Start Date",
+        "Last In Progress": "Start Date",
         "Resolved At": "Resolved Date"
     })
     
-    disp_df = disp_df.sort_values(by="Cycle Time (Days)", ascending=False, na_position="last")
+    disp_df = disp_df.sort_values(by="Cycle Time (Days)", ascending=False, na_position="last").reset_index(drop=True)
 
-    st.dataframe(
+    st.data_editor(
         disp_df,
+        key="kpi_editor",
         use_container_width=True,
+        disabled=["Key", "Type", "Status", "Labels", "Story Points", "Resolved", "Start Date", "Resolved Date", "Cycle Time (Days)"],
         column_config={
+            "Include": st.column_config.CheckboxColumn("Include", default=True),
             "Key": st.column_config.LinkColumn(
                 "Key",
                 display_text=r".*/browse/(.*)"
