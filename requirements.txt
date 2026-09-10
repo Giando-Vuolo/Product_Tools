@@ -8,3 +8,4 @@ reportlab
 pycloudflared
 streamlit-autorefresh
 vl-convert-python
+python-pptx

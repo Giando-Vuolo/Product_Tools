@@ -3,17 +3,17 @@ import pandas as pd
 import plotly.express as px
 import re
 import os
+import io
+import html
+import base64
 from dotenv import load_dotenv
-from streamlit_autorefresh import st_autorefresh
+from utils.jira_helpers import build_quarterly_epic_progress_table
 
 # Shared file paths for live collaboration
 SHARED_DIR = "data"
 SHARED_BACKLOG_PATH = os.path.join(SHARED_DIR, "shared_backlog.csv")
 SHARED_SPRINT_CALENDAR_PATH = os.path.join(SHARED_DIR, "shared_sprint_calendar.csv")
 os.makedirs(SHARED_DIR, exist_ok=True)
-
-# Autorefresh page every 5 seconds for live sync
-st_autorefresh(interval=5000, key="backlog_sync_refresher")
 
 def sync_from_disk_if_modified():
     """Reads modifications from the shared disk files if another user changed them."""
@@ -66,6 +66,10 @@ if 'editor_key_counter' not in st.session_state:
     st.session_state.editor_key_counter = 0
 if 'just_reset_selection' not in st.session_state:
     st.session_state.just_reset_selection = False
+if 'quarterly_progress_df' not in st.session_state:
+    st.session_state.quarterly_progress_df = None
+if 'quarterly_progress_config' not in st.session_state:
+    st.session_state.quarterly_progress_config = {}
 
 # Custom CSS for Premium Dark Mode Theme
 st.markdown("""
@@ -303,6 +307,466 @@ def val_changed(v1, v2):
         return bool(v1 != v2)
     except Exception:
         return True
+
+
+def get_quarterly_team_label(labels):
+    """Return the first configured team label assigned to an Epic."""
+    configured_labels = [label.strip() for label in os.getenv("TEAM_LABELS", "").split(",") if label.strip()]
+    item_labels = {label.strip().lower() for label in re.split(r'[\s,]+', str(labels)) if label.strip()}
+    return next((label for label in configured_labels if label.lower() in item_labels), "-")
+
+
+def prepare_quarterly_progress_for_presentation(df):
+    """Add the presentation-only fields and order Epics by their configured team."""
+    prepared = df.copy()
+    presentation_defaults = {
+        "Presentation update": "",
+        "Include in delivery roadmap": False,
+        "Release version": "",
+        "Delivery month": "",
+        "Delivery timing": "Mid",
+    }
+    for column, default_value in presentation_defaults.items():
+        if column not in prepared.columns:
+            prepared[column] = default_value
+    prepared["Team"] = prepared.get("Labels", pd.Series("", index=prepared.index)).apply(get_quarterly_team_label)
+
+    configured_labels = [label.strip() for label in os.getenv("TEAM_LABELS", "").split(",") if label.strip()]
+    priorities = {label.lower(): position for position, label in enumerate(configured_labels)}
+    prepared["_team_order"] = prepared["Team"].str.lower().map(priorities).fillna(len(priorities))
+    prepared = prepared.sort_values(["_team_order", "Key"], kind="stable").drop(columns=["_team_order"])
+    return prepared.reset_index(drop=True)
+
+
+def delivery_month_options():
+    """Provide a simple rolling set of month choices for approximate delivery milestones."""
+    start = pd.Timestamp.today().replace(day=1)
+    return ["-"] + [(start + pd.DateOffset(months=offset)).strftime("%b %Y") for offset in range(18)]
+
+
+def build_delivery_roadmap_timeline(df):
+    """Turn selected delivery commitments into an easy-to-read milestone timeline."""
+    roadmap = df[df["Include in delivery roadmap"].fillna(False).astype(bool)].copy()
+    roadmap = roadmap[
+        roadmap["Delivery month"].fillna("").astype(str).str.strip().ne("")
+        & roadmap["Delivery month"].fillna("").astype(str).str.strip().ne("-")
+    ]
+    if roadmap.empty:
+        return roadmap, None
+
+    timing_days = {"Beginning": 3, "Mid": 15, "End": 25}
+    def milestone_date(row):
+        try:
+            month_start = pd.to_datetime(f"01 {row['Delivery month']}", format="%d %b %Y")
+            return month_start + pd.Timedelta(days=timing_days.get(str(row.get("Delivery timing", "Mid")), 15) - 1)
+        except (TypeError, ValueError):
+            return pd.NaT
+
+    roadmap["Milestone date"] = roadmap.apply(milestone_date, axis=1)
+    roadmap = roadmap.dropna(subset=["Milestone date"]).sort_values("Milestone date", kind="stable")
+    if roadmap.empty:
+        return roadmap, None
+
+    roadmap["Epic"] = roadmap["Summary"].fillna("Unnamed Epic").astype(str)
+    roadmap["Release"] = roadmap["Release version"].fillna("").replace("", "Release TBD")
+    roadmap["Update"] = roadmap["Presentation update"].fillna("").replace("", "No additional context provided")
+    fig = px.scatter(
+        roadmap,
+        x="Milestone date",
+        y="Epic",
+        symbol="Delivery timing",
+        text="Release",
+        custom_data=["Update", "Completion", "Status"],
+    )
+    fig.add_vline(x=pd.Timestamp.today(), line_width=2, line_dash="dash", line_color="#EF4444")
+    fig.add_annotation(
+        x=pd.Timestamp.today(), y=1.03, yref="paper", text="<b>Today</b>", showarrow=False,
+        font=dict(color="#EF4444", size=11), xanchor="center"
+    )
+    fig.update_traces(
+        marker=dict(size=17, line=dict(width=2, color="#FFFFFF")),
+        textposition="top center",
+        textfont=dict(size=11, color="#F8FAFC"),
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "<b>Target:</b> %{x|%d %b %Y}<br>"
+            "<b>Release:</b> %{text}<br>"
+            "<b>Completion:</b> %{customdata[1]}<br>"
+            "<b>Status:</b> %{customdata[2]}<br>"
+            "<b>Context:</b> %{customdata[0]}<extra></extra>"
+        ),
+    )
+    fig.update_layout(
+        title="Planned delivery milestones",
+        xaxis_title="", yaxis_title="", height=max(380, 115 + len(roadmap) * 68),
+        plot_bgcolor="#18181D", paper_bgcolor="#18181D", font=dict(color="#F8FAFC"),
+        legend_title_text="Approx. timing", margin=dict(l=20, r=20, t=65, b=30),
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="#475569", tickformat="%b\n%Y")
+    fig.update_yaxes(showgrid=False, autorange="reversed")
+    return roadmap, fig
+
+
+def build_delivery_roadmap_slide_pdf(roadmap_df, title, primary_color_hex):
+    """Create a compact client-facing PDF slide with delivery milestones on a time axis."""
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.lib import colors
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    width, height = landscape(letter)
+    pdf = canvas.Canvas(buffer, pagesize=(width, height))
+    primary = colors.HexColor(primary_color_hex)
+    background = colors.HexColor("#F8FAFC")
+    dark = colors.HexColor("#1E293B")
+    muted = colors.HexColor("#64748B")
+
+    pdf.setFillColor(background)
+    pdf.rect(0, 0, width, height, stroke=0, fill=1)
+    pdf.setFillColor(primary)
+    pdf.rect(0, height - 18, width, 18, stroke=0, fill=1)
+    pdf.rect(0, 0, 8, height, stroke=0, fill=1)
+    pdf.rect(width - 8, 0, 8, height, stroke=0, fill=1)
+
+    pdf.setFillColor(primary)
+    pdf.setFont("Helvetica-Bold", 24)
+    pdf.drawString(54, height - 58, str(title)[:85])
+    pdf.setFillColor(muted)
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(54, height - 76, "Committed Epic delivery roadmap - planned milestones for unfinished work")
+
+    if roadmap_df.empty:
+        pdf.setFillColor(dark)
+        pdf.setFont("Helvetica", 14)
+        pdf.drawString(54, height - 130, "No delivery milestones selected.")
+        pdf.save()
+        buffer.seek(0)
+        return buffer.getvalue()
+
+    earliest = roadmap_df["Milestone date"].min().replace(day=1)
+    latest = (roadmap_df["Milestone date"].max().replace(day=1) + pd.DateOffset(months=1))
+    if latest <= earliest:
+        latest = earliest + pd.DateOffset(months=1)
+    total_days = max((latest - earliest).days, 1)
+    axis_left, axis_right, axis_y = 280, width - 58, height - 130
+
+    def x_for_date(value):
+        return axis_left + ((value - earliest).days / total_days) * (axis_right - axis_left)
+
+    pdf.setStrokeColor(colors.HexColor("#94A3B8"))
+    pdf.setLineWidth(2)
+    pdf.line(axis_left, axis_y, axis_right, axis_y)
+    month = earliest
+    while month <= latest:
+        x_pos = x_for_date(month)
+        pdf.setStrokeColor(colors.HexColor("#CBD5E1"))
+        pdf.setLineWidth(0.8)
+        pdf.line(x_pos, 66, x_pos, axis_y + 10)
+        pdf.setFillColor(muted)
+        pdf.setFont("Helvetica-Bold", 8)
+        pdf.drawCentredString(x_pos, axis_y + 16, month.strftime("%b %Y"))
+        month += pd.DateOffset(months=1)
+
+    today_x = x_for_date(pd.Timestamp.today())
+    if axis_left <= today_x <= axis_right:
+        pdf.setStrokeColor(colors.HexColor("#EF4444"))
+        pdf.setDash(4, 3)
+        pdf.line(today_x, 58, today_x, axis_y + 28)
+        pdf.setDash()
+        pdf.setFillColor(colors.HexColor("#EF4444"))
+        pdf.setFont("Helvetica-Bold", 8)
+        pdf.drawCentredString(today_x, axis_y + 30, "TODAY")
+
+    available_height = axis_y - 70
+    row_height = min(46, max(25, available_height / max(len(roadmap_df), 1)))
+    max_rows = int(available_height // row_height)
+    display_rows = roadmap_df.head(max_rows)
+    for index, (_, row) in enumerate(display_rows.iterrows()):
+        y_pos = axis_y - 33 - index * row_height
+        marker_x = x_for_date(row["Milestone date"])
+        pdf.setStrokeColor(colors.HexColor("#CBD5E1"))
+        pdf.setLineWidth(0.5)
+        pdf.line(54, y_pos - 13, axis_right, y_pos - 13)
+        from reportlab.lib.utils import simpleSplit
+        pdf.setFillColor(dark)
+        pdf.setFont("Helvetica-Bold", 7.5)
+        epic_label = str(row.get("Summary", "Unnamed Epic"))
+        epic_lines = simpleSplit(epic_label, "Helvetica-Bold", 7.5, 215)[:3]
+        for line_index, line in enumerate(epic_lines):
+            pdf.drawString(54, y_pos + 6 - line_index * 8, line)
+        release = row.get("Release", "Release TBD")
+        pdf.setStrokeColor(primary)
+        pdf.setLineWidth(1.2)
+        pdf.line(marker_x, y_pos + 6, marker_x, axis_y)
+        pdf.setFillColor(primary)
+        pdf.circle(marker_x, y_pos + 6, 5, stroke=0, fill=1)
+        pdf.setFillColor(muted)
+        pdf.setFont("Helvetica-Bold", 7.5)
+        pdf.drawString(marker_x + 8, y_pos + 3, str(release))
+
+    if len(roadmap_df) > len(display_rows):
+        pdf.setFillColor(muted)
+        pdf.setFont("Helvetica-Oblique", 8)
+        pdf.drawRightString(axis_right, 46, f"+ {len(roadmap_df) - len(display_rows)} additional milestone(s) shown in the interactive timeline")
+    pdf.setFillColor(muted)
+    pdf.setFont("Helvetica", 8)
+    pdf.drawString(54, 32, f"Generated {pd.Timestamp.today().strftime('%d %b %Y')} | Delivery dates are approximate (Beginning, Mid, End of month).")
+    pdf.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def build_quarterly_progress_slide_pdf(df, title, primary_color_hex):
+    """Create a presentation-style landscape slide for the quarterly Epic progress."""
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle
+    from utils.pdf_helpers import get_progress_bar_drawing
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=landscape(letter),
+        leftMargin=54, rightMargin=54, topMargin=48, bottomMargin=42
+    )
+    styles = getSampleStyleSheet()
+    primary = colors.HexColor(primary_color_hex)
+    title_style = ParagraphStyle(
+        "QuarterlyProgressTitle", parent=styles["Normal"], fontName="Helvetica-Bold",
+        fontSize=25, leading=30, textColor=primary, spaceAfter=5
+    )
+    subtitle_style = ParagraphStyle(
+        "QuarterlyProgressSubtitle", parent=styles["Normal"], fontName="Helvetica",
+        fontSize=10, leading=13, textColor=colors.HexColor("#475569"), spaceAfter=16
+    )
+    header_style = ParagraphStyle(
+        "QuarterlyProgressHeader", parent=styles["Normal"], fontName="Helvetica-Bold",
+        fontSize=8.5, leading=10, textColor=colors.white
+    )
+    body_style = ParagraphStyle(
+        "QuarterlyProgressBody", parent=styles["Normal"], fontName="Helvetica",
+        fontSize=8, leading=10, textColor=colors.HexColor("#1E293B")
+    )
+    key_style = ParagraphStyle("QuarterlyProgressKey", parent=body_style, fontName="Helvetica-Bold")
+
+    visible_columns = [
+        ("Key", 55), ("Epic", 170), ("Progress", 68), ("Issues done", 65),
+        ("Status", 65), ("Team", 85), ("Update", 176)
+    ]
+    column_sources = {"Epic": "Summary", "Progress": "Completion", "Update": "Presentation update"}
+    table_data = [[Paragraph(name, header_style) for name, _ in visible_columns]]
+    for _, row in df.iterrows():
+        cells = []
+        for name, _ in visible_columns:
+            source = column_sources.get(name, name)
+            value = row.get(source, "-")
+            value = "-" if pd.isna(value) or str(value).strip() == "" else str(value)
+            if name == "Progress":
+                cells.append(get_progress_bar_drawing(value, primary, width=52, height=18) or Paragraph(value, body_style))
+            else:
+                cells.append(Paragraph(html.escape(value), key_style if name == "Key" else body_style))
+        table_data.append(cells)
+
+    table = Table(table_data, colWidths=[width for _, width in visible_columns], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), primary),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#CBD5E1")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+    ]))
+    project_name = os.getenv("PROJECT_NAME", "RECALL2")
+    generated = pd.Timestamp.today().strftime("%d %b %Y")
+    story = [
+        Paragraph(html.escape(title), title_style),
+        Paragraph(f"<b>Project:</b> {html.escape(project_name)} &nbsp; | &nbsp; <b>Generated:</b> {generated} &nbsp; | &nbsp; <b>Committed Epics:</b> {len(df)}", subtitle_style),
+        table,
+    ]
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def build_quarterly_progress_pptx(progress_df, roadmap_df, title, primary_color_hex):
+    """Build editable PowerPoint slides for quarterly progress and delivery milestones."""
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+    from pptx.dml.color import RGBColor
+
+    def rgb(hex_value):
+        value = hex_value.lstrip("#")
+        return RGBColor(int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+
+    primary = rgb(primary_color_hex)
+    navy = RGBColor(11, 39, 86)
+    dark = RGBColor(30, 41, 59)
+    muted = RGBColor(100, 116, 139)
+    light = RGBColor(241, 245, 249)
+    grid = RGBColor(203, 213, 225)
+    green = RGBColor(34, 197, 94)
+
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    blank_layout = prs.slide_layouts[6]
+
+    def add_text(slide, text, left, top, width, height, size=12, color=dark, bold=False, align=PP_ALIGN.LEFT):
+        shape = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
+        text_frame = shape.text_frame
+        text_frame.clear()
+        text_frame.word_wrap = True
+        text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+        paragraph = text_frame.paragraphs[0]
+        paragraph.alignment = align
+        run = paragraph.add_run()
+        run.text = str(text)
+        run.font.name = "Arial"
+        run.font.size = Pt(size)
+        run.font.bold = bold
+        run.font.color.rgb = color
+        return shape
+
+    def add_chrome(slide, slide_title, subtitle=""):
+        slide.background.fill.solid()
+        slide.background.fill.fore_color.rgb = RGBColor(248, 250, 252)
+        top_bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, Inches(0.18))
+        top_bar.fill.solid()
+        top_bar.fill.fore_color.rgb = primary
+        top_bar.line.fill.background()
+        for x_pos in [0, 13.25]:
+            band = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x_pos), 0, Inches(0.08), prs.slide_height)
+            band.fill.solid()
+            band.fill.fore_color.rgb = primary
+            band.line.fill.background()
+        add_text(slide, slide_title, 0.7, 0.35, 11.9, 0.46, size=25, color=navy, bold=True)
+        if subtitle:
+            add_text(slide, subtitle, 0.7, 0.82, 11.7, 0.24, size=10, color=muted)
+
+    progress_columns = [
+        ("Key", "Key", 0.90), ("Epic", "Summary", 3.10), ("Progress", "Completion", 1.00),
+        ("Issues done", "Issues done", 1.00), ("Status", "Status", 1.10), ("Team", "Team", 1.35),
+        ("Update", "Presentation update", 3.53),
+    ]
+    rows_per_slide = 12
+    progress_df = prepare_quarterly_progress_for_presentation(progress_df)
+    for start in range(0, len(progress_df), rows_per_slide):
+        chunk = progress_df.iloc[start:start + rows_per_slide].reset_index(drop=True)
+        suffix = "" if start == 0 else f" (cont. {start // rows_per_slide + 1})"
+        slide = prs.slides.add_slide(blank_layout)
+        add_chrome(slide, f"{title}{suffix}", "Committed Epic progress")
+        table_left, table_top, table_width = 0.68, 1.22, 11.98
+        table_height = 5.85
+        row_height = table_height / (len(chunk) + 1)
+        table_shape = slide.shapes.add_table(len(chunk) + 1, len(progress_columns), Inches(table_left), Inches(table_top), Inches(table_width), Inches(table_height))
+        table = table_shape.table
+        for row in table.rows:
+            row.height = Inches(row_height)
+        for index, (_, _, column_width) in enumerate(progress_columns):
+            table.columns[index].width = Inches(column_width)
+            cell = table.cell(0, index)
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = navy
+            cell.text = progress_columns[index][0]
+            paragraph = cell.text_frame.paragraphs[0]
+            paragraph.runs[0].font.name = "Arial"
+            paragraph.runs[0].font.size = Pt(8)
+            paragraph.runs[0].font.bold = True
+            paragraph.runs[0].font.color.rgb = RGBColor(255, 255, 255)
+        for row_index, (_, row) in enumerate(chunk.iterrows(), start=1):
+            for col_index, (_, source, _) in enumerate(progress_columns):
+                cell = table.cell(row_index, col_index)
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(255, 255, 255) if row_index % 2 else light
+                cell.margin_left = Inches(0.05)
+                cell.margin_right = Inches(0.05)
+                cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+                value = row.get(source, "-")
+                value = "-" if pd.isna(value) or str(value).strip() == "" else str(value)
+                cell.text = "" if source == "Completion" else value
+                if source != "Completion":
+                    paragraph = cell.text_frame.paragraphs[0]
+                    paragraph.runs[0].font.name = "Arial"
+                    paragraph.runs[0].font.size = Pt(7.2)
+                    paragraph.runs[0].font.color.rgb = dark
+                    if source == "Key":
+                        paragraph.runs[0].font.bold = True
+
+                if source == "Completion":
+                    try:
+                        percentage = max(0, min(100, int(float(value.replace("%", "")))))
+                    except Exception:
+                        percentage = 0
+                    cell_left = table_left + sum(width for _, _, width in progress_columns[:col_index])
+                    bar_left = cell_left + 0.10
+                    bar_top = table_top + row_height * row_index + (row_height / 2) - 0.015
+                    track = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(bar_left), Inches(bar_top), Inches(0.62), Inches(0.07))
+                    track.fill.solid()
+                    track.fill.fore_color.rgb = RGBColor(226, 232, 240)
+                    track.line.fill.background()
+                    if percentage:
+                        fill = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(bar_left), Inches(bar_top), Inches(max(0.04, 0.62 * percentage / 100)), Inches(0.07))
+                        fill.fill.solid()
+                        fill.fill.fore_color.rgb = green if percentage == 100 else navy
+                        fill.line.fill.background()
+                    add_text(slide, f"{percentage}%", bar_left, table_top + row_height * row_index + (row_height / 2) - 0.18, 0.62, 0.14, size=6.5, color=dark, bold=True, align=PP_ALIGN.CENTER)
+
+    if roadmap_df is not None and not roadmap_df.empty:
+        slide = prs.slides.add_slide(blank_layout)
+        add_chrome(slide, "Delivery Roadmap", f"{title} - planned delivery milestones for unfinished work")
+        earliest = roadmap_df["Milestone date"].min().replace(day=1)
+        latest = roadmap_df["Milestone date"].max().replace(day=1) + pd.DateOffset(months=1)
+        total_days = max((latest - earliest).days, 1)
+        axis_left, axis_right, axis_y = 2.55, 12.55, 1.65
+
+        def x_for_date(value):
+            return axis_left + ((value - earliest).days / total_days) * (axis_right - axis_left)
+
+        axis = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(axis_left), Inches(axis_y), Inches(axis_right - axis_left), Inches(0.025))
+        axis.fill.solid()
+        axis.fill.fore_color.rgb = muted
+        axis.line.fill.background()
+        month = earliest
+        while month <= latest:
+            x_pos = x_for_date(month)
+            grid_line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x_pos), Inches(axis_y), Inches(0.012), Inches(4.9))
+            grid_line.fill.solid()
+            grid_line.fill.fore_color.rgb = grid
+            grid_line.line.fill.background()
+            add_text(slide, month.strftime("%b %Y"), x_pos - 0.38, 1.38, 0.76, 0.16, size=8, color=muted, bold=True, align=PP_ALIGN.CENTER)
+            month += pd.DateOffset(months=1)
+
+        today_x = x_for_date(pd.Timestamp.today())
+        if axis_left <= today_x <= axis_right:
+            today_line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(today_x), Inches(1.22), Inches(0.018), Inches(5.4))
+            today_line.fill.solid()
+            today_line.fill.fore_color.rgb = RGBColor(239, 68, 68)
+            today_line.line.fill.background()
+            add_text(slide, "TODAY", today_x - 0.27, 1.05, 0.56, 0.16, size=7, color=RGBColor(239, 68, 68), bold=True, align=PP_ALIGN.CENTER)
+
+        displayed = roadmap_df.head(10).reset_index(drop=True)
+        row_height = min(0.48, 4.65 / max(len(displayed), 1))
+        for index, (_, row) in enumerate(displayed.iterrows()):
+            y_pos = 2.08 + index * row_height
+            add_text(slide, str(row.get("Summary", "Unnamed Epic")), 0.68, y_pos, 1.75, 0.38, size=7.0, color=dark, bold=True)
+            marker_x = x_for_date(row["Milestone date"])
+            connector = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(marker_x), Inches(axis_y + 0.02), Inches(0.018), Inches(y_pos - axis_y + 0.22))
+            connector.fill.solid()
+            connector.fill.fore_color.rgb = primary
+            connector.line.fill.background()
+            marker = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(marker_x - 0.075), Inches(y_pos + 0.11), Inches(0.16), Inches(0.16))
+            marker.fill.solid()
+            marker.fill.fore_color.rgb = primary
+            marker.line.color.rgb = RGBColor(255, 255, 255)
+            add_text(slide, str(row.get("Release", "Release TBD")), marker_x + 0.10, y_pos + 0.08, 0.85, 0.16, size=7.0, color=muted, bold=True)
+        add_text(slide, f"Generated {pd.Timestamp.today().strftime('%d %b %Y')} - delivery dates are approximate", 0.68, 7.05, 5.0, 0.16, size=7.5, color=muted)
+
+    output = io.BytesIO()
+    prs.save(output)
+    output.seek(0)
+    return output.getvalue()
 
 
 def build_quarterly_plan_pdf(df, primary_color_hex):
@@ -812,6 +1276,63 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
     except:
         pass
 
+    st.divider()
+    st.subheader("📈 Quarterly Epic Progress")
+    st.write("Load the committed Epics for the quarter, calculate their completion, and add a concise update for the presentation.")
+    with st.container(border=True):
+        col_project, col_committed, col_quarter, col_progress_title = st.columns([1, 1, 1, 2])
+        with col_project:
+            progress_project = st.text_input("Project", value="RECALLTWO", key="qp_progress_project")
+        with col_committed:
+            progress_committed_label = st.text_input(
+                "Committed Epic label", value=os.getenv("COMMITTED_LABEL", "RC2_committed"), key="qp_progress_committed"
+            )
+        with col_quarter:
+            progress_quarter_label = st.text_input(
+                "Quarter label", value=os.getenv("QUARTER_LABEL", "RC2_FB_18"), key="qp_progress_quarter"
+            )
+        with col_progress_title:
+            progress_title = st.text_input(
+                "Slide title", value=os.getenv("QUARTER_STATUS_TABLE_TITLE", "Quarterly Epic Progress"), key="qp_progress_title"
+            )
+
+        if st.button("📈 Load Quarterly Epic Progress", use_container_width=True):
+            if not st.session_state.get("jira_server") or not st.session_state.get("jira_token"):
+                st.error("Configure and test the Jira connection first in Home Hub.")
+            elif not progress_committed_label.strip() or not progress_quarter_label.strip():
+                st.error("Enter both the committed Epic label and the quarter label.")
+            else:
+                with st.spinner("Downloading committed Epics and calculating progress..."):
+                    result = build_quarterly_epic_progress_table(
+                        st.session_state.jira_server,
+                        st.session_state.jira_token,
+                        progress_committed_label.strip(),
+                        progress_quarter_label.strip(),
+                        progress_title.strip() or "Quarterly Epic Progress",
+                        "Quarterly Planner",
+                        st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)"),
+                        st.session_state.get("jira_email", ""),
+                        project_key=progress_project.strip() or "RECALLTWO",
+                    )
+                if result is None:
+                    st.error("The quarterly Epic progress could not be loaded. Check the Jira connection and labels.")
+                elif result["df"].empty:
+                    st.warning("No committed Epics were found for those labels.")
+                else:
+                    previous = st.session_state.get("quarterly_progress_df")
+                    previous_updates = {}
+                    if isinstance(previous, pd.DataFrame) and not previous.empty and "Presentation update" in previous.columns:
+                        previous_updates = previous.set_index("Key")["Presentation update"].fillna("").to_dict()
+                    progress_df = result["df"].drop(columns=["Select"], errors="ignore")
+                    progress_df["Presentation update"] = progress_df["Key"].map(previous_updates).fillna("")
+                    st.session_state.quarterly_progress_df = prepare_quarterly_progress_for_presentation(progress_df)
+                    st.session_state.quarterly_progress_config = {
+                        "title": progress_title.strip() or "Quarterly Epic Progress",
+                        "quarter_label": progress_quarter_label.strip(),
+                    }
+                    st.success(f"Loaded {len(progress_df)} committed Epics. Add the presentation updates in Workbook.")
+                    st.rerun()
+
 
 
 
@@ -822,6 +1343,49 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
 elif st.session_state.active_tab_qp == "✍️ Workbook":
     st.subheader("✍️ Backlog Workbook Editor")
     st.write("Modify your epics, status, sprints, and period schedules directly in the high-fidelity table below.")
+
+    progress_df = st.session_state.get("quarterly_progress_df")
+    st.markdown("### 📈 Quarterly Epic Progress — presentation updates")
+    if isinstance(progress_df, pd.DataFrame) and not progress_df.empty:
+        st.caption("Select the Epics to communicate, define their planned release milestone, and write a short update. Jira fields remain read-only.")
+        progress_columns = [
+            "Key", "Summary", "Completion", "Issues done", "Status", "Team", "Presentation update",
+            "Include in delivery roadmap", "Release version", "Delivery month", "Delivery timing"
+        ]
+        progress_columns = [column for column in progress_columns if column in progress_df.columns]
+        with st.form("quarterly_progress_updates_form", border=False):
+            edited_progress = st.data_editor(
+                progress_df[progress_columns],
+                use_container_width=True,
+                hide_index=True,
+                disabled=[column for column in progress_columns if column not in {
+                    "Presentation update", "Include in delivery roadmap", "Release version", "Delivery month", "Delivery timing"
+                }],
+                column_config={
+                    "Key": st.column_config.TextColumn("Key", width="small"),
+                    "Summary": st.column_config.TextColumn("Epic", width="large"),
+                "Completion": st.column_config.TextColumn("Completion", width="small"),
+                "Issues done": st.column_config.TextColumn("Issues done", width="small"),
+                    "Status": st.column_config.TextColumn("Status", width="small"),
+                    "Team": st.column_config.TextColumn("Team", width="medium"),
+                    "Presentation update": st.column_config.TextColumn("Update / context", width="large"),
+                    "Include in delivery roadmap": st.column_config.CheckboxColumn("Show in roadmap", default=False),
+                    "Release version": st.column_config.TextColumn("Release version", width="medium"),
+                    "Delivery month": st.column_config.SelectboxColumn("Delivery month", options=delivery_month_options(), width="medium"),
+                    "Delivery timing": st.column_config.SelectboxColumn("Approx. timing", options=["Beginning", "Mid", "End"], width="small"),
+                },
+                key="quarterly_progress_editor",
+            )
+            save_progress_updates = st.form_submit_button("Save roadmap selections and updates", use_container_width=True)
+        if save_progress_updates:
+            updated_progress = progress_df.copy()
+            for column in ["Presentation update", "Include in delivery roadmap", "Release version", "Delivery month", "Delivery timing"]:
+                updated_progress[column] = edited_progress[column]
+            st.session_state.quarterly_progress_df = prepare_quarterly_progress_for_presentation(updated_progress)
+            st.success("Roadmap selections and presentation updates saved.")
+    else:
+        st.info("Load Quarterly Epic Progress in Ingestion to add the updates that will appear in the slide.")
+    st.divider()
     
     if st.session_state.get("main_df") is None:
         st.warning("⚠️ **No backlog data loaded**. Please complete Step 1: **Ingestion** or load a template backlog first.")
@@ -1482,8 +2046,72 @@ def show_timeline_gantt_tab():
 # STEP NAVIGATION EXECUTION
 # ---------------------------------------------------------
 if st.session_state.active_tab_qp == "💾 Exporter":
-    if st.session_state.get("main_df") is None:
-        st.warning("⚠️ **No backlog data loaded**. Please complete Step 1: **Ingestion** first.")
-    else:
-        show_timeline_gantt_tab()
+    progress_df = st.session_state.get("quarterly_progress_df")
+    if isinstance(progress_df, pd.DataFrame) and not progress_df.empty:
+        st.subheader("📈 Quarterly Epic Progress Slide")
+        st.write("This presentation-ready slide uses the same Epic progress fields as Sprint Review, with your additional update/context column.")
+        progress_title = st.session_state.get("quarterly_progress_config", {}).get("title", "Quarterly Epic Progress")
+        progress_pdf = build_quarterly_progress_slide_pdf(
+            prepare_quarterly_progress_for_presentation(progress_df),
+            progress_title,
+            st.session_state.get("primary_color", "#0B2756"),
+        )
+        st.download_button(
+            label="⬇️ Download Quarterly Epic Progress Slide (PDF)",
+            data=progress_pdf,
+            file_name="quarterly_epic_progress.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+        st.markdown("#### 👁️ Progress slide preview")
+        progress_preview = base64.b64encode(progress_pdf).decode("utf-8")
+        st.markdown(
+            f'<iframe src="data:application/pdf;base64,{progress_preview}" width="100%" height="520" '
+            'type="application/pdf" style="border: 1px solid #3E3E4A; border-radius: 12px; background: #ffffff;"></iframe>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("### 🗓️ Delivery roadmap timeline")
+        roadmap_df, roadmap_timeline = build_delivery_roadmap_timeline(progress_df)
+        if roadmap_timeline is None:
+            st.info("Select at least one Epic in Workbook and set its delivery month to build the client delivery timeline.")
+        else:
+            st.plotly_chart(roadmap_timeline, use_container_width=True)
+            st.caption(f"Showing {len(roadmap_df)} selected delivery milestone(s). Hover over a milestone to see its completion, status, and context.")
+            roadmap_pdf = build_delivery_roadmap_slide_pdf(
+                roadmap_df,
+                f"{progress_title} - Delivery Roadmap",
+                st.session_state.get("primary_color", "#0B2756"),
+            )
+            st.download_button(
+                label="⬇️ Download Delivery Roadmap Slide (PDF)",
+                data=roadmap_pdf,
+                file_name="quarterly_delivery_roadmap.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+            powerpoint_data = build_quarterly_progress_pptx(
+                prepare_quarterly_progress_for_presentation(progress_df),
+                roadmap_df,
+                progress_title,
+                st.session_state.get("primary_color", "#0B2756"),
+            )
+            st.download_button(
+                label="⬇️ Download PowerPoint (Progress + Roadmap)",
+                data=powerpoint_data,
+                file_name="quarterly_epic_progress_and_roadmap.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                use_container_width=True,
+            )
+            st.markdown("#### 👁️ Delivery roadmap slide preview")
+            roadmap_preview = base64.b64encode(roadmap_pdf).decode("utf-8")
+            st.markdown(
+                f'<iframe src="data:application/pdf;base64,{roadmap_preview}" width="100%" height="520" '
+                'type="application/pdf" style="border: 1px solid #3E3E4A; border-radius: 12px; background: #ffffff;"></iframe>',
+                unsafe_allow_html=True,
+            )
+        st.divider()
 
+    if st.session_state.get("main_df") is not None:
+        show_timeline_gantt_tab()
+    elif not (isinstance(progress_df, pd.DataFrame) and not progress_df.empty):
+        st.warning("⚠️ Load a backlog or Quarterly Epic Progress in Ingestion first.")
