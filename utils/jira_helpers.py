@@ -236,13 +236,13 @@ def fetch_epic_completion(server, token, epic_keys, epic_link_field, auth_type="
         headers["Authorization"] = f"Bearer {token_clean}"
 
     completion_by_epic = {}
-    issue_counts_by_epic = {}
+    issue_status_counts_by_epic = {}
     for k in epic_keys:
         completion_by_epic[k] = "-"
-        issue_counts_by_epic[k] = "0/0"
+        issue_status_counts_by_epic[k] = {"Closed / Resolved": 0, "To Do": 0, "In progress": 0}
 
     if not epic_keys:
-        return (completion_by_epic, issue_counts_by_epic) if return_issue_counts else completion_by_epic
+        return (completion_by_epic, issue_status_counts_by_epic) if return_issue_counts else completion_by_epic
 
     # Build JQL to query all child tickets in one go
     keys_str = ",".join([f'"{k}"' for k in epic_keys])
@@ -263,11 +263,11 @@ def fetch_epic_completion(server, token, epic_keys, epic_link_field, auth_type="
             timeout=15
         )
         if response.status_code != 200:
-            return (completion_by_epic, issue_counts_by_epic) if return_issue_counts else completion_by_epic
+            return (completion_by_epic, issue_status_counts_by_epic) if return_issue_counts else completion_by_epic
 
         issues = response.json().get("issues", [])
         if not issues:
-            return (completion_by_epic, issue_counts_by_epic) if return_issue_counts else completion_by_epic
+            return (completion_by_epic, issue_status_counts_by_epic) if return_issue_counts else completion_by_epic
 
         # Group child issues by their Epic key
         epic_issues = {}
@@ -299,17 +299,22 @@ def fetch_epic_completion(server, token, epic_keys, epic_link_field, auth_type="
             if issues_with_status:
                 scores = [score for score, _ in issues_with_status]
                 completion_by_epic[epic_key] = f"{round(sum(scores) / len(scores))}%"
-                done_count = sum(
-                    str(status_name).strip().lower() in {"closed", "resolved"}
-                    for _, status_name in issues_with_status
-                )
-                issue_counts_by_epic[epic_key] = f"{done_count}/{len(issues_with_status)}"
+                raw_statuses = [str(status_name).strip().lower() for _, status_name in issues_with_status]
+                normalized_raw_statuses = [re.sub(r"[\s_-]+", "", status) for status in raw_statuses]
+                issue_status_counts_by_epic[epic_key] = {
+                    "Closed / Resolved": sum(status in {"closed", "resolved"} for status in raw_statuses),
+                    "To Do": sum(status == "todo" for status in normalized_raw_statuses),
+                    "In progress": sum(
+                        normalized_status not in {"closed", "resolved", "todo"}
+                        for normalized_status in normalized_raw_statuses
+                    ),
+                }
 
     except Exception as e:
         with open("data/debug_click.txt", "a") as f:
             f.write(f"fetch_epic_completion EXCEPTION: {e}\n")
 
-    return (completion_by_epic, issue_counts_by_epic) if return_issue_counts else completion_by_epic
+    return (completion_by_epic, issue_status_counts_by_epic) if return_issue_counts else completion_by_epic
 
 def build_quarterly_epic_progress_table(server, token, committed_label, quarter_label, title, position, auth_type, email, project_key="RECALLTWO"):
     """
@@ -347,7 +352,7 @@ def build_quarterly_epic_progress_table(server, token, committed_label, quarter_
                 f.write("build_quarterly_epic_progress_table: fetch_jira_tickets_dataset returned None\n")
             return None
     
-        cols_to_keep = ["Key", "Summary", "Completion", "Issues done", "Epic", "Status", "Fix Version", "Assignee", "Labels"]
+        cols_to_keep = ["Key", "Summary", "Completion", "Closed / Resolved", "To Do", "In progress", "Epic", "Status", "Fix Version", "Assignee", "Labels"]
     
         if not res_df.empty:
             # Standardize Statuses
@@ -356,7 +361,7 @@ def build_quarterly_epic_progress_table(server, token, committed_label, quarter_
             
             # Calculate individual epic completion percentages
             epic_keys = res_df["Key"].dropna().astype(str).tolist()
-            completion_by_epic, issue_counts_by_epic = fetch_epic_completion(
+            completion_by_epic, issue_status_counts_by_epic = fetch_epic_completion(
                 server,
                 token,
                 epic_keys,
@@ -366,7 +371,10 @@ def build_quarterly_epic_progress_table(server, token, committed_label, quarter_
                 return_issue_counts=True
             )
             res_df["Completion"] = res_df["Key"].map(completion_by_epic).fillna("-")
-            res_df["Issues done"] = res_df["Key"].map(issue_counts_by_epic).fillna("0/0")
+            for count_column in ["Closed / Resolved", "To Do", "In progress"]:
+                res_df[count_column] = res_df["Key"].map(
+                    lambda epic_key: issue_status_counts_by_epic.get(str(epic_key), {}).get(count_column, 0)
+                )
             extra_df = res_df[[col for col in cols_to_keep if col in res_df.columns]].copy()
         else:
             extra_df = pd.DataFrame(columns=cols_to_keep)
