@@ -317,7 +317,7 @@ def get_quarterly_team_label(labels):
 
 
 def prepare_quarterly_progress_for_presentation(df):
-    """Add the presentation-only fields and order Epics by their configured team."""
+    """Add presentation fields and prioritize open, lower-progress Epics for review."""
     prepared = df.copy()
     presentation_defaults = {
         "Presentation update": "",
@@ -334,7 +334,21 @@ def prepare_quarterly_progress_for_presentation(df):
     configured_labels = [label.strip() for label in os.getenv("TEAM_LABELS", "").split(",") if label.strip()]
     priorities = {label.lower(): position for position, label in enumerate(configured_labels)}
     prepared["_team_order"] = prepared["Team"].str.lower().map(priorities).fillna(len(priorities))
-    prepared = prepared.sort_values(["_team_order", "Key"], kind="stable").drop(columns=["_team_order"])
+    status_values = prepared.get("Status", pd.Series("", index=prepared.index)).fillna("").astype(str).str.strip().str.lower()
+    # Quarterly progress maps a closed Epic to Done.  Keep accepted variants for
+    # existing imported data, then place these Epics after all open work.
+    prepared["_is_closed_epic"] = status_values.isin({"done", "closed", "resolved"}).astype(int)
+    prepared["_completion_order"] = pd.to_numeric(
+        prepared.get("Completion", pd.Series("0", index=prepared.index))
+        .fillna("0")
+        .astype(str)
+        .str.replace("%", "", regex=False),
+        errors="coerce",
+    ).fillna(0)
+    prepared = prepared.sort_values(
+        ["_is_closed_epic", "_team_order", "_completion_order", "Key"],
+        kind="stable",
+    ).drop(columns=["_is_closed_epic", "_team_order", "_completion_order"])
     return prepared.reset_index(drop=True)
 
 
