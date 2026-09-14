@@ -4,6 +4,7 @@ import threading
 import time
 import os
 import sys
+import shutil
 
 # Global reference to the tunnel process and URL
 _tunnel_process = None
@@ -37,9 +38,15 @@ def start_tunnel(port=8501):
 
     def run():
         global _tunnel_process, _tunnel_url, _tunnel_error
-        # Determine command: we try to run pycloudflared CLI directly
-        # On some systems, the python executable might need to run it as a module: -m pycloudflared
-        cmd = [sys.executable, "-m", "pycloudflared", "tunnel", "--url", f"http://127.0.0.1:{port}"]
+        # Prefer the locally installed Cloudflare binary.  pycloudflared downloads
+        # this binary at runtime, which fails on corporate networks that intercept
+        # SSL certificates.  The Python module remains a fallback for environments
+        # where the executable has not been installed.
+        cloudflared_binary = shutil.which("cloudflared")
+        if cloudflared_binary:
+            cmd = [cloudflared_binary, "tunnel", "--url", f"http://127.0.0.1:{port}"]
+        else:
+            cmd = [sys.executable, "-m", "pycloudflared", "tunnel", "--url", f"http://127.0.0.1:{port}"]
         
         try:
             _tunnel_error = None
