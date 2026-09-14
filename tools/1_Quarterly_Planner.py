@@ -550,8 +550,8 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex):
     key_style = ParagraphStyle("QuarterlyProgressKey", parent=body_style, fontName="Helvetica-Bold")
 
     visible_columns = [
-        ("Key", 55), ("Epic", 170), ("Progress", 68), ("Issues done", 65),
-        ("Status", 65), ("Team", 85), ("Update", 176)
+        ("Key", 55), ("Epic", 150), ("Progress", 60), ("Closed / Resolved", 56),
+        ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 75), ("Update", 123)
     ]
     column_sources = {"Epic": "Summary", "Progress": "Completion", "Update": "Presentation update"}
     table_data = [[Paragraph(name, header_style) for name, _ in visible_columns]]
@@ -588,7 +588,7 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex):
     return buffer.getvalue()
 
 
-def build_quarterly_progress_pptx(progress_df, roadmap_df, title, primary_color_hex):
+def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progress_subtitle, roadmap_title, roadmap_subtitle, primary_color_hex):
     """Build editable PowerPoint slides for quarterly progress and delivery milestones."""
     from pptx import Presentation
     from pptx.util import Inches, Pt
@@ -607,11 +607,23 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, title, primary_color_
     light = RGBColor(241, 245, 249)
     grid = RGBColor(203, 213, 225)
     green = RGBColor(34, 197, 94)
+    template_background = RGBColor(0, 45, 55)
+    template_teal = RGBColor(0, 151, 143)
+    white = RGBColor(255, 255, 255)
+    template_muted = RGBColor(113, 190, 187)
 
-    prs = Presentation()
-    prs.slide_width = Inches(13.333)
-    prs.slide_height = Inches(7.5)
+    template_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "templates", "quarterly_planning_template.pptx")
+    using_template = os.path.exists(template_path)
+    prs = Presentation(template_path) if using_template else Presentation()
+    if using_template:
+        for slide_id in list(prs.slides._sldIdLst):
+            prs.part.drop_rel(slide_id.rId)
+            prs.slides._sldIdLst.remove(slide_id)
+    else:
+        prs.slide_width = Inches(13.333)
+        prs.slide_height = Inches(7.5)
     blank_layout = prs.slide_layouts[6]
+    content_layout = prs.slide_layouts[2] if using_template and len(prs.slide_layouts) > 2 else blank_layout
 
     def add_text(slide, text, left, top, width, height, size=12, color=dark, bold=False, align=PP_ALIGN.LEFT):
         shape = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
@@ -630,6 +642,17 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, title, primary_color_
         return shape
 
     def add_chrome(slide, slide_title, subtitle=""):
+        if using_template:
+            # The corporate layout contains editable title placeholders.  They are
+            # removed here because python-pptx does not preserve their type styling
+            # reliably, causing duplicate, overlapping title text in the export.
+            for shape in list(slide.placeholders):
+                element = shape._element
+                element.getparent().remove(element)
+            add_text(slide, slide_title, 0.42, 0.62, 11.6, 0.46, size=24, color=white, bold=False)
+            if subtitle:
+                add_text(slide, subtitle, 0.43, 1.17, 11.4, 0.27, size=13, color=white)
+            return
         slide.background.fill.solid()
         slide.background.fill.fore_color.rgb = RGBColor(248, 250, 252)
         top_bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, Inches(0.18))
@@ -646,19 +669,20 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, title, primary_color_
             add_text(slide, subtitle, 0.7, 0.82, 11.7, 0.24, size=10, color=muted)
 
     progress_columns = [
-        ("Key", "Key", 0.90), ("Epic", "Summary", 3.10), ("Progress", "Completion", 1.00),
-        ("Issues done", "Issues done", 1.00), ("Status", "Status", 1.10), ("Team", "Team", 1.35),
-        ("Update", "Presentation update", 3.53),
+        ("Key", "Key", 0.85), ("Epic", "Summary", 2.70), ("Progress", "Completion", 0.85),
+        ("Closed / Resolved", "Closed / Resolved", 0.90), ("To Do", "To Do", 0.65),
+        ("In progress", "In progress", 0.90), ("Status", "Status", 0.90), ("Team", "Team", 1.10),
+        ("Update", "Presentation update", 3.13),
     ]
     rows_per_slide = 12
     progress_df = prepare_quarterly_progress_for_presentation(progress_df)
     for start in range(0, len(progress_df), rows_per_slide):
         chunk = progress_df.iloc[start:start + rows_per_slide].reset_index(drop=True)
         suffix = "" if start == 0 else f" (cont. {start // rows_per_slide + 1})"
-        slide = prs.slides.add_slide(blank_layout)
-        add_chrome(slide, f"{title}{suffix}", "Committed Epic progress")
-        table_left, table_top, table_width = 0.68, 1.22, 11.98
-        table_height = 5.85
+        slide = prs.slides.add_slide(content_layout)
+        add_chrome(slide, f"{progress_title}{suffix}", progress_subtitle)
+        table_left, table_top, table_width = 0.42, 1.90, 12.45
+        table_height = 4.92 if using_template else 5.85
         row_height = table_height / (len(chunk) + 1)
         table_shape = slide.shapes.add_table(len(chunk) + 1, len(progress_columns), Inches(table_left), Inches(table_top), Inches(table_width), Inches(table_height))
         table = table_shape.table
@@ -668,18 +692,18 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, title, primary_color_
             table.columns[index].width = Inches(column_width)
             cell = table.cell(0, index)
             cell.fill.solid()
-            cell.fill.fore_color.rgb = navy
+            cell.fill.fore_color.rgb = template_teal if using_template else navy
             cell.text = progress_columns[index][0]
             paragraph = cell.text_frame.paragraphs[0]
             paragraph.runs[0].font.name = "Arial"
             paragraph.runs[0].font.size = Pt(8)
             paragraph.runs[0].font.bold = True
-            paragraph.runs[0].font.color.rgb = RGBColor(255, 255, 255)
+            paragraph.runs[0].font.color.rgb = white
         for row_index, (_, row) in enumerate(chunk.iterrows(), start=1):
             for col_index, (_, source, _) in enumerate(progress_columns):
                 cell = table.cell(row_index, col_index)
                 cell.fill.solid()
-                cell.fill.fore_color.rgb = RGBColor(255, 255, 255) if row_index % 2 else light
+                cell.fill.fore_color.rgb = template_background if using_template else (RGBColor(255, 255, 255) if row_index % 2 else light)
                 cell.margin_left = Inches(0.05)
                 cell.margin_right = Inches(0.05)
                 cell.vertical_anchor = MSO_ANCHOR.MIDDLE
@@ -690,7 +714,7 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, title, primary_color_
                     paragraph = cell.text_frame.paragraphs[0]
                     paragraph.runs[0].font.name = "Arial"
                     paragraph.runs[0].font.size = Pt(7.2)
-                    paragraph.runs[0].font.color.rgb = dark
+                    paragraph.runs[0].font.color.rgb = white if using_template else dark
                     if source == "Key":
                         paragraph.runs[0].font.bold = True
 
@@ -699,69 +723,115 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, title, primary_color_
                         percentage = max(0, min(100, int(float(value.replace("%", "")))))
                     except Exception:
                         percentage = 0
-                    cell_left = table_left + sum(width for _, _, width in progress_columns[:col_index])
-                    bar_left = cell_left + 0.10
-                    bar_top = table_top + row_height * row_index + (row_height / 2) - 0.015
-                    track = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(bar_left), Inches(bar_top), Inches(0.62), Inches(0.07))
-                    track.fill.solid()
-                    track.fill.fore_color.rgb = RGBColor(226, 232, 240)
-                    track.line.fill.background()
-                    if percentage:
-                        fill = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(bar_left), Inches(bar_top), Inches(max(0.04, 0.62 * percentage / 100)), Inches(0.07))
-                        fill.fill.solid()
-                        fill.fill.fore_color.rgb = green if percentage == 100 else navy
-                        fill.line.fill.background()
-                    add_text(slide, f"{percentage}%", bar_left, table_top + row_height * row_index + (row_height / 2) - 0.18, 0.62, 0.14, size=6.5, color=dark, bold=True, align=PP_ALIGN.CENTER)
+                    # Keep the percentage and its visual bar *inside* the table
+                    # cell.  Separate shapes drift when PowerPoint recalculates
+                    # table-row heights, while text runs remain attached to the row.
+                    text_frame = cell.text_frame
+                    text_frame.clear()
+                    text_frame.word_wrap = False
+                    text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+                    label = text_frame.paragraphs[0]
+                    label.alignment = PP_ALIGN.CENTER
+                    label_run = label.add_run()
+                    label_run.text = f"{percentage}%"
+                    label_run.font.name = "Arial"
+                    label_run.font.size = Pt(6.5)
+                    label_run.font.bold = True
+                    label_run.font.color.rgb = white if using_template else dark
+                    bar = text_frame.add_paragraph()
+                    bar.alignment = PP_ALIGN.CENTER
+                    # Five compact segments fit in the narrow Progress column in
+                    # PowerPoint without wrapping onto a second line.
+                    filled_blocks = int(round(percentage / 20))
+                    filled_run = bar.add_run()
+                    filled_run.text = "▬" * filled_blocks
+                    filled_run.font.name = "Arial"
+                    filled_run.font.size = Pt(7)
+                    filled_run.font.color.rgb = RGBColor(170, 255, 0) if using_template and percentage == 100 else (template_teal if using_template else (green if percentage == 100 else navy))
+                    remaining_run = bar.add_run()
+                    remaining_run.text = "▬" * (5 - filled_blocks)
+                    remaining_run.font.name = "Arial"
+                    remaining_run.font.size = Pt(7)
+                    remaining_run.font.color.rgb = RGBColor(0, 98, 110) if using_template else RGBColor(226, 232, 240)
 
     if roadmap_df is not None and not roadmap_df.empty:
-        slide = prs.slides.add_slide(blank_layout)
-        add_chrome(slide, "Delivery Roadmap", f"{title} - planned delivery milestones for unfinished work")
+        slide = prs.slides.add_slide(content_layout)
+        add_chrome(slide, roadmap_title, roadmap_subtitle)
         earliest = roadmap_df["Milestone date"].min().replace(day=1)
         latest = roadmap_df["Milestone date"].max().replace(day=1) + pd.DateOffset(months=1)
         total_days = max((latest - earliest).days, 1)
-        axis_left, axis_right, axis_y = 2.55, 12.55, 1.65
+        axis_left, axis_right, axis_y = 0.75, 12.55, 4.55
 
         def x_for_date(value):
             return axis_left + ((value - earliest).days / total_days) * (axis_right - axis_left)
 
         axis = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(axis_left), Inches(axis_y), Inches(axis_right - axis_left), Inches(0.025))
         axis.fill.solid()
-        axis.fill.fore_color.rgb = muted
+        axis.fill.fore_color.rgb = white if using_template else muted
         axis.line.fill.background()
         month = earliest
         while month <= latest:
             x_pos = x_for_date(month)
-            grid_line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x_pos), Inches(axis_y), Inches(0.012), Inches(4.9))
+            grid_line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x_pos), Inches(3.95), Inches(0.012), Inches(0.68))
             grid_line.fill.solid()
-            grid_line.fill.fore_color.rgb = grid
+            grid_line.fill.fore_color.rgb = template_teal if using_template else grid
             grid_line.line.fill.background()
-            add_text(slide, month.strftime("%b %Y"), x_pos - 0.38, 1.38, 0.76, 0.16, size=8, color=muted, bold=True, align=PP_ALIGN.CENTER)
+            add_text(slide, month.strftime("%b %Y"), x_pos - 0.52, 3.58, 1.04, 0.20, size=11 if using_template else 8, color=template_muted if using_template else muted, bold=True, align=PP_ALIGN.CENTER)
             month += pd.DateOffset(months=1)
 
         today_x = x_for_date(pd.Timestamp.today())
         if axis_left <= today_x <= axis_right:
-            today_line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(today_x), Inches(1.22), Inches(0.018), Inches(5.4))
+            today_line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(today_x), Inches(2.0), Inches(0.018), Inches(2.65))
             today_line.fill.solid()
             today_line.fill.fore_color.rgb = RGBColor(239, 68, 68)
             today_line.line.fill.background()
-            add_text(slide, "TODAY", today_x - 0.27, 1.05, 0.56, 0.16, size=7, color=RGBColor(239, 68, 68), bold=True, align=PP_ALIGN.CENTER)
+            add_text(slide, "TODAY", today_x - 0.27, 1.83, 0.56, 0.16, size=7, color=RGBColor(239, 68, 68), bold=True, align=PP_ALIGN.CENTER)
 
-        displayed = roadmap_df.head(10).reset_index(drop=True)
-        row_height = min(0.48, 4.65 / max(len(displayed), 1))
-        for index, (_, row) in enumerate(displayed.iterrows()):
-            y_pos = 2.08 + index * row_height
-            add_text(slide, str(row.get("Summary", "Unnamed Epic")), 0.68, y_pos, 1.75, 0.38, size=7.0, color=dark, bold=True)
-            marker_x = x_for_date(row["Milestone date"])
-            connector = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(marker_x), Inches(axis_y + 0.02), Inches(0.018), Inches(y_pos - axis_y + 0.22))
+        # One release card per milestone mirrors the supplied Release Calendar:
+        # release version first, followed by the Epics planned for that release.
+        displayed = roadmap_df.head(12).copy()
+        displayed["Milestone date"] = pd.to_datetime(displayed["Milestone date"])
+        release_cards = []
+        for (milestone, release), rows in displayed.groupby(["Milestone date", "Release"], sort=True):
+            release_cards.append({
+                "date": milestone,
+                "release": str(release or "Release TBD"),
+                "epics": [
+                    f"{str(key).strip()} - {str(summary).strip()}" if str(key).strip() else str(summary).strip()
+                    for key, summary in zip(rows.get("Key", pd.Series("", index=rows.index)), rows["Summary"])
+                    if str(summary).strip()
+                ],
+            })
+
+        for index, card in enumerate(release_cards):
+            marker_x = x_for_date(card["date"])
+            box_width = 2.45
+            box_height = min(1.25, 0.42 + (0.23 * min(len(card["epics"]), 3)))
+            box_left = max(0.55, min(12.70 - box_width, marker_x - (box_width / 2)))
+            box_top = 2.05 if index % 2 else 2.88
+            card_shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(box_left), Inches(box_top), Inches(box_width), Inches(box_height))
+            card_shape.fill.solid()
+            card_shape.fill.fore_color.rgb = template_background if using_template else RGBColor(255, 255, 255)
+            card_shape.line.color.rgb = template_teal if using_template else primary
+            add_text(slide, card["release"], box_left + 0.13, box_top + 0.08, box_width - 0.25, 0.18, size=9, color=template_teal if using_template else primary, bold=True)
+            epic_lines = "\n".join(f"•  {epic}" for epic in card["epics"][:3])
+            if len(card["epics"]) > 3:
+                epic_lines += f"\n•  +{len(card['epics']) - 3} more"
+            add_text(slide, epic_lines, box_left + 0.13, box_top + 0.27, box_width - 0.25, box_height - 0.32, size=7.7, color=white if using_template else dark)
+            connector = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(marker_x), Inches(box_top + box_height), Inches(0.018), Inches(max(0.02, axis_y - (box_top + box_height))))
             connector.fill.solid()
-            connector.fill.fore_color.rgb = primary
+            connector.fill.fore_color.rgb = template_teal if using_template else primary
             connector.line.fill.background()
-            marker = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(marker_x - 0.075), Inches(y_pos + 0.11), Inches(0.16), Inches(0.16))
+            marker = slide.shapes.add_shape(MSO_SHAPE.DIAMOND, Inches(marker_x - 0.09), Inches(axis_y - 0.09), Inches(0.18), Inches(0.18))
             marker.fill.solid()
-            marker.fill.fore_color.rgb = primary
-            marker.line.color.rgb = RGBColor(255, 255, 255)
-            add_text(slide, str(row.get("Release", "Release TBD")), marker_x + 0.10, y_pos + 0.08, 0.85, 0.16, size=7.0, color=muted, bold=True)
-        add_text(slide, f"Generated {pd.Timestamp.today().strftime('%d %b %Y')} - delivery dates are approximate", 0.68, 7.05, 5.0, 0.16, size=7.5, color=muted)
+            marker.fill.fore_color.rgb = template_teal if using_template else primary
+            marker.line.fill.background()
+        marker = slide.shapes.add_shape(MSO_SHAPE.DIAMOND, Inches(0.70), Inches(6.42), Inches(0.14), Inches(0.14))
+        marker.fill.solid()
+        marker.fill.fore_color.rgb = template_teal if using_template else primary
+        marker.line.fill.background()
+        add_text(slide, "Release milestone", 0.92, 6.39, 1.5, 0.20, size=7.5, color=white if using_template else dark, bold=True)
+        add_text(slide, f"Generated {pd.Timestamp.today().strftime('%d %b %Y')} - delivery dates are approximate", 0.48, 6.95, 5.5, 0.16, size=7.5, color=template_muted if using_template else muted)
 
     output = io.BytesIO()
     prs.save(output)
@@ -1280,7 +1350,7 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
     st.subheader("📈 Quarterly Epic Progress")
     st.write("Load the committed Epics for the quarter, calculate their completion, and add a concise update for the presentation.")
     with st.container(border=True):
-        col_project, col_committed, col_quarter, col_progress_title = st.columns([1, 1, 1, 2])
+        col_project, col_committed, col_quarter = st.columns(3)
         with col_project:
             progress_project = st.text_input("Project", value="RECALLTWO", key="qp_progress_project")
         with col_committed:
@@ -1291,10 +1361,10 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
             progress_quarter_label = st.text_input(
                 "Quarter label", value=os.getenv("QUARTER_LABEL", "RC2_FB_18"), key="qp_progress_quarter"
             )
-        with col_progress_title:
-            progress_title = st.text_input(
-                "Slide title", value=os.getenv("QUARTER_STATUS_TABLE_TITLE", "Quarterly Epic Progress"), key="qp_progress_title"
-            )
+        progress_title = st.text_input("Progress slide title", value="Committed Epics Q3 - Status", key="qp_progress_title")
+        progress_subtitle = st.text_input("Progress slide subtitle", value="Detail overview of Epics Progress for Q3", key="qp_progress_subtitle")
+        roadmap_title = st.text_input("Roadmap slide title", value="Delivery Roadmap", key="qp_roadmap_title")
+        roadmap_subtitle = st.text_input("Roadmap slide subtitle", value="Planned delivery milestones for unfinished work", key="qp_roadmap_subtitle")
 
         if st.button("📈 Load Quarterly Epic Progress", use_container_width=True):
             if not st.session_state.get("jira_server") or not st.session_state.get("jira_token"):
@@ -1328,6 +1398,9 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
                     st.session_state.quarterly_progress_df = prepare_quarterly_progress_for_presentation(progress_df)
                     st.session_state.quarterly_progress_config = {
                         "title": progress_title.strip() or "Quarterly Epic Progress",
+                        "subtitle": progress_subtitle.strip(),
+                        "roadmap_title": roadmap_title.strip() or "Delivery Roadmap",
+                        "roadmap_subtitle": roadmap_subtitle.strip(),
                         "quarter_label": progress_quarter_label.strip(),
                     }
                     st.success(f"Loaded {len(progress_df)} committed Epics. Add the presentation updates in Workbook.")
@@ -1349,7 +1422,7 @@ elif st.session_state.active_tab_qp == "✍️ Workbook":
     if isinstance(progress_df, pd.DataFrame) and not progress_df.empty:
         st.caption("Select the Epics to communicate, define their planned release milestone, and write a short update. Jira fields remain read-only.")
         progress_columns = [
-            "Key", "Summary", "Completion", "Issues done", "Status", "Team", "Presentation update",
+            "Key", "Summary", "Completion", "Closed / Resolved", "To Do", "In progress", "Status", "Team", "Presentation update",
             "Include in delivery roadmap", "Release version", "Delivery month", "Delivery timing"
         ]
         progress_columns = [column for column in progress_columns if column in progress_df.columns]
@@ -1365,7 +1438,9 @@ elif st.session_state.active_tab_qp == "✍️ Workbook":
                     "Key": st.column_config.TextColumn("Key", width="small"),
                     "Summary": st.column_config.TextColumn("Epic", width="large"),
                 "Completion": st.column_config.TextColumn("Completion", width="small"),
-                "Issues done": st.column_config.TextColumn("Issues done", width="small"),
+                "Closed / Resolved": st.column_config.NumberColumn("Closed / Resolved", width="small", format="%d"),
+                "To Do": st.column_config.NumberColumn("To Do", width="small", format="%d"),
+                "In progress": st.column_config.NumberColumn("In progress", width="small", format="%d"),
                     "Status": st.column_config.TextColumn("Status", width="small"),
                     "Team": st.column_config.TextColumn("Team", width="medium"),
                     "Presentation update": st.column_config.TextColumn("Update / context", width="large"),
@@ -2051,6 +2126,9 @@ if st.session_state.active_tab_qp == "💾 Exporter":
         st.subheader("📈 Quarterly Epic Progress Slide")
         st.write("This presentation-ready slide uses the same Epic progress fields as Sprint Review, with your additional update/context column.")
         progress_title = st.session_state.get("quarterly_progress_config", {}).get("title", "Quarterly Epic Progress")
+        progress_subtitle = st.session_state.get("quarterly_progress_config", {}).get("subtitle", "")
+        roadmap_title = st.session_state.get("quarterly_progress_config", {}).get("roadmap_title", "Delivery Roadmap")
+        roadmap_subtitle = st.session_state.get("quarterly_progress_config", {}).get("roadmap_subtitle", "")
         progress_pdf = build_quarterly_progress_slide_pdf(
             prepare_quarterly_progress_for_presentation(progress_df),
             progress_title,
@@ -2093,6 +2171,9 @@ if st.session_state.active_tab_qp == "💾 Exporter":
                 prepare_quarterly_progress_for_presentation(progress_df),
                 roadmap_df,
                 progress_title,
+                progress_subtitle,
+                roadmap_title,
+                roadmap_subtitle,
                 st.session_state.get("primary_color", "#0B2756"),
             )
             st.download_button(
