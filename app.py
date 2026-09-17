@@ -3,6 +3,7 @@ import os
 import requests
 from dotenv import load_dotenv
 from utils.tunnel import start_tunnel, get_tunnel_url, get_tunnel_error, set_tunnel_url
+from utils.ai_helpers import get_ollama_models
 
 # Load environment variables
 load_dotenv(override=True)
@@ -31,6 +32,7 @@ def save_credentials_to_env():
     kv["JIRA_EMAIL"] = st.session_state.jira_email
     kv["CONFLUENCE_SERVER"] = st.session_state.conf_server
     kv["CONFLUENCE_API_TOKEN"] = st.session_state.conf_token
+    kv["OLLAMA_URL"] = st.session_state.ollama_url
 
     new_lines = []
     keys_written = set()
@@ -65,6 +67,10 @@ if "conf_server" not in st.session_state:
     st.session_state.conf_server = os.getenv("CONFLUENCE_SERVER", "")
 if "conf_token" not in st.session_state:
     st.session_state.conf_token = os.getenv("CONFLUENCE_API_TOKEN", "")
+if "ollama_url" not in st.session_state:
+    st.session_state.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+if "ollama_models" not in st.session_state:
+    st.session_state.ollama_models = []
 
 # Perform automatic connection checks on session initialization
 if "jira_connection_status" not in st.session_state:
@@ -72,6 +78,8 @@ if "jira_connection_status" not in st.session_state:
     st.session_state.jira_connection_msg = ""
     st.session_state.conf_connection_status = "Not checked"
     st.session_state.conf_connection_msg = ""
+    st.session_state.ollama_connection_status = "Not checked"
+    st.session_state.ollama_connection_msg = ""
 
     # Test Jira Connection
     srv = st.session_state.jira_server
@@ -128,11 +136,28 @@ if "jira_connection_status" not in st.session_state:
             st.session_state.conf_connection_status = "Failed"
             st.session_state.conf_connection_msg = f"Connection Failed ({e})"
 
+    # Test Ollama Connection
+    ourl = st.session_state.ollama_url
+    if ourl:
+        try:
+            models = get_ollama_models(ourl)
+            if models:
+                st.session_state.ollama_connection_status = "Success"
+                st.session_state.ollama_connection_msg = f"{len(models)} models found"
+                st.session_state.ollama_models = models
+            else:
+                st.session_state.ollama_connection_status = "Failed"
+                st.session_state.ollama_connection_msg = "No models or offline"
+        except Exception as e:
+            st.session_state.ollama_connection_status = "Failed"
+            st.session_state.ollama_connection_msg = f"Connection Failed ({e})"
+
 # 1. Define the page objects first so they are globally accessible
 planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner", icon="🎯")
 sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", icon="📋")
 release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
+ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="AI Issue Creator", icon="🤖")
 
 # 2. Define the Home Page rendering function
 def show_home():
@@ -318,7 +343,7 @@ def show_home():
 
     with tab_tools:
         st.subheader("🛠️ Available Tools")
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
 
         with col1:
             st.markdown("""
@@ -360,12 +385,22 @@ def show_home():
             """, unsafe_allow_html=True)
             st.page_link(sprint_kpis_page, label="Open Sprint KPIs", icon="📊")
 
+        with col5:
+            st.markdown("""
+                <div class="hub-card">
+                    <span class="hub-badge">NEW ✨</span>
+                    <h3>🤖 AI Issue Creator</h3>
+                    <p>Draft, format and upload Jira issues effortlessly using a local Ollama AI model.</p>
+                </div>
+            """, unsafe_allow_html=True)
+            st.page_link(ai_creator_page, label="Open AI Creator", icon="🤖")
+
     with tab_integrations:
         st.subheader("🔌 Centralized Integrations")
         st.write("Configure connection configurations for Jira and Confluence servers below.")
 
         # Display current status in nice columns
-        stat_col1, stat_col2 = st.columns(2)
+        stat_col1, stat_col2, stat_col3 = st.columns(3)
         with stat_col1:
             j_status = st.session_state.get("jira_connection_status", "Not checked")
             j_msg = st.session_state.get("jira_connection_msg", "")
@@ -384,6 +419,15 @@ def show_home():
                 st.error(f"🔴 **Confluence Disconnected**: {c_msg}")
             else:
                 st.warning(f"🟡 **Confluence Integration**: {c_status}")
+        with stat_col3:
+            o_status = st.session_state.get("ollama_connection_status", "Not checked")
+            o_msg = st.session_state.get("ollama_connection_msg", "")
+            if o_status == "Success":
+                st.success(f"🟢 **Ollama Connected**: {o_msg}")
+            elif o_status == "Failed":
+                st.error(f"🔴 **Ollama Disconnected**: {o_msg}")
+            else:
+                st.warning(f"🟡 **Ollama Integration**: {o_status}")
 
         st.markdown("---")
 
@@ -416,17 +460,32 @@ def show_home():
         with col_ctok:
             ctok_in = st.text_input("Confluence Personal Access Token (PAT):", value=st.session_state.conf_token, type="password", key="central_conf_token")
 
-        # Save updates to session state
-        st.session_state.jira_server = srv_in
-        st.session_state.jira_token = tok_in
-        st.session_state.jira_auth_method = auth_in
-        st.session_state.jira_email = mail_in
-        st.session_state.conf_server = csrv_in
-        st.session_state.conf_token = ctok_in
-        
-        save_credentials_to_env()
+        st.markdown("---")
+        st.markdown("##### 🤖 Local AI (Ollama)")
+        col_ourl, _ = st.columns(2)
+        with col_ourl:
+            ourl_in = st.text_input("Ollama API URL:", value=st.session_state.ollama_url, key="central_ollama_url")
 
-        st.success("Integrations updated and saved centrally! ✅")
+        settings_changed = (
+            st.session_state.jira_server != srv_in or
+            st.session_state.jira_token != tok_in or
+            st.session_state.jira_auth_method != auth_in or
+            st.session_state.jira_email != mail_in or
+            st.session_state.conf_server != csrv_in or
+            st.session_state.conf_token != ctok_in or
+            st.session_state.ollama_url != ourl_in
+        )
+
+        if settings_changed:
+            st.session_state.jira_server = srv_in
+            st.session_state.jira_token = tok_in
+            st.session_state.jira_auth_method = auth_in
+            st.session_state.jira_email = mail_in
+            st.session_state.conf_server = csrv_in
+            st.session_state.conf_token = ctok_in
+            st.session_state.ollama_url = ourl_in
+            save_credentials_to_env()
+            st.toast("Integrations updated and saved centrally! ✅")
 
         st.markdown("<br/>", unsafe_allow_html=True)
         if st.button("🔌 Check Integration Status", use_container_width=True):
@@ -497,12 +556,31 @@ def show_home():
                 st.session_state.conf_connection_msg = "Server URL or Token empty"
                 st.warning("⚠️ **Confluence not tested**: Server URL or token is empty.")
 
+            # 3. Test Ollama Connection
+            if ourl_in:
+                with st.spinner("Testing Ollama Connection..."):
+                    models = get_ollama_models(ourl_in)
+                    if models:
+                        st.session_state.ollama_connection_status = "Success"
+                        st.session_state.ollama_connection_msg = f"{len(models)} models found"
+                        st.session_state.ollama_models = models
+                        st.success(f"✅ **Ollama Connection Successful!** Found {len(models)} models.")
+                    else:
+                        st.session_state.ollama_connection_status = "Failed"
+                        st.session_state.ollama_connection_msg = "No models or offline"
+                        st.session_state.ollama_models = []
+                        st.error(f"❌ **Ollama Connection Failed**: Could not fetch models from {ourl_in}.")
+            else:
+                st.session_state.ollama_connection_status = "Failed"
+                st.session_state.ollama_connection_msg = "URL empty"
+                st.warning("⚠️ **Ollama not tested**: URL is empty.")
+
 
 # 3. Define the page listing for navigation
 home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
 
 # 4. Setup and run navigation
-pg = st.navigation([home_page, planner_page, sprint_review_page, release_notes_page, sprint_kpis_page])
+pg = st.navigation([home_page, planner_page, sprint_review_page, release_notes_page, sprint_kpis_page, ai_creator_page])
 st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
 
 # Display live collaboration tunnel link in the sidebar

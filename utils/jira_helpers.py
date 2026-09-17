@@ -47,6 +47,64 @@ def get_custom_field_ids(server, headers, auth):
         print(f"[JIRA Helpers] Error fetching fields list: {e}")
     return target_start_id, target_end_id
 
+def get_jira_creation_custom_fields(server, token, auth_type, email):
+    story_points_id = None
+    sprint_id = None
+    epic_link_id = None
+    url = f"{server.rstrip('/')}/rest/api/2/field"
+    headers, auth = get_jira_auth_headers(token, auth_type, email)
+    try:
+        if auth:
+            resp = requests.get(url, headers=headers, auth=auth, timeout=10)
+        else:
+            resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            for f in resp.json():
+                name_lower = f.get("name", "").lower().strip()
+                field_id = f.get("id")
+                if name_lower in ["story points", "story point estimate"]:
+                    story_points_id = field_id
+                elif name_lower == "sprint":
+                    sprint_id = field_id
+                elif name_lower == "epic link":
+                    epic_link_id = field_id
+    except Exception as e:
+        print(f"[JIRA Helpers] Error fetching fields for issue creation: {e}")
+    return story_points_id, sprint_id, epic_link_id
+
+def resolve_sprint_id_by_name(server, token, auth_type, email, sprint_name):
+    # If the user passed an integer string, use it directly
+    if str(sprint_name).strip().isdigit():
+        return int(str(sprint_name).strip())
+        
+    url = f"{server.rstrip('/')}/rest/api/2/search"
+    headers, auth = get_jira_auth_headers(token, auth_type, email)
+    params = {"jql": f"sprint='{sprint_name}'", "maxResults": 1}
+    try:
+        if auth:
+            resp = requests.get(url, headers=headers, params=params, auth=auth, timeout=10)
+        else:
+            resp = requests.get(url, headers=headers, params=params, timeout=10)
+            
+        if resp.status_code == 200:
+            issues = resp.json().get("issues", [])
+            if issues:
+                fields = issues[0].get("fields", {})
+                for k, v in fields.items():
+                    if isinstance(v, list) and len(v) > 0 and isinstance(v[0], str) and "com.atlassian.greenhopper.service.sprint.Sprint" in v[0]:
+                        import re
+                        match = re.search(r'id=(\d+)', v[0])
+                        if match:
+                            return int(match.group(1))
+                    elif isinstance(v, dict) and "id" in v and "state" in v and "name" in v:
+                        return int(v.get("id"))
+                    elif isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict) and "id" in v[0] and "state" in v[0]:
+                        return int(v[0].get("id"))
+    except Exception as e:
+        print(f"[JIRA Helpers] Error resolving sprint ID by name: {e}")
+    
+    return None
+
 def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_type="Personal Access Token (Bearer PAT)", email="", only_unresolved=False, include_raw_status=False):
     if not server or not token:
         try:
@@ -399,3 +457,156 @@ def build_quarterly_epic_progress_table(server, token, committed_label, quarter_
         with open("data/debug_click.txt", "a") as f:
             f.write(f"build_quarterly_epic_progress_table EXCEPTION: {e}\n{traceback.format_exc()}\n")
         return None
+
+def get_jira_auth_headers(token, auth_type, email):
+    token_clean = token.strip()
+    if token_clean.lower().startswith("bearer "):
+        token_clean = token_clean[7:].strip()
+    
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0",
+        "X-Atlassian-Token": "no-check"
+    }
+    auth = None
+    if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"]:
+        auth = (email.strip(), token_clean)
+    else:
+        headers["Authorization"] = f"Bearer {token_clean}"
+    return headers, auth
+
+def fetch_jira_projects(server, token, auth_type, email):
+    if not server or not token:
+        return []
+    headers, auth = get_jira_auth_headers(token, auth_type, email)
+    url = f"{server.rstrip('/')}/rest/api/2/project"
+    try:
+        if auth:
+            resp = requests.get(url, headers=headers, auth=auth, timeout=10)
+        else:
+            resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            return [(p.get("key"), p.get("name")) for p in resp.json()]
+    except Exception as e:
+        print(f"[JIRA Helpers] Error fetching projects: {e}")
+    return []
+
+def fetch_jira_issue_types(server, token, auth_type, email, project_key):
+    if not server or not token or not project_key:
+        return []
+    headers, auth = get_jira_auth_headers(token, auth_type, email)
+    url = f"{server.rstrip('/')}/rest/api/2/project/{project_key}"
+    try:
+        if auth:
+            resp = requests.get(url, headers=headers, auth=auth, timeout=10)
+        else:
+            resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            issue_types = data.get("issueTypes", [])
+            return [it.get("name") for it in issue_types if not it.get("subtask")]
+    except Exception as e:
+        print(f"[JIRA Helpers] Error fetching issue types: {e}")
+    return []
+
+def create_jira_issue(server, token, auth_type, email, project_key, issue_type, summary, description, assignee="", labels="", parent_key="", story_points=None, fix_version="", linked_issue="", sprint=""):
+    if not server or not token or not project_key or not issue_type or not summary:
+        return "Error: Missing required parameters"
+    headers, auth = get_jira_auth_headers(token, auth_type, email)
+    url = f"{server.rstrip('/')}/rest/api/2/issue"
+    
+    fields = {
+        "project": {"key": project_key},
+        "summary": summary,
+        "description": description,
+        "issuetype": {"name": issue_type}
+    }
+    
+    custom_fields = get_jira_creation_custom_fields(server, token, auth_type, email)
+    story_points_id, sprint_id, epic_link_id = custom_fields
+    
+    if assignee:
+        fields["assignee"] = {"name": assignee}
+    if labels:
+        fields["labels"] = [l.strip() for l in labels.split(",") if l.strip()]
+    if parent_key:
+        # Modern Jira uses parent for Epic and Parent links
+        fields["parent"] = {"key": parent_key.strip()}
+        if epic_link_id:
+            fields[epic_link_id] = parent_key.strip()
+    if fix_version:
+        fields["fixVersions"] = [{"name": fix_version.strip()}]
+    if story_points is not None and str(story_points).strip() != "":
+        try:
+            sp_val = float(story_points)
+            if story_points_id:
+                fields[story_points_id] = sp_val
+            else:
+                # Fallback to defaults if we didn't find the field dynamically
+                fields["customfield_10016"] = sp_val
+        except ValueError:
+            pass
+            
+    if sprint:
+        sp_id = resolve_sprint_id_by_name(server, token, auth_type, email, sprint)
+        if sp_id is not None:
+            if sprint_id:
+                fields[sprint_id] = sp_id
+            else:
+                fields["customfield_10020"] = sp_id
+            
+    payload = {"fields": fields}
+    
+    try:
+        if auth:
+            resp = requests.post(url, headers=headers, auth=auth, json=payload, timeout=15)
+        else:
+            resp = requests.post(url, headers=headers, json=payload, timeout=15)
+            
+        if resp.status_code == 201:
+            new_issue_key = resp.json().get("key")
+            
+            # Create an issue link if requested
+            if linked_issue:
+                link_url = f"{server.rstrip('/')}/rest/api/2/issueLink"
+                link_payload = {
+                    "type": {"name": "Relates"},
+                    "inwardIssue": {"key": new_issue_key},
+                    "outwardIssue": {"key": linked_issue.strip()}
+                }
+                if auth:
+                    requests.post(link_url, headers=headers, auth=auth, json=link_payload, timeout=10)
+                else:
+                    requests.post(link_url, headers=headers, json=link_payload, timeout=10)
+                    
+            return new_issue_key
+        else:
+            return f"Error: {resp.status_code} - {resp.text}"
+    except Exception as e:
+        return f"Exception: {str(e)}"
+
+def attach_files_to_jira_issue(server, token, auth_type, email, issue_key, uploaded_files):
+    if not uploaded_files:
+        return []
+    url = f"{server.rstrip('/')}/rest/api/2/issue/{issue_key}/attachments"
+    headers, auth = get_jira_auth_headers(token, auth_type, email)
+    if "Content-Type" in headers:
+        del headers["Content-Type"]
+    headers["X-Atlassian-Token"] = "no-check"
+    
+    results = []
+    for f in uploaded_files:
+        try:
+            files = {'file': (f.name, f.getvalue(), f.type)}
+            if auth:
+                resp = requests.post(url, headers=headers, auth=auth, files=files, timeout=30)
+            else:
+                resp = requests.post(url, headers=headers, files=files, timeout=30)
+            if resp.status_code in [200, 201]:
+                results.append((f.name, True, ""))
+            else:
+                results.append((f.name, False, resp.text))
+        except Exception as e:
+            results.append((f.name, False, str(e)))
+    return results
