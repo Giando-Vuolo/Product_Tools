@@ -38,15 +38,26 @@ def start_tunnel(port=8501):
 
     def run():
         global _tunnel_process, _tunnel_url, _tunnel_error
+
+        # Pre-flight check to detect VPN/Corporate Firewall blocks instantly
+        import urllib.request
+        try:
+            req = urllib.request.Request("https://region1.argotunnel.com", headers={'User-Agent': 'Mozilla/5.0'})
+            urllib.request.urlopen(req, timeout=3)
+        except Exception as e:
+            if "403" in str(e) or "CERTIFICATE_VERIFY_FAILED" in str(e) or "Forbidden" in str(e):
+                _tunnel_error = "Bloqueo detectado: VPN o red corporativa (Ej: Zscaler) bloqueando la conexión a Cloudflare. Por favor, apaga la VPN o cambia de red."
+                return
+
         # Prefer the locally installed Cloudflare binary.  pycloudflared downloads
         # this binary at runtime, which fails on corporate networks that intercept
         # SSL certificates.  The Python module remains a fallback for environments
         # where the executable has not been installed.
         cloudflared_binary = shutil.which("cloudflared")
         if cloudflared_binary:
-            cmd = [cloudflared_binary, "tunnel", "--url", f"http://127.0.0.1:{port}"]
+            cmd = [cloudflared_binary, "tunnel", "--url", f"http://localhost:{port}"]
         else:
-            cmd = [sys.executable, "-m", "pycloudflared", "tunnel", "--url", f"http://127.0.0.1:{port}"]
+            cmd = [sys.executable, "-m", "pycloudflared", "tunnel", "--url", f"http://localhost:{port}"]
         
         try:
             _tunnel_error = None
@@ -66,6 +77,8 @@ def start_tunnel(port=8501):
                     _tunnel_error = "Rate limit reached (429 Too Many Requests). Please wait a few minutes or change your IP (VPN)."
                 elif "failed to unmarshal" in line:
                     _tunnel_error = "Rate limit reached. Try again in a few minutes or connect via VPN."
+                elif "no such host" in line or "i/o timeout" in line or "dial udp" in line:
+                    _tunnel_error = "Bloqueo DNS detectado: VPN o red corporativa bloqueando la conexión. Por favor, apaga la VPN o cambia de red."
                 
                 match = url_pattern.search(line)
                 if match:
