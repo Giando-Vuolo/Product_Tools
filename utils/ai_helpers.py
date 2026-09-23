@@ -1,6 +1,7 @@
 import requests
 import json
 import io
+import re
 try:
     from pypdf import PdfReader
 except ImportError:
@@ -196,3 +197,56 @@ Do not include conversational introductory or concluding remarks. Just output th
             return f"Error from Ollama: {response.status_code} - {response.text}"
     except Exception as e:
         return f"Exception calling Ollama: {e}"
+
+
+def generate_release_purpose_with_ollama(model_name, issues, base_url="http://localhost:11434"):
+    """Summarise release scope from Epic-linked Tasks and User Stories only."""
+    if issues is None or issues.empty:
+        return ""
+
+    relevant = issues.copy()
+    epic_values = relevant.get("Epic", "-").fillna("-").astype(str).str.strip()
+    relevant = relevant[
+        relevant.get("Type", "").astype(str).str.strip().str.lower().isin({"task", "user story"})
+        & epic_values.ne("-")
+        & ~epic_values.str.contains(r"\bimprovements?\b", case=False, na=False)
+    ]
+    if relevant.empty:
+        return ""
+
+    lines = []
+    for epic, epic_issues in relevant.groupby("Epic", sort=True):
+        epic_title = re.sub(r"^[A-Z][A-Z0-9]+-\d+\s*-\s*", "", str(epic)).strip()
+        lines.append(f"Epic title: {epic_title}")
+        for _, issue in epic_issues.iterrows():
+            description = str(issue.get("Description", "")).strip().replace("\n", " ")
+            if len(description) > 420:
+                description = description[:420] + "…"
+            detail = f" | Description: {description}" if description else ""
+            lines.append(f"- {issue.get('Type', 'Issue')}: {issue.get('Summary', '')}{detail}")
+
+    prompt = "\n".join(lines)
+    system_prompt = """You write the "Delivered functionality by Epic" portion of customer-facing software release notes.
+Use only the supplied Epic-linked Tasks and User Stories. Improvement issues and Improvement Epics are handled separately, so do not include them.
+Write in English. Return exactly one short bullet per supplied Epic, in the form "- Epic title: delivered value or capability".
+Use the Epic title in every bullet. Combine the supplied issue summaries/descriptions into a clear, high-level statement of what is delivered in this release.
+Do not invent details. Never mention Jira ticket or Epic identifiers. Do not add headings, an introduction, or a conclusion."""
+    try:
+        response = requests.post(
+            f"{base_url.rstrip('/')}/api/chat",
+            json={
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                "stream": False,
+                "options": {"temperature": 0.2},
+            },
+            timeout=180,
+        )
+        if response.status_code == 200:
+            return response.json().get("message", {}).get("content", "").strip()
+    except Exception as error:
+        print(f"[AI Helpers] Release purpose generation failed: {error}")
+    return ""

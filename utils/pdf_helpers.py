@@ -199,6 +199,7 @@ def draw_background_landscape(canvas_obj, doc_obj):
 
 class NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
+        self._header_title = kwargs.pop("header_title", None)
         super().__init__(*args, **kwargs)
         self._saved_page_states = []
 
@@ -258,7 +259,7 @@ class NumberedCanvas(canvas.Canvas):
         # 2. Draw Header Content
         self.setFont("Helvetica-Bold", 9.5)
         self.setFillColor(primary_color)
-        self.drawString(54, top_header_y, project_name.upper())
+        self.drawString(54, top_header_y, self._header_title or project_name.upper())
         
         self.setFont("Helvetica", 8.5)
         self.setFillColor(colors.HexColor("#64748B"))

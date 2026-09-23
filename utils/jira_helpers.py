@@ -105,7 +105,7 @@ def resolve_sprint_id_by_name(server, token, auth_type, email, sprint_name):
     
     return None
 
-def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_type="Personal Access Token (Bearer PAT)", email="", only_unresolved=False, include_raw_status=False):
+def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_type="Personal Access Token (Bearer PAT)", email="", only_unresolved=False, include_raw_status=False, include_description=False):
     if not server or not token:
         try:
             import streamlit as st
@@ -147,6 +147,8 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
     target_start_cf, target_end_cf = get_custom_field_ids(server, headers, auth)
     
     requested_fields = ["key", "summary", "status", "fixVersions", "parent", "assignee", "issuetype", "labels", "duedate"]
+    if include_description:
+        requested_fields.append("description")
     if target_start_cf:
         requested_fields.append(target_start_cf)
     if target_end_cf:
@@ -263,6 +265,8 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
             }
             if include_raw_status:
                 row["Raw Status"] = raw_status
+            if include_description:
+                row["Description"] = fields.get("description") or ""
             rows.append(row)
             
         return pd.DataFrame(rows)
