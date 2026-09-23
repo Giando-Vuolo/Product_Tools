@@ -11,7 +11,9 @@ import os
 import io
 import re
 import base64
+from functools import partial
 from html import unescape
+from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime
 from urllib.parse import quote
 from dotenv import load_dotenv
@@ -32,6 +34,7 @@ from utils.pdf_helpers import (
     draw_background_landscape, NumberedCanvas, build_demos_pdf_block, build_next_releases_pdf_block,
     format_status_with_emoji, build_custom_extra_table_pdf_block, get_arrow_drawing
 )
+from utils.ai_helpers import get_ollama_models, generate_release_purpose_with_ollama
 
 RN_FILES = [
     "release_notes_overview.csv",
@@ -685,7 +688,7 @@ def fetch_jira_tickets_dataset(server, token, query_val, query_mode="sprint", au
     params = {
         "jql": jql,
         "maxResults": 100,
-        "fields": "key,summary,status,fixVersions,parent,customfield_10000,customfield_10008,customfield_10009,customfield_10014,assignee,issuetype,labels"
+        "fields": "key,summary,description,status,fixVersions,parent,customfield_10000,customfield_10008,customfield_10009,customfield_10014,assignee,issuetype,labels"
     }
 
     
@@ -806,7 +809,8 @@ def fetch_jira_tickets_dataset(server, token, query_val, query_mode="sprint", au
                 "Assignee": assignee,
                 "Demo": False,
                 "Type": issue_type,
-                "Labels": labels_str
+                "Labels": labels_str,
+                "Description": fields.get("description") or ""
             })
             
         # Bulk resolve Epic summaries from Jira
@@ -884,29 +888,49 @@ def format_release_date(value):
         return str(value)
 
 def build_release_purpose_draft(resolved):
-    """Create an editable, high-level release-purpose draft from release tickets."""
+    """Create an editable fallback release-purpose draft from release tickets."""
     intro = "The purpose of this release is to rollout the following functionalities:"
     if resolved is None or resolved.empty:
         return intro
 
     items = []
     grouped = resolved.copy()
+    grouped = grouped[
+        grouped["Type"].astype(str).str.strip().str.lower().isin({"task", "user story"})
+    ].copy()
     grouped["_epic"] = grouped["Epic"].fillna("-").astype(str).str.strip()
-    for epic, epic_items in grouped[grouped["_epic"].ne("-")].groupby("_epic", sort=True):
+    # Improvement Epics are represented by their delivered items in the
+    # Improvements section, rather than by a second, redundant Epic heading.
+    grouped = grouped[~grouped["_epic"].str.contains(r"\bimprovements?\b", case=False, na=False)].copy()
+    epic_items = []
+    for epic, _ in grouped[grouped["_epic"].ne("-")].groupby("_epic", sort=True):
         epic_name = re.sub(r"^[A-Z][A-Z0-9]+-\d+\s*-\s*", "", epic).strip()
-        items.append(f"- {epic_name}:")
+        epic_items.append(f"- {epic_name}")
 
-    no_epic = grouped[grouped["_epic"].eq("-")]
-    if not no_epic.empty:
-        has_bug = no_epic["Type"].astype(str).str.contains("bug", case=False, na=False).any()
-        has_other = (~no_epic["Type"].astype(str).str.contains("bug", case=False, na=False)).any()
-        if has_bug and has_other:
-            items.append("- Bug fixing and general improvements across the platform.")
-        elif has_bug:
-            items.append("- Bug fixing and stability improvements across the platform.")
-        else:
-            items.append("- General improvements across the platform.")
+    if epic_items:
+        items.extend(["Delivered functionality by Epic:", *epic_items])
+
+    improvement_items = build_improvement_purpose_items(resolved)
+    if improvement_items:
+        if items:
+            items.append("")
+        items.extend(["Improvements:", *improvement_items])
+
     return intro + "\n\n" + "\n".join(items) if items else intro
+
+
+def build_improvement_purpose_items(resolved):
+    """List direct Improvements and delivered items inside Improvement Epics."""
+    if resolved is None or resolved.empty:
+        return []
+    issue_type = resolved["Type"].astype(str).str.strip().str.lower()
+    epic_name = resolved["Epic"].fillna("").astype(str)
+    improvements = resolved[
+        issue_type.eq("improvement")
+        | epic_name.str.contains(r"\bimprovements?\b", case=False, na=False)
+    ]
+    return [f"- {summary}" for summary in improvements["Summary"].dropna().astype(str).drop_duplicates()]
+
 
 def parse_confluence_history_rows(html):
     """Read Confluence storage tables without requiring optional lxml/bs4 packages."""
@@ -1238,7 +1262,9 @@ def build_prepared_release_notes_pdf(prepared):
     label = ParagraphStyle("RNLabel", parent=cell, fontName="Helvetica-Bold")
     story = [Spacer(1, 50), Paragraph("ReCall2 - Software Release Note", ParagraphStyle("CoverProject", parent=body, alignment=1, textColor=colors.HexColor("#64748B"))), Paragraph("Release Notes", ParagraphStyle("CoverTitle", parent=title, alignment=1, fontSize=32, leading=38, textColor=primary, spaceBefore=18)), Paragraph(f"Version: {prepared['version']}", ParagraphStyle("CoverVersion", parent=body, alignment=1, fontSize=18, leading=22, textColor=colors.HexColor("#334155"))), Spacer(1, 250), Paragraph("This documentation outlines the software development results of Digital:Hub for the specified release delivered to Volkswagen AG.", ParagraphStyle("CoverFooter", parent=body, alignment=1)), PageBreak()]
 
-    story += [Paragraph("1. Release Purpose", title), Paragraph(st.session_state.release_purpose.replace("\n", "<br/>"), body), Paragraph("2. Software Release Information", title)]
+    purpose = str(prepared.get("purpose", st.session_state.release_purpose)).strip()
+    purpose_html = xml_escape(purpose).replace("\n", "<br/>")
+    story += [Paragraph("1. Release Purpose", title), Paragraph(purpose_html, body), Paragraph("2. Software Release Information", title)]
     history = prepared["history"]
     metadata = [("Release version (ReCall2)", prepared["version"]), ("VW Service Center Change number", history.get("service_center_change") or "-"), ("Deploy Date (PROD)", history.get("deploy_date") or "-"), ("SCS", history.get("scs") or "-")]
     meta_data = [[Paragraph(key, label), Paragraph(value.replace("\n", "<br/>"), cell)] for key, value in metadata]
@@ -1262,7 +1288,7 @@ def build_prepared_release_notes_pdf(prepared):
             last_epic = epic
             epic_group_rows.append(len(issue_rows))
             issue_rows.append([Paragraph(f"Epic: {epic}", ParagraphStyle("RNEpic", parent=cell, fontName="Helvetica-Bold")), "", ""])
-        issue_rows.append([Paragraph(str(row["Type"]), cell), Paragraph(str(row["Key"]), cell), Paragraph(str(row["Summary"]), cell)])
+        issue_rows.append([Paragraph(str(row["Type"]), cell), Paragraph(str(row["Key"]), cell), Paragraph(xml_escape(str(row["Summary"])), cell)])
     issues_table = Table(issue_rows, colWidths=[105, 125, 274], repeatRows=1)
     issue_table_style = [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#BFBFBF")), ("GRID", (0, 0), (-1, -1), .6, colors.black), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]
     for row_index in epic_group_rows:
@@ -1278,7 +1304,7 @@ def build_prepared_release_notes_pdf(prepared):
     story += [residual_table, Paragraph("5. Test protocols", title)]
     link = "https://devstack.vwgroup.com/confluence/x/nlEDD"
     story.append(Paragraph(f'E2E test protocols: <link href="{link}" color="blue">E2E test protocols for release</link>', body))
-    doc.build(story, canvasmaker=NumberedCanvas)
+    doc.build(story, canvasmaker=partial(NumberedCanvas, header_title="ReCall2 - Software Release Note"))
     buffer.seek(0)
     return buffer
 
@@ -1698,7 +1724,7 @@ def build_release_notes_pdf(overview_df):
             
 
         
-    doc.build(story, canvasmaker=NumberedCanvas)
+    doc.build(story, canvasmaker=partial(NumberedCanvas, header_title="ReCall2 - Software Release Note"))
     pdf_buffer.seek(0)
     return pdf_buffer
 
@@ -1708,7 +1734,7 @@ def build_release_notes_pdf(overview_df):
 # 8. Main Application Interface Rendering
 # ---------------------------------------------------------
 st.title("📣 Release Notes Generator")
-st.markdown("Automate and customize Release Notes reports securely by connecting directly to **Jira** or importing local files.")
+st.markdown("Create the release document from a Jira version: we retrieve the release metadata and tickets, draft the release purpose, and generate the PDF ready for review.")
 
 # Programmatic Navigation Sidebar
 st.sidebar.markdown("### 🧭 Navigation Panel")
@@ -1733,8 +1759,8 @@ if selected_nav != st.session_state.active_tab:
 # STEP 1: Ingestion & Connection
 # ---------------------------------------------------------
 if st.session_state.active_tab == "🔌 Ingestion":
-    st.subheader("🔌 Jira Backlog Ingestion")
-    st.write("Configure connection details below to load the **Overview** (What We Did) ticket dataset.")
+    st.subheader("🔌 Release data ingestion")
+    st.write("Paste the Jira version link. PO Tools loads the matching release history row, the resolved release tickets, and the known residual anomalies.")
     
     # Ingestion Flash Feedback
     if "ingestion_feedback" in st.session_state:
@@ -1780,7 +1806,17 @@ if st.session_state.active_tab == "🔌 Ingestion":
 
 
     st.subheader("📝 Prepare Release Note")
-    st.write("Paste the Jira version link to load the release metadata, resolved issues, and known residual anomalies.")
+    st.info("**How it works:** stories and tasks linked to an Epic are used to draft the delivery highlights. Improvements — including delivered items within an Improvement Epic — are listed separately as individual bullets. Bugs and tickets without an Epic are excluded from the Release Purpose, but remain available in the release tables.")
+    with st.expander("Where does the Release Note information come from?", expanded=False):
+        st.markdown(
+            """
+            1. **Jira version link** — identifies the release and loads its tickets through the matching Fix Version.
+            2. **Jira tickets** — provide the resolved Stories, Tasks, Bugs and Improvements shown in the release tables.
+            3. **Confluence Release history** — provides the production deploy date, SCS and VW Service Center Change number for that version.
+            4. **Residual anomalies** — Jira is checked for open Severity A/B bugs that are not assigned to the current release.
+            5. **Release Purpose** — is drafted from Epic-linked Stories and Tasks plus Improvement titles. You can always edit it before exporting the PDF.
+            """
+        )
     jira_version_link_base = os.getenv("JIRA_VERSION_LINK_BASE", "https://devstack.vwgroup.com/jira/projects/RECALLTWO/versions/")
     release_version_url = st.text_input(
         "Jira version link",
@@ -1788,13 +1824,44 @@ if st.session_state.active_tab == "🔌 Ingestion":
         placeholder=f"{jira_version_link_base}543216",
         key="release_version_url"
     )
+    # Apply an explicitly requested regenerated draft before rendering the input.
+    # Keeping the widget bound to this state key ensures its value survives tab changes.
+    pending_purpose = st.session_state.pop("release_purpose_pending", None)
+    if pending_purpose is not None:
+        st.session_state.release_purpose = pending_purpose
     purpose_in = st.text_area(
-        "Release purpose",
-        value=st.session_state.release_purpose,
-        height=120
+        "Release purpose (editable)",
+        height=120,
+        help="Review or edit this text before exporting. It is included as section 1 of the Release Notes PDF.",
+        key="release_purpose"
     )
-    st.session_state.release_purpose = purpose_in
-    st.caption("The Jira and Confluence fields are prefilled from your local `.env` file. Any change here is used only in the current session.")
+    if st.session_state.get("prepared_release_notes") is not None:
+        st.session_state.prepared_release_notes["purpose"] = purpose_in
+    st.caption("This text is saved with the prepared release and is printed in section 1 of the PDF. You can refine it before exporting.")
+    available_models = st.session_state.get("ollama_models") or get_ollama_models(st.session_state.get("ollama_url", "http://localhost:11434"))
+    if available_models:
+        st.caption("✨ Local AI is available: when preparing the release, it drafts concise highlights from Epic-linked User Stories and Tasks. Your own text is never overwritten.")
+    else:
+        st.caption("ℹ️ Local AI is not available yet. PO Tools will create the Epic list draft; once an Ollama model is installed, it will create concise delivery highlights automatically.")
+    current_prepared = st.session_state.get("prepared_release_notes")
+    if current_prepared is not None and st.button("✨ Regenerate Release Purpose suggestion", help="Replaces the current Release Purpose text with a new editable AI suggestion."):
+        generated_purpose = current_prepared.get("purpose_draft", "The purpose of this release is to rollout the following functionalities:")
+        if available_models:
+            selected_model = "qwen2.5:7b" if "qwen2.5:7b" in available_models else available_models[0]
+            with st.spinner("Drafting delivery highlights by Epic..."):
+                ai_draft = generate_release_purpose_with_ollama(
+                    selected_model,
+                    current_prepared["resolved"],
+                    st.session_state.get("ollama_url", "http://localhost:11434"),
+                )
+            if ai_draft:
+                improvement_titles = "\n".join(build_improvement_purpose_items(current_prepared["resolved"]))
+                generated_purpose = f"The purpose of this release is to rollout the following functionalities:\n\nDelivered functionality by Epic:\n{ai_draft}"
+                if improvement_titles:
+                    generated_purpose += f"\n\nImprovements:\n{improvement_titles}"
+        st.session_state.release_purpose_pending = generated_purpose
+        current_prepared["purpose"] = generated_purpose
+        st.rerun()
     if st.button("✨ Prepare Release Note", use_container_width=True):
         if not st.session_state.conf_token:
             st.error("Enter a Confluence Personal Access Token to load the release history.")
@@ -1802,11 +1869,32 @@ if st.session_state.active_tab == "🔌 Ingestion":
         try:
             with st.spinner("Loading release metadata, tickets, and residual anomalies..."):
                 prepared = prepare_release_notes_from_version_url(release_version_url)
+            default_purpose = "The purpose of this release is to rollout the following functionalities:"
+            generated_purpose = prepared["purpose_draft"]
+            models = st.session_state.get("ollama_models") or get_ollama_models(st.session_state.get("ollama_url", "http://localhost:11434"))
+            if models:
+                selected_model = "qwen2.5:7b" if "qwen2.5:7b" in models else models[0]
+                with st.spinner("Drafting a concise release purpose from Epic-linked stories and tasks..."):
+                    ai_draft = generate_release_purpose_with_ollama(
+                        selected_model,
+                        prepared["resolved"],
+                        st.session_state.get("ollama_url", "http://localhost:11434"),
+                    )
+                if ai_draft:
+                    improvement_titles = "\n".join(build_improvement_purpose_items(prepared["resolved"]))
+                    generated_purpose = f"{default_purpose}\n\nDelivered functionality by Epic:\n{ai_draft}"
+                    if improvement_titles:
+                        generated_purpose += f"\n\nImprovements:\n{improvement_titles}"
+            # Never overwrite purpose text the user has already written. The
+            # generated draft fills the default empty template only.
+            chosen_purpose = generated_purpose if st.session_state.release_purpose.strip() == default_purpose else st.session_state.release_purpose
+            prepared["purpose"] = chosen_purpose
+            if chosen_purpose != st.session_state.release_purpose:
+                st.session_state.release_purpose_pending = chosen_purpose
             st.session_state.prepared_release_notes = prepared
             st.session_state.app_version = prepared["version"]
             st.session_state.overview_df = prepared["resolved"].copy()
-            st.session_state.release_purpose = prepared["purpose_draft"]
-            st.success(f"Release {prepared['version']} is ready. Review the generated purpose text and export the PDF.")
+            st.success(f"Release {prepared['version']} is ready. Review the Release Purpose, then continue to Workbook or Exporter.")
             st.rerun()
         except ValueError as error:
             st.error(str(error))
@@ -2616,6 +2704,8 @@ elif st.session_state.active_tab == "🎨 Branding":
             purpose_in = st.text_area("Release purpose text:", value=st.session_state.release_purpose, height=130)
             if purpose_in != st.session_state.release_purpose:
                 st.session_state.release_purpose = purpose_in
+                if st.session_state.get("prepared_release_notes") is not None:
+                    st.session_state.prepared_release_notes["purpose"] = purpose_in
             st.markdown("**Additional introduction (optional)**")
             st.write("Optional introductory content printed after the release purpose.")
             
