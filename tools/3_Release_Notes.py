@@ -212,6 +212,20 @@ default_conf_server = os.getenv("CONFLUENCE_SERVER", "")
 default_conf_token = os.getenv("CONFLUENCE_API_TOKEN", "")
 default_conf_space = os.getenv("CONFLUENCE_SPACE", "DS")
 default_conf_page = os.getenv("CONFLUENCE_PAGE", "Release Notes")
+default_release_history_url = os.getenv(
+    "RELEASE_HISTORY_URL",
+    "https://devstack.vwgroup.com/confluence/spaces/RECALLTWO/pages/201544094/40_Release+history+Documentation"
+).strip()
+release_history_version_column = os.getenv("RELEASE_HISTORY_VERSION_COLUMN", "Version").strip()
+release_history_deploy_date_column = os.getenv("RELEASE_HISTORY_DEPLOY_DATE_COLUMN", "Deploy Date (PROD)").strip()
+release_history_scs_column = os.getenv("RELEASE_HISTORY_SCS_COLUMN", "SCS").strip()
+release_history_service_change_column = os.getenv("RELEASE_HISTORY_SERVICE_CHANGE_COLUMN", "VW Service Center Change").strip()
+release_history_release_notes_column = os.getenv("RELEASE_HISTORY_RELEASE_NOTES_COLUMN", "PO Acceptance and release notes").strip()
+default_release_notes_document_title = os.getenv("RELEASE_NOTES_DOCUMENT_TITLE", "ReCall2 - Software Release Note").strip()
+default_residual_anomalies_jql = os.getenv(
+    "RESIDUAL_ANOMALIES_JQL",
+    'project = "{{PROJECT_KEY}}" AND issuetype = Bug AND status != Closed AND status != Resolved AND labels in (Severity_A, Severity_B) AND labels not in (Cognos) AND (fixVersion is EMPTY OR fixVersion not in ("{{RELEASE_FIX_VERSION}}"))'
+).strip()
 
 default_project_name = os.getenv("PROJECT_NAME", "PO Tools Enterprise")
 default_primary_color = os.getenv("PRIMARY_COLOR", "#3B82F6")
@@ -269,6 +283,8 @@ if 'conf_space_key' not in st.session_state:
     st.session_state.conf_space_key = default_conf_space
 if 'conf_page_name' not in st.session_state:
     st.session_state.conf_page_name = default_conf_page
+if 'release_history_url' not in st.session_state:
+    st.session_state.release_history_url = default_release_history_url
 
 if 'overview_df' not in st.session_state:
     st.session_state.overview_df = None
@@ -336,6 +352,15 @@ if 'prepared_release_notes' not in st.session_state:
     st.session_state.prepared_release_notes = None
 if 'release_purpose' not in st.session_state:
     st.session_state.release_purpose = "The purpose of this release is to rollout the following functionalities:"
+if 'release_notes_document_title' not in st.session_state:
+    st.session_state.release_notes_document_title = default_release_notes_document_title
+legacy_residual_anomalies_jql = 'issuetype = Bug AND status != Closed AND status != Resolved AND labels in (Severity_A, Severity_B) AND labels not in (Cognos)'
+previous_residual_anomalies_jql = legacy_residual_anomalies_jql + ' AND (fixVersion is EMPTY OR fixVersion not in ("{{RELEASE_FIX_VERSION}}"))'
+if (
+    'residual_anomalies_jql' not in st.session_state
+    or st.session_state.residual_anomalies_jql in {legacy_residual_anomalies_jql, previous_residual_anomalies_jql}
+):
+    st.session_state.residual_anomalies_jql = default_residual_anomalies_jql
 
 # ---------------------------------------------------------
 # Shared Collaboration Sync Logic
@@ -881,6 +906,47 @@ def find_history_value(row, candidates):
                 return "" if pd.isna(value) else str(value).strip()
     return ""
 
+
+def get_configured_history_value(row, column_name):
+    """Return a Confluence table value with case/whitespace-tolerant column matching."""
+    normalized_target = re.sub(r"\s+", " ", str(column_name)).strip().casefold()
+    for key, value in row.items():
+        normalized_key = re.sub(r"\s+", " ", str(key)).strip().casefold()
+        if normalized_key == normalized_target:
+            return value
+    return ""
+
+
+def extract_confluence_page_id(page_url):
+    """Read a Confluence page ID from a full page URL (or a legacy numeric ID)."""
+    value = str(page_url or "").strip()
+    if value.isdigit():
+        return value
+    match = re.search(r"(?:/pages/|[?&]pageId=)(\d+)", value, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    raise ValueError("Enter a full Confluence Release history page URL containing /pages/<page-id>/.")
+
+
+def has_history_value(value):
+    """Treat blank placeholders from Confluence as missing values."""
+    return str(value or "").strip().casefold() not in {"", "-", "nan", "none"}
+
+
+def find_history_column_index(html, column_name):
+    """Find the configured column position in the first matching Confluence table."""
+    target = re.sub(r"\s+", " ", str(column_name)).strip().casefold()
+    for table_html in re.findall(r"<table[^>]*>(.*?)</table>", html, flags=re.IGNORECASE | re.DOTALL):
+        header_row = re.search(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.DOTALL)
+        if not header_row:
+            continue
+        cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", header_row.group(1), flags=re.IGNORECASE | re.DOTALL)
+        headers = [re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", "", cell))).strip() for cell in cells]
+        for index, header in enumerate(headers):
+            if header.casefold() == target:
+                return index
+    raise ValueError(f"The configured Release history column '{column_name}' was not found.")
+
 def format_release_date(value):
     try:
         return datetime.strptime(str(value), "%Y-%m-%d").strftime("%d.%m.%Y")
@@ -958,7 +1024,8 @@ def parse_confluence_history_rows(html):
                 yield parsed_row
 
 def fetch_release_history(confluence_server, token, release_version, auth_type, email):
-    confluence_url = f"{confluence_server.rstrip('/')}/rest/api/content/201544094"
+    page_id = extract_confluence_page_id(st.session_state.release_history_url)
+    confluence_url = f"{confluence_server.rstrip('/')}/rest/api/content/{page_id}"
     headers = {"Accept": "application/json"}
     token_clean = token.strip().removeprefix("Bearer ").strip()
     auth = (email.strip(), token_clean) if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"] else None
@@ -971,23 +1038,33 @@ def fetch_release_history(confluence_server, token, release_version, auth_type, 
         raise ValueError(f"Could not read Release history Documentation ({response.status_code}).")
     html = response.json().get("body", {}).get("storage", {}).get("value", "")
     for row in parse_confluence_history_rows(html):
-        values = " ".join(str(value) for value in row.values())
-        if re.search(rf"(?<!\d){re.escape(release_version)}(?!\d)", values):
-            deploy_date = row.get("__first_column__") or find_history_value(row, ["deploy date", "date"])
+        version_value = get_configured_history_value(row, release_history_version_column)
+        if re.search(rf"(?<!\d){re.escape(release_version)}(?!\d)", str(version_value)):
+            deploy_date = (
+                get_configured_history_value(row, release_history_deploy_date_column)
+                or find_history_value(row, ["deploy date", "date"])
+                or row.get("__first_column__", "")
+            )
             if not deploy_date:
-                raise ValueError(f"Release history has a row for version {release_version}, but its Deploy Date (PROD) is still empty.")
+                raise ValueError(f"Release history has a row for version {release_version}, but '{release_history_deploy_date_column}' is still empty.")
             return {
                 "deploy_date": format_release_date(deploy_date),
-                "scs": find_history_value(row, ["scs"]),
-                "service_center_change": find_history_value(row, ["service center change", "vw service"]),
+                "scs": get_configured_history_value(row, release_history_scs_column),
+                "service_center_change": (
+                    get_configured_history_value(row, release_history_service_change_column)
+                    if has_history_value(get_configured_history_value(row, release_history_service_change_column))
+                    else find_history_value(row, ["service center change", "vw service"])
+                ),
                 "test_protocols": find_history_value(row, ["test protocol", "e2e", "protocol"])
             }
     raise ValueError(f"There is no Release history row for version {release_version} yet.")
 
 def prepare_release_notes_from_version_url(version_url):
     version_id_match = re.search(r"/versions/(\d+)", version_url.strip())
-    if not version_id_match:
-        raise ValueError("Paste a Jira version URL ending in /versions/<id>.")
+    project_key_match = re.search(r"/projects/([^/]+)/versions/\d+", version_url.strip(), re.IGNORECASE)
+    if not version_id_match or not project_key_match:
+        raise ValueError("Paste a Jira version URL in the form /projects/<PROJECT_KEY>/versions/<id>.")
+    project_key = project_key_match.group(1).strip()
     version_response = jira_request(st.session_state.jira_server, st.session_state.jira_token, f"/rest/api/2/version/{version_id_match.group(1)}", auth_type=st.session_state.jira_auth_method, email=st.session_state.jira_email)
     if version_response.status_code != 200:
         raise ValueError(f"Could not load the Jira version ({version_response.status_code}).")
@@ -999,9 +1076,14 @@ def prepare_release_notes_from_version_url(version_url):
         raise ValueError("Could not load the release tickets from Jira.")
     allowed = ["Bug", "User Story", "Task", "Improvement"]
     resolved = issues[issues["Type"].isin(allowed)].copy()
+    residual_jql_template = st.session_state.residual_anomalies_jql.strip()
+    if not residual_jql_template:
+        raise ValueError("Enter the Residual anomalies JQL query before preparing the Release Note.")
     residual_jql = (
-        'issuetype = Bug AND status != Closed AND status != Resolved '
-        'AND labels in (Severity_A, Severity_B) AND labels not in (Cognos)'
+        residual_jql_template
+        .replace("{{RELEASE_FIX_VERSION}}", version_name)
+        .replace("{{RELEASE_VERSION}}", release_version)
+        .replace("{{PROJECT_KEY}}", project_key)
     )
     residual = fetch_jira_tickets_dataset(st.session_state.jira_server, st.session_state.jira_token, residual_jql, query_mode="custom", auth_type=st.session_state.jira_auth_method, email=st.session_state.jira_email)
     if residual is not None and not residual.empty:
@@ -1017,11 +1099,14 @@ def publish_release_note_to_history(prepared, pdf_bytes, filename):
     base_url = st.session_state.conf_server.rstrip("/")
     token = st.session_state.conf_token.strip().removeprefix("Bearer ").strip()
     headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
-    page_id = "201544094"
+    page_id = extract_confluence_page_id(prepared.get("history_page_url", st.session_state.release_history_url))
     page_response = requests.get(f"{base_url}/rest/api/content/{page_id}", headers=headers, params={"expand": "body.storage,version"}, timeout=20)
     if page_response.status_code != 200:
         raise ValueError(f"Could not read Release history Documentation ({page_response.status_code}).")
     page = page_response.json()
+    release_notes_column_index = find_history_column_index(
+        page["body"]["storage"]["value"], release_history_release_notes_column
+    )
 
     upload_headers = {"Accept": "application/json", "Authorization": f"Bearer {token}", "X-Atlassian-Token": "no-check"}
     attachment_list_response = requests.get(
@@ -1053,10 +1138,10 @@ def publish_release_note_to_history(prepared, pdf_bytes, filename):
         if updated or not re.search(rf"(?<!\d){re.escape(version)}(?!\d)", row_text):
             return row_html
         cells = list(re.finditer(r"<td[^>]*>.*?</td>", row_html, flags=re.IGNORECASE | re.DOTALL))
-        if len(cells) < 5:
+        if len(cells) <= release_notes_column_index:
             return row_html
         link = f'<td><p><a href="{base_url}/download/attachments/{page_id}/{quote(filename)}">{filename}</a></p></td>'
-        target = cells[4]
+        target = cells[release_notes_column_index]
         updated = True
         return row_html[:target.start()] + link + row_html[target.end():]
 
@@ -1260,13 +1345,14 @@ def build_prepared_release_notes_pdf(prepared):
     header = ParagraphStyle("RNHead", parent=body, fontName="Helvetica-Bold", fontSize=8, leading=10, textColor=colors.white)
     cell = ParagraphStyle("RNCell", parent=body, fontSize=8.5, leading=11)
     label = ParagraphStyle("RNLabel", parent=cell, fontName="Helvetica-Bold")
-    story = [Spacer(1, 50), Paragraph("ReCall2 - Software Release Note", ParagraphStyle("CoverProject", parent=body, alignment=1, textColor=colors.HexColor("#64748B"))), Paragraph("Release Notes", ParagraphStyle("CoverTitle", parent=title, alignment=1, fontSize=32, leading=38, textColor=primary, spaceBefore=18)), Paragraph(f"Version: {prepared['version']}", ParagraphStyle("CoverVersion", parent=body, alignment=1, fontSize=18, leading=22, textColor=colors.HexColor("#334155"))), Spacer(1, 250), Paragraph("This documentation outlines the software development results of Digital:Hub for the specified release delivered to Volkswagen AG.", ParagraphStyle("CoverFooter", parent=body, alignment=1)), PageBreak()]
+    document_title = str(prepared.get("document_title", st.session_state.release_notes_document_title)).strip() or default_release_notes_document_title
+    story = [Spacer(1, 50), Paragraph(xml_escape(document_title), ParagraphStyle("CoverProject", parent=body, alignment=1, textColor=colors.HexColor("#64748B"))), Paragraph("Release Notes", ParagraphStyle("CoverTitle", parent=title, alignment=1, fontSize=32, leading=38, textColor=primary, spaceBefore=18)), Paragraph(f"Version: {prepared['version']}", ParagraphStyle("CoverVersion", parent=body, alignment=1, fontSize=18, leading=22, textColor=colors.HexColor("#334155"))), Spacer(1, 250), Paragraph("This documentation outlines the software development results of Digital:Hub for the specified release delivered to Volkswagen AG.", ParagraphStyle("CoverFooter", parent=body, alignment=1)), PageBreak()]
 
     purpose = str(prepared.get("purpose", st.session_state.release_purpose)).strip()
     purpose_html = xml_escape(purpose).replace("\n", "<br/>")
     story += [Paragraph("1. Release Purpose", title), Paragraph(purpose_html, body), Paragraph("2. Software Release Information", title)]
     history = prepared["history"]
-    metadata = [("Release version (ReCall2)", prepared["version"]), ("VW Service Center Change number", history.get("service_center_change") or "-"), ("Deploy Date (PROD)", history.get("deploy_date") or "-"), ("SCS", history.get("scs") or "-")]
+    metadata = [("Release version", prepared["version"]), ("VW Service Center Change number", history.get("service_center_change") or "-"), ("Deploy Date (PROD)", history.get("deploy_date") or "-"), ("SCS", history.get("scs") or "-")]
     meta_data = [[Paragraph(key, label), Paragraph(value.replace("\n", "<br/>"), cell)] for key, value in metadata]
     meta_table = Table(meta_data, colWidths=[225, 279])
     meta_table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), .75, colors.black), ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E7E7E7")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6), ("LEFTPADDING", (0, 0), (-1, -1), 7)]))
@@ -1304,7 +1390,7 @@ def build_prepared_release_notes_pdf(prepared):
     story += [residual_table, Paragraph("5. Test protocols", title)]
     link = "https://devstack.vwgroup.com/confluence/x/nlEDD"
     story.append(Paragraph(f'E2E test protocols: <link href="{link}" color="blue">E2E test protocols for release</link>', body))
-    doc.build(story, canvasmaker=partial(NumberedCanvas, header_title="ReCall2 - Software Release Note"))
+    doc.build(story, canvasmaker=partial(NumberedCanvas, header_title=document_title))
     buffer.seek(0)
     return buffer
 
@@ -1724,7 +1810,7 @@ def build_release_notes_pdf(overview_df):
             
 
         
-    doc.build(story, canvasmaker=partial(NumberedCanvas, header_title="ReCall2 - Software Release Note"))
+    doc.build(story, canvasmaker=partial(NumberedCanvas, header_title=st.session_state.release_notes_document_title))
     pdf_buffer.seek(0)
     return pdf_buffer
 
@@ -1817,12 +1903,53 @@ if st.session_state.active_tab == "🔌 Ingestion":
             5. **Release Purpose** — is drafted from Epic-linked Stories and Tasks plus Improvement titles. You can always edit it before exporting the PDF.
             """
         )
+    with st.expander("Configure the Release history table for another project", expanded=False):
+        st.markdown(
+            f"""
+            Set these values in the project's `.env` file. The current defaults point to the ReCall2 Release history page.
+
+            - `RELEASE_HISTORY_URL` — the full Confluence URL of the page containing the release-history table (current default: `{st.session_state.release_history_url}`).
+            - `RELEASE_HISTORY_VERSION_COLUMN` — the version column (default: `{release_history_version_column}`).
+            - `RELEASE_HISTORY_DEPLOY_DATE_COLUMN` — production deployment date (default: `{release_history_deploy_date_column}`).
+            - `RELEASE_HISTORY_SCS_COLUMN` — SCS reference (default: `{release_history_scs_column}`).
+            - `RELEASE_HISTORY_SERVICE_CHANGE_COLUMN` — VW Service Center Change number (default: `{release_history_service_change_column}`).
+            - `RELEASE_HISTORY_RELEASE_NOTES_COLUMN` — the column where the generated PDF link is written when publishing (default: `{release_history_release_notes_column}`).
+
+            The table must contain one row per release and all six configured columns. The version value must match the Jira release version, and the deployment-date cell cannot be empty. Column names can differ by project as long as the corresponding `.env` values match them exactly.
+
+            **Residual anomalies:** configure `RESIDUAL_ANOMALIES_JQL` with the Jira query that identifies known residual bugs. Use `{{PROJECT_KEY}}` to scope it to the project extracted from the version link, and `{{RELEASE_FIX_VERSION}}` where the Jira Fix Version of the release should be excluded (the ReCall2 default already does this). `{{RELEASE_VERSION}}` is also available for projects whose Fix Version is only the numeric release value. A safety check removes any issue carrying the current release version afterwards.
+            """
+        )
     jira_version_link_base = os.getenv("JIRA_VERSION_LINK_BASE", "https://devstack.vwgroup.com/jira/projects/RECALLTWO/versions/")
     release_version_url = st.text_input(
         "Jira version link",
         value=jira_version_link_base,
         placeholder=f"{jira_version_link_base}543216",
         key="release_version_url"
+    )
+    release_history_url_in = st.text_input(
+        "Release history Confluence URL",
+        help="Full URL of the Confluence page containing the release-history table. The default comes from RELEASE_HISTORY_URL in .env.",
+        key="release_history_url"
+    )
+    document_title_in = st.text_input(
+        "Release Notes document title",
+        help="Shown on the cover and in the page header. The default comes from RELEASE_NOTES_DOCUMENT_TITLE in .env.",
+        key="release_notes_document_title"
+    )
+    if st.session_state.get("prepared_release_notes") is not None:
+        st.session_state.prepared_release_notes["document_title"] = document_title_in
+    residual_anomalies_jql_in = st.text_area(
+        "Residual anomalies JQL",
+        height=85,
+        help="Defines which Jira issues are considered residual anomalies. Use {{PROJECT_KEY}} and {{RELEASE_FIX_VERSION}} to insert values from the Jira version link automatically.",
+        key="residual_anomalies_jql"
+    )
+    st.caption(
+        "**How this query is applied:** PO Tools reads the project key and Jira version from the link, replaces "
+        "`{{PROJECT_KEY}}` and `{{RELEASE_FIX_VERSION}}` with those values, and runs the resulting JQL. "
+        "It then removes any returned bug whose Fix Version contains the current numeric release version. "
+        "This keeps open qualifying bugs for future releases, while excluding bugs planned for the release being documented."
     )
     # Apply an explicitly requested regenerated draft before rendering the input.
     # Keeping the widget bound to this state key ensures its value survives tab changes.
@@ -1889,6 +2016,8 @@ if st.session_state.active_tab == "🔌 Ingestion":
             # generated draft fills the default empty template only.
             chosen_purpose = generated_purpose if st.session_state.release_purpose.strip() == default_purpose else st.session_state.release_purpose
             prepared["purpose"] = chosen_purpose
+            prepared["document_title"] = st.session_state.release_notes_document_title
+            prepared["history_page_url"] = st.session_state.release_history_url
             if chosen_purpose != st.session_state.release_purpose:
                 st.session_state.release_purpose_pending = chosen_purpose
             st.session_state.prepared_release_notes = prepared

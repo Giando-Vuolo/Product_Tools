@@ -42,6 +42,9 @@ Before launching, configure your corporate server details:
    * `QUARTER_LABEL`: The label identifying the current quarter (defaults to `RC2_FB_18`).
    * `QUARTER_STATUS_TABLE_TITLE`: The title of the Epic progress status table.
    * `JIRA_VERSION_LINK_BASE`: The base project URL for version links in Release Notes.
+   * **Release Notes:** Set `RELEASE_NOTES_DOCUMENT_TITLE` for the default cover and page-header title. It can also be changed in Release Notes Ingestion for the current document.
+   * **Release Notes history:** Set `RELEASE_HISTORY_URL` to the full Confluence URL of the page containing your release-history table. Configure the five `RELEASE_HISTORY_*_COLUMN` values to match its headers: version, deployment date, SCS, service-change number and the column where the Release Note PDF link is written.
+   * **Residual anomalies:** Set `RESIDUAL_ANOMALIES_JQL` to the Jira query that identifies known residual bugs. Use `{{PROJECT_KEY}}` to scope it to the project in the release link, `{{RELEASE_FIX_VERSION}}` to exclude that Jira Fix Version (or `{{RELEASE_VERSION}}` when it is only numeric). It can be overridden in Release Notes Ingestion for the current document, with a final safety check excluding bugs from the current release.
    * **Sprint KPIs Configs:** Set `JIRA_STORY_POINTS_FIELD`, `JIRA_SEVERITY_A_LABEL`, and `JIRA_STATUS_IN_PROGRESS` to match your Jira workflows. 
    * **Confluence Publisher:** Configure `CONFLUENCE_SPACE`, `CONFLUENCE_PAGE` (for Sprint Reviews), and `CONFLUENCE_KPI_PAGE` (for KPIs) to automate wiki exports.
    > [!NOTE]
