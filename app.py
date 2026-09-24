@@ -350,7 +350,7 @@ def show_home():
                 <div class="hub-card">
                     <span class="hub-badge">ACTIVE 🚀</span>
                     <h3>🎯 Quarterly Planner</h3>
-                    <p>Create and customize high-level, interactive Gantt charts from your backlog data or Jira CSV exports.</p>
+                    <p>Track committed quarterly Epics from Jira, add delivery context and planned milestones, then export progress and delivery-roadmap slides.</p>
                 </div>
             """, unsafe_allow_html=True)
             st.page_link(planner_page, label="Open Planner", icon="🎯")
@@ -370,7 +370,7 @@ def show_home():
                 <div class="hub-card">
                     <span class="hub-badge">ACTIVE 🚀</span>
                     <h3>📣 Release Notes</h3>
-                    <p>Compile completed features, write release highlight intro text, and export PDF Release Notes for customers and stakeholders.</p>
+                    <p>Create a Release Note from a Jira version: load release data, review the editable purpose and ticket tables, then export or publish the PDF.</p>
                 </div>
             """, unsafe_allow_html=True)
             st.page_link(release_notes_page, label="Open Release Notes", icon="📣")

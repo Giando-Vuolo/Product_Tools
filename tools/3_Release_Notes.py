@@ -2762,11 +2762,6 @@ elif st.session_state.active_tab == "💾 Exporter":
         # Prepare filtered data
         rn_ov_df = st.session_state.overview_df[st.session_state.overview_df["Release Notes"] == True] if st.session_state.overview_df is not None else pd.DataFrame()
         
-        # Prepare primary release version for metadata summaries
-        primary_rel = "Next Releases"
-        if 'next_release_df' in st.session_state and not st.session_state.next_release_df.empty:
-            primary_rel = str(st.session_state.next_release_df.iloc[0]['Version'])
- 
         with col_export_actions:
             st.markdown("### 📥 Document Downloads")
             
@@ -2774,11 +2769,11 @@ elif st.session_state.active_tab == "💾 Exporter":
             st.markdown(f"""
             <div class="export-card">
                 <h4 style='margin-bottom:6px; color:#FFFFFF;'>📣 Release Notes</h4>
-                <p style='font-size:11.5px; line-height:14px;'>Customer-facing release document featuring:
+                <p style='font-size:11.5px; line-height:14px;'>Customer-facing document for the prepared Jira release, featuring:
                 <ul style='margin-top:2px; margin-bottom:2px; padding-left:15px; font-size:11px;'>
-                    <li>Your custom rich welcome intro paragraph.</li>
-                    <li><b>Highlights:</b> Consolidated delivered items single table.</li>
-                    <li><b>Roadmap:</b> Consolidated next release highlights (Target: {primary_rel}).</li>
+                    <li><b>Release Purpose:</b> your editable delivery summary by Epic and Improvements.</li>
+                    <li><b>Release information:</b> version, deploy date, SCS and service-change number.</li>
+                    <li><b>Ticket detail:</b> release tickets grouped by Epic, known residual bugs and the E2E test-protocol link.</li>
                 </ul>
                 </p>
             </div>
