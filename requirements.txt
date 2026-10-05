@@ -10,3 +10,7 @@ streamlit-autorefresh
 vl-convert-python
 python-pptx
 pypdf
+fastapi
+uvicorn
+pydantic
+ollama

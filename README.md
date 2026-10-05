@@ -9,7 +9,8 @@ You can connect directly to your corporate **Jira Server / Cloud** to automatica
 ## 🚀 Key Features
 
 * **🔌 Dual Jira Backlog Ingestion**: Securely connect to your company Jira server using secure tokens to fetch live sprint roadmaps (or drag-and-drop local CSV files).
-* **🤖 AI Issue Creator (Ollama)**: Automatically translate your informal notes and uploaded PDF requirements into professionally formatted Jira Epics, Stories, or Bugs using local, secure AI. Directly push and attach files to Jira.
+* **🤖 AI Agent Hub (Ollama)**: Automatically translate informal notes into Jira tickets, compute sprint KPIs, and query Confluence/Jira knowledge bases using natural language. Powered by local LLMs via Ollama. *(Note: The AI Agent is currently hidden from the main sidebar for development, but is accessible via `http://localhost:8501/AI_Agent`).*
+* **⚡ FastAPI Backend**: A standalone backend server providing internal API endpoints defined in `openapi_copilot.json`. It bridges the LLM with your live Jira and Confluence data.
 * **🤝 Live Collaboration**: Automatically spins up a secure, free Cloudflare tunnel on startup, displaying a shareable public link in the sidebar so team members can view and edit the roadmap together in real time.
 * **✍️ Commercial Workspace Workbook**: Refine technical Jira summaries into elegant commercial feature descriptions, schedule live product demos with presenters, and toggle report targets.
 * **🎨 Visual Branding**: Customize document primary theme colors with premium corporate presets, upload corporate logos, and add custom welcome intros.
@@ -103,7 +104,11 @@ If you are a developer and prefer to configure the virtual environment and run t
    pip install -r requirements.txt
    pip install pypdf # For AI PDF extraction
    ```
-4. **Launch Streamlit**:
+4. **Launch the FastAPI Server** (Required for the AI Agent):
+   ```bash
+   uvicorn api:app --host 0.0.0.0 --port 8000 &
+   ```
+5. **Launch Streamlit**:
    ```bash
    streamlit run app.py
    ```
@@ -123,4 +128,4 @@ If you don't connect to a live Jira server and want to use the offline sandbox, 
 * `Milestone`: Set to `TRUE` to render a timeline milestone diamond.
 
 ---
-*Built with ❤️ by Giando*
+*Built with ❤️ by the Recall2 Team*

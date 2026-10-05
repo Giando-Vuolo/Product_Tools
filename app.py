@@ -80,6 +80,8 @@ if "jira_connection_status" not in st.session_state:
     st.session_state.conf_connection_msg = ""
     st.session_state.ollama_connection_status = "Not checked"
     st.session_state.ollama_connection_msg = ""
+    st.session_state.api_connection_status = "Not checked"
+    st.session_state.api_connection_msg = ""
 
     # Test Jira Connection
     srv = st.session_state.jira_server
@@ -152,12 +154,26 @@ if "jira_connection_status" not in st.session_state:
             st.session_state.ollama_connection_status = "Failed"
             st.session_state.ollama_connection_msg = f"Connection Failed ({e})"
 
+    # Test API Connection
+    try:
+        api_resp = requests.get("http://localhost:8000/openapi.json", timeout=2)
+        if api_resp.status_code == 200:
+            st.session_state.api_connection_status = "Success"
+            st.session_state.api_connection_msg = "Connected"
+        else:
+            st.session_state.api_connection_status = "Failed"
+            st.session_state.api_connection_msg = f"HTTP {api_resp.status_code}"
+    except Exception as e:
+        st.session_state.api_connection_status = "Failed"
+        st.session_state.api_connection_msg = "Offline"
+
 # 1. Define the page objects first so they are globally accessible
 planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner", icon="🎯")
 sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", icon="📋")
 release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
 ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="AI Issue Creator", icon="🤖")
+ai_agent_page = st.Page("tools/6_AI_Agent.py", title="AI Agent", icon="💬")
 
 # 2. Define the Home Page rendering function
 def show_home():
@@ -343,9 +359,9 @@ def show_home():
 
     with tab_tools:
         st.subheader("🛠️ Available Tools")
-        col1, col2, col3, col4, col5 = st.columns(5)
-
-        with col1:
+        r1c1, r1c2, r1c3 = st.columns(3)
+        
+        with r1c1:
             st.markdown("""
                 <div class="hub-card">
                     <span class="hub-badge">ACTIVE 🚀</span>
@@ -355,7 +371,7 @@ def show_home():
             """, unsafe_allow_html=True)
             st.page_link(planner_page, label="Open Planner", icon="🎯")
 
-        with col2:
+        with r1c2:
             st.markdown("""
                 <div class="hub-card">
                     <span class="hub-badge">ACTIVE 🚀</span>
@@ -365,7 +381,7 @@ def show_home():
             """, unsafe_allow_html=True)
             st.page_link(sprint_review_page, label="Open Sprint Review", icon="📋")
 
-        with col3:
+        with r1c3:
             st.markdown("""
                 <div class="hub-card">
                     <span class="hub-badge">ACTIVE 🚀</span>
@@ -375,7 +391,9 @@ def show_home():
             """, unsafe_allow_html=True)
             st.page_link(release_notes_page, label="Open Release Notes", icon="📣")
 
-        with col4:
+        r2c1, r2c2, r2c3 = st.columns(3)
+
+        with r2c1:
             st.markdown("""
                 <div class="hub-card">
                     <span class="hub-badge">ACTIVE 🚀</span>
@@ -385,7 +403,7 @@ def show_home():
             """, unsafe_allow_html=True)
             st.page_link(sprint_kpis_page, label="Open Sprint KPIs", icon="📊")
 
-        with col5:
+        with r2c2:
             st.markdown("""
                 <div class="hub-card">
                     <span class="hub-badge">NEW ✨</span>
@@ -395,39 +413,51 @@ def show_home():
             """, unsafe_allow_html=True)
             st.page_link(ai_creator_page, label="Open AI Creator", icon="🤖")
 
+        with r2c3:
+            pass # AI Agent card removed temporarily while under development
+
     with tab_integrations:
         st.subheader("🔌 Centralized Integrations")
         st.write("Configure connection configurations for Jira and Confluence servers below.")
 
         # Display current status in nice columns
-        stat_col1, stat_col2, stat_col3 = st.columns(3)
+        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
         with stat_col1:
             j_status = st.session_state.get("jira_connection_status", "Not checked")
             j_msg = st.session_state.get("jira_connection_msg", "")
             if j_status == "Success":
-                st.success(f"🟢 **Jira Connected**: {j_msg}")
+                st.success(f"🟢 **Jira**: {j_msg}")
             elif j_status == "Failed":
-                st.error(f"🔴 **Jira Disconnected**: {j_msg}")
+                st.error(f"🔴 **Jira**: {j_msg}")
             else:
-                st.warning(f"🟡 **Jira Integration**: {j_status}")
+                st.warning(f"🟡 **Jira**: {j_status}")
         with stat_col2:
             c_status = st.session_state.get("conf_connection_status", "Not checked")
             c_msg = st.session_state.get("conf_connection_msg", "")
             if c_status == "Success":
-                st.success(f"🟢 **Confluence Connected**: {c_msg}")
+                st.success(f"🟢 **Confluence**: {c_msg}")
             elif c_status == "Failed":
-                st.error(f"🔴 **Confluence Disconnected**: {c_msg}")
+                st.error(f"🔴 **Confluence**: {c_msg}")
             else:
-                st.warning(f"🟡 **Confluence Integration**: {c_status}")
+                st.warning(f"🟡 **Confluence**: {c_status}")
         with stat_col3:
             o_status = st.session_state.get("ollama_connection_status", "Not checked")
             o_msg = st.session_state.get("ollama_connection_msg", "")
             if o_status == "Success":
-                st.success(f"🟢 **Ollama Connected**: {o_msg}")
+                st.success(f"🟢 **Ollama**: {o_msg}")
             elif o_status == "Failed":
-                st.error(f"🔴 **Ollama Disconnected**: {o_msg}")
+                st.error(f"🔴 **Ollama**: {o_msg}")
             else:
-                st.warning(f"🟡 **Ollama Integration**: {o_status}")
+                st.warning(f"🟡 **Ollama**: {o_status}")
+        with stat_col4:
+            a_status = st.session_state.get("api_connection_status", "Not checked")
+            a_msg = st.session_state.get("api_connection_msg", "")
+            if a_status == "Success":
+                st.success(f"🟢 **Local API**: {a_msg}")
+            elif a_status == "Failed":
+                st.error(f"🔴 **Local API**: {a_msg}")
+            else:
+                st.warning(f"🟡 **Local API**: {a_status}")
 
         st.markdown("---")
 
@@ -575,13 +605,37 @@ def show_home():
                 st.session_state.ollama_connection_msg = "URL empty"
                 st.warning("⚠️ **Ollama not tested**: URL is empty.")
 
-
+            # 4. Test Local API Connection
+            with st.spinner("Testing Local API Connection..."):
+                try:
+                    api_resp = requests.get("http://localhost:8000/openapi.json", timeout=2)
+                    if api_resp.status_code == 200:
+                        st.session_state.api_connection_status = "Success"
+                        st.session_state.api_connection_msg = "Connected"
+                        st.success("✅ **Local API Connection Successful!**")
+                    else:
+                        st.session_state.api_connection_status = "Failed"
+                        st.session_state.api_connection_msg = f"HTTP {api_resp.status_code}"
+                        st.error(f"❌ **Local API Connection Failed (HTTP {api_resp.status_code})**")
+                except Exception as e:
+                    st.session_state.api_connection_status = "Failed"
+                    st.session_state.api_connection_msg = "Offline"
+                    st.error("❌ **Local API Connection Failed**: Could not connect to localhost:8000.")
 # 3. Define the page listing for navigation
 home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
 
 # 4. Setup and run navigation
-pg = st.navigation([home_page, planner_page, sprint_review_page, release_notes_page, sprint_kpis_page, ai_creator_page])
+pg = st.navigation([home_page, planner_page, sprint_review_page, release_notes_page, sprint_kpis_page, ai_creator_page, ai_agent_page])
 st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
+
+# Hide the AI Agent from the sidebar menu globally
+st.markdown("""
+    <style>
+        [data-testid="stSidebarNavItems"] a[href$="AI_Agent"] {
+            display: none !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 # Display live collaboration tunnel link in the sidebar
 st.sidebar.markdown("### 🤝 Live Collaboration")

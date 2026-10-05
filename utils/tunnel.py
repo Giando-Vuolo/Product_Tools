@@ -39,21 +39,27 @@ def start_tunnel(port=8501):
     def run():
         global _tunnel_process, _tunnel_url, _tunnel_error
 
-        # Pre-flight check to detect VPN/Corporate Firewall blocks instantly
+        cloudflared_binary = shutil.which("cloudflared")
+
+        # Pre-flight check to detect if corporate firewall (e.g. Zscaler) is intercepting SSL
         import urllib.request
         try:
-            req = urllib.request.Request("https://region1.argotunnel.com", headers={'User-Agent': 'Mozilla/5.0'})
+            req = urllib.request.Request("https://www.cloudflare.com", headers={'User-Agent': 'Mozilla/5.0'})
             urllib.request.urlopen(req, timeout=3)
         except Exception as e:
-            if "403" in str(e) or "CERTIFICATE_VERIFY_FAILED" in str(e) or "Forbidden" in str(e):
-                _tunnel_error = "Bloqueo detectado: VPN o red corporativa (Ej: Zscaler) bloqueando la conexión a Cloudflare. Por favor, apaga la VPN o cambia de red."
+            error_str = str(e).lower()
+            if "certificate_verify_failed" in error_str:
+                if not cloudflared_binary:
+                    _tunnel_error = "Red corporativa (Ej: Zscaler) detectada. Python no puede funcionar por la intercepción SSL. Por favor, instala cloudflared manualmente (ej: 'brew install cloudflared') o apaga la VPN."
+                    return
+            elif "no such host" in error_str or "timeout" in error_str:
+                _tunnel_error = "Error de red: No se pudo conectar a internet o DNS bloqueado. Verifica tu conexión o apaga la VPN."
                 return
 
         # Prefer the locally installed Cloudflare binary.  pycloudflared downloads
         # this binary at runtime, which fails on corporate networks that intercept
         # SSL certificates.  The Python module remains a fallback for environments
         # where the executable has not been installed.
-        cloudflared_binary = shutil.which("cloudflared")
         if cloudflared_binary:
             cmd = [cloudflared_binary, "tunnel", "--url", f"http://localhost:{port}"]
         else:
@@ -79,6 +85,8 @@ def start_tunnel(port=8501):
                     _tunnel_error = "Rate limit reached. Try again in a few minutes or connect via VPN."
                 elif "no such host" in line or "i/o timeout" in line or "dial udp" in line:
                     _tunnel_error = "Bloqueo DNS detectado: VPN o red corporativa bloqueando la conexión. Por favor, apaga la VPN o cambia de red."
+                elif "x509: certificate signed by unknown authority" in line or "handshake failure" in line:
+                    _tunnel_error = "Intercepción SSL detectada: VPN o red corporativa bloqueando la conexión. Por favor, apaga la VPN."
                 
                 match = url_pattern.search(line)
                 if match:

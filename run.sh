@@ -21,6 +21,14 @@ echo "📥 Verificando e instalar dependencias desde requirements.txt..."
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 
-# 4. Iniciar la aplicación de Streamlit
+# 4. Iniciar la API en segundo plano
+echo "⚙️ Lanzando API (FastAPI) en puerto 8000..."
+uvicorn api:app --host 0.0.0.0 --port 8000 &
+API_PID=$!
+
+# 5. Iniciar la aplicación de Streamlit
 echo "🚀 Lanzando servidor de Streamlit..."
 streamlit run app.py
+
+# Al cerrar Streamlit, matar también la API
+kill $API_PID

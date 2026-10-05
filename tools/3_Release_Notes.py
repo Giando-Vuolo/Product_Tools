@@ -11,9 +11,7 @@ import os
 import io
 import re
 import base64
-from functools import partial
 from html import unescape
-from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime
 from urllib.parse import quote
 from dotenv import load_dotenv
@@ -32,9 +30,9 @@ from utils.pdf_helpers import (
     SmartKeepTogether, hex_to_reportlab_color, convert_markdown_to_pdf_rich_text,
     split_bugs_and_topics, sort_items_by_label_priority, get_team_label, sort_items_by_type_and_epic,
     draw_background_landscape, NumberedCanvas, build_demos_pdf_block, build_next_releases_pdf_block,
-    format_status_with_emoji, build_custom_extra_table_pdf_block, get_arrow_drawing
+    format_status_with_emoji, build_custom_extra_table_pdf_block, get_arrow_drawing,
+    extract_numeric_version
 )
-from utils.ai_helpers import get_ollama_models, generate_release_purpose_with_ollama
 
 RN_FILES = [
     "release_notes_overview.csv",
@@ -212,20 +210,6 @@ default_conf_server = os.getenv("CONFLUENCE_SERVER", "")
 default_conf_token = os.getenv("CONFLUENCE_API_TOKEN", "")
 default_conf_space = os.getenv("CONFLUENCE_SPACE", "DS")
 default_conf_page = os.getenv("CONFLUENCE_PAGE", "Release Notes")
-default_release_history_url = os.getenv(
-    "RELEASE_HISTORY_URL",
-    "https://devstack.vwgroup.com/confluence/spaces/RECALLTWO/pages/201544094/40_Release+history+Documentation"
-).strip()
-release_history_version_column = os.getenv("RELEASE_HISTORY_VERSION_COLUMN", "Version").strip()
-release_history_deploy_date_column = os.getenv("RELEASE_HISTORY_DEPLOY_DATE_COLUMN", "Deploy Date (PROD)").strip()
-release_history_scs_column = os.getenv("RELEASE_HISTORY_SCS_COLUMN", "SCS").strip()
-release_history_service_change_column = os.getenv("RELEASE_HISTORY_SERVICE_CHANGE_COLUMN", "VW Service Center Change").strip()
-release_history_release_notes_column = os.getenv("RELEASE_HISTORY_RELEASE_NOTES_COLUMN", "PO Acceptance and release notes").strip()
-default_release_notes_document_title = os.getenv("RELEASE_NOTES_DOCUMENT_TITLE", "ReCall2 - Software Release Note").strip()
-default_residual_anomalies_jql = os.getenv(
-    "RESIDUAL_ANOMALIES_JQL",
-    'project = "{{PROJECT_KEY}}" AND issuetype = Bug AND status != Closed AND status != Resolved AND labels in (Severity_A, Severity_B) AND labels not in (Cognos) AND (fixVersion is EMPTY OR fixVersion not in ("{{RELEASE_FIX_VERSION}}"))'
-).strip()
 
 default_project_name = os.getenv("PROJECT_NAME", "PO Tools Enterprise")
 default_primary_color = os.getenv("PRIMARY_COLOR", "#3B82F6")
@@ -283,8 +267,6 @@ if 'conf_space_key' not in st.session_state:
     st.session_state.conf_space_key = default_conf_space
 if 'conf_page_name' not in st.session_state:
     st.session_state.conf_page_name = default_conf_page
-if 'release_history_url' not in st.session_state:
-    st.session_state.release_history_url = default_release_history_url
 
 if 'overview_df' not in st.session_state:
     st.session_state.overview_df = None
@@ -352,15 +334,6 @@ if 'prepared_release_notes' not in st.session_state:
     st.session_state.prepared_release_notes = None
 if 'release_purpose' not in st.session_state:
     st.session_state.release_purpose = "The purpose of this release is to rollout the following functionalities:"
-if 'release_notes_document_title' not in st.session_state:
-    st.session_state.release_notes_document_title = default_release_notes_document_title
-legacy_residual_anomalies_jql = 'issuetype = Bug AND status != Closed AND status != Resolved AND labels in (Severity_A, Severity_B) AND labels not in (Cognos)'
-previous_residual_anomalies_jql = legacy_residual_anomalies_jql + ' AND (fixVersion is EMPTY OR fixVersion not in ("{{RELEASE_FIX_VERSION}}"))'
-if (
-    'residual_anomalies_jql' not in st.session_state
-    or st.session_state.residual_anomalies_jql in {legacy_residual_anomalies_jql, previous_residual_anomalies_jql}
-):
-    st.session_state.residual_anomalies_jql = default_residual_anomalies_jql
 
 # ---------------------------------------------------------
 # Shared Collaboration Sync Logic
@@ -624,18 +597,7 @@ def generate_mock_overview_data():
         }
     ])
 
-# Helper to extract only the numeric part of a version string (e.g., "1.3.0" from "v1.3.0")
-def extract_numeric_version(v_val):
-    if pd.isna(v_val):
-        return ""
-    v_str = str(v_val).strip()
-    if not v_str or v_str.lower() in ["n/a", "none", "-", "nan", "general"]:
-        return ""
-    import re
-    matches = re.findall(r'\d+(?:[\.\-]\d+)*', v_str)
-    if matches:
-        return ", ".join(matches)
-    return ""
+
 
 # Callback to load mock sprint datasets securely before widget instantiation
 def load_mock_sprint_data():
@@ -675,1152 +637,36 @@ def load_mock_sprint_data():
 
 # 4. Jira Connection API Fetcher (Bearer Token Auth PAT)
 # ---------------------------------------------------------
+from utils.release_helpers import (
+    fetch_jira_tickets_dataset as _fetch_jira,
+    jira_request, extract_release_version,
+    find_history_value, format_release_date, build_release_purpose_draft,
+    parse_confluence_history_rows, fetch_release_history,
+    prepare_release_notes_from_version_url as _prepare_rn,
+    publish_release_note_to_history as _publish_rn,
+    upload_pdf_to_confluence, build_prepared_release_notes_pdf as _build_prep_rn,
+    build_release_notes_pdf as _build_rn
+)
+
 def fetch_jira_tickets_dataset(server, token, query_val, query_mode="sprint", auth_type="Personal Access Token (Bearer PAT)", email=""):
-    if not server or not token:
-        st.error("Please provide Jira Server URL and Personal Access Token (PAT).")
-        return None
-        
-    # Safe cleanup of token inputs (removes accidental whitespaces or prepended 'Bearer ')
-    token_clean = token.strip()
-    if token_clean.lower().startswith("bearer "):
-        token_clean = token_clean[7:].strip()
-        
-    if query_mode == "sprint":
-        if query_val.isdigit():
-            jql = f"sprint = {query_val}"
-        else:
-            jql = f"sprint = '{query_val}'"
-    elif query_mode == "fix_version":
-        jql = f"fixVersion = '{query_val}'"
-    else:
-        jql = query_val
-        
-    url = f"{server.rstrip('/')}/rest/api/2/search"
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "X-Atlassian-Token": "no-check"
-    }
-
-    
-    auth = None
-    if auth_type == "Corporate Login (Username + Password)" or auth_type == "Jira Cloud/Server Basic (Email/User + Token)":
-        auth = (email.strip(), token_clean)
-    else:
-        headers["Authorization"] = f"Bearer {token_clean}"
-        
-    params = {
-        "jql": jql,
-        "maxResults": 100,
-        "fields": "key,summary,description,status,fixVersions,parent,customfield_10000,customfield_10008,customfield_10009,customfield_10014,assignee,issuetype,labels"
-    }
-
-    
-    try:
-        if auth:
-            response = requests.get(url, headers=headers, params=params, auth=auth, timeout=15)
-        else:
-            response = requests.get(url, headers=headers, params=params, timeout=15)
-
-        
-        if response.status_code != 200:
-            st.error(f"Jira API connection failed ({response.status_code}): {response.text}")
-            return None
-            
-        try:
-            data = response.json()
-        except ValueError as json_err:
-            st.error("⚠️ **Jira returned a non-JSON response (Status 200 OK).**")
-            st.warning("This usually happens when your company's Single Sign-On (SSO) gateway, Proxy, or Firewall intercepts the API call and redirects it to a login webpage or CAPTCHA screen.")
-            st.write("**First 1000 characters of the intercepted response:**")
-            st.code(response.text[:1000], language="html")
-            return None
-            
-        issues = data.get("issues", [])
-
-        
-        if not issues:
-            st.warning("No issues found matching the query parameters.")
-            return pd.DataFrame()
-            
-        rows = []
-        for issue in issues:
-            fields = issue.get("fields", {})
-            key = issue.get("key", "N/A")
-            summary = fields.get("summary", "Untitled Task")
-            
-            # Status
-            status_obj = fields.get("status") or {}
-            status = status_obj.get("name", "To Do")
-            resolution_obj = fields.get("resolution") or {}
-            res_name = resolution_obj.get("name")
-            if res_name:
-                status = f"{status} [{res_name}]"
-            
-            # Fix Version
-            fix_versions = fields.get("fixVersions", [])
-            raw_fix_version = ", ".join([v.get("name", "") for v in fix_versions]) if fix_versions else ""
-            fix_version = extract_numeric_version(raw_fix_version)
-            
-            # Assignee
-            assignee_obj = fields.get("assignee")
-            assignee = assignee_obj.get("displayName", "Unassigned") if assignee_obj else "Unassigned"
-            
-            # Epic detection
-            epic = "-"
-            epic_key = None
-            
-            for custom_field in ["customfield_10014", "customfield_10000", "customfield_10008", "customfield_10009"]:
-                cf_val = fields.get(custom_field)
-                if cf_val:
-                    if isinstance(cf_val, dict):
-                        epic_key = cf_val.get("key") or str(cf_val)
-                    else:
-                        epic_key = str(cf_val)
-                    break
-            
-            parent_summary = None
-            parent = fields.get("parent")
-            if parent:
-                parent_key = parent.get("key")
-                parent_fields = parent.get("fields") or {}
-                parent_summary = parent_fields.get("summary")
-                if not epic_key:
-                    epic_key = parent_key
-            
-            if epic_key:
-                if parent and epic_key == parent.get("key") and parent_summary:
-                    epic = f"{epic_key} - {parent_summary}"
-                else:
-                    epic = epic_key
-                        
-            # Issue Type detection & mapping
-            issue_type_obj = fields.get("issuetype") or {}
-            issue_type_raw = issue_type_obj.get("name", "Task")
-            
-            raw_lower = issue_type_raw.lower()
-            issue_type = None
-            if "technical sub-task" in raw_lower or "tech sub-task" in raw_lower or "technical subtask" in raw_lower or "tech subtask" in raw_lower or ("sub-task" in raw_lower and ("tech" in raw_lower or "technical" in raw_lower)):
-                issue_type = "Technical Sub-task"
-            elif "story" in raw_lower:
-                issue_type = "User Story"
-            elif "bug" in raw_lower:
-                issue_type = "Bug"
-            elif "improvement" in raw_lower:
-                issue_type = "Improvement"
-            elif "technical" in raw_lower or "tech" in raw_lower or "performance" in raw_lower or "scaling" in raw_lower or "infrastructure" in raw_lower:
-                issue_type = "Technical Task"
-            elif "sub-task" in raw_lower or "subtask" in raw_lower:
-                issue_type = "Sub-task"
-            elif "task" in raw_lower:
-                issue_type = "Task"
-            else:
-                issue_type = issue_type_raw if st.session_state.get("inc_all", False) else "Technical Task"
-                
-            # Labels
-            labels_list = fields.get("labels", [])
-            labels_str = ", ".join(labels_list) if isinstance(labels_list, list) else ""
-                
-            rows.append({
-                "Key": key,
-                "Summary": summary,
-                "Epic": epic,
-                "Status": status,
-                "Fix Version": fix_version,
-                "Outlook": "",
-                "Sprint Review": True,
-                "Release Notes": True,
-                "Assignee": assignee,
-                "Demo": False,
-                "Type": issue_type,
-                "Labels": labels_str,
-                "Description": fields.get("description") or ""
-            })
-            
-        # Bulk resolve Epic summaries from Jira
-        epic_keys_to_resolve = set()
-        for r in rows:
-            ep_val = r["Epic"]
-            if ep_val != "-" and " - " not in ep_val:
-                epic_keys_to_resolve.add(ep_val)
-                
-        if epic_keys_to_resolve:
-            try:
-                keys_str = ",".join([f"'{k}'" for k in epic_keys_to_resolve])
-                epic_jql = f"key in ({keys_str})"
-                epic_url = f"{server.rstrip('/')}/rest/api/2/search"
-                epic_params = {
-                    "jql": epic_jql,
-                    "fields": "key,summary",
-                    "maxResults": 100
-                }
-                if auth:
-                    epic_resp = requests.get(epic_url, headers=headers, params=epic_params, auth=auth, timeout=10)
-                else:
-                    epic_resp = requests.get(epic_url, headers=headers, params=epic_params, timeout=10)
-                
-                if epic_resp.status_code == 200:
-                    epic_data = epic_resp.json()
-                    epic_map = {}
-                    for epic_issue in epic_data.get("issues", []):
-                        e_key = epic_issue.get("key")
-                        e_fields = epic_issue.get("fields") or {}
-                        e_summary = e_fields.get("summary")
-                        if e_key and e_summary:
-                            epic_map[e_key] = f"{e_key} - {e_summary}"
-                            
-                    for r in rows:
-                        ep_val = r["Epic"]
-                        if ep_val in epic_map:
-                            r["Epic"] = epic_map[ep_val]
-            except Exception:
-                pass
-                
-        return pd.DataFrame(rows)
-    except Exception as e:
-        st.error(f"Exception connecting to Jira: {str(e)}")
-        return None
-
-def jira_request(server, token, path, params=None, auth_type="Personal Access Token (Bearer PAT)", email=""):
-    headers = {"Accept": "application/json"}
-    token_clean = token.strip().removeprefix("Bearer ").strip()
-    auth = None
-    if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"]:
-        auth = (email.strip(), token_clean)
-    else:
-        headers["Authorization"] = f"Bearer {token_clean}"
-    return requests.get(f"{server.rstrip('/')}{path}", headers=headers, params=params, auth=auth, timeout=20)
-
-def extract_release_version(version_name):
-    match = re.search(r"DIGITAL:HUB\s*[-:]?\s*(v?\d+(?:\.\d+)+)", version_name or "", re.IGNORECASE)
-    if not match:
-        raise ValueError("The Jira version name must contain a value after 'DIGITAL:HUB', for example 'DIGITAL:HUB 33.0.0'.")
-    return match.group(1).lstrip("v")
-
-def find_history_value(row, candidates):
-    normalized = {str(key).strip().lower(): value for key, value in row.items()}
-    for candidate in candidates:
-        for key, value in normalized.items():
-            if candidate in key:
-                return "" if pd.isna(value) else str(value).strip()
-    return ""
-
-
-def get_configured_history_value(row, column_name):
-    """Return a Confluence table value with case/whitespace-tolerant column matching."""
-    normalized_target = re.sub(r"\s+", " ", str(column_name)).strip().casefold()
-    for key, value in row.items():
-        normalized_key = re.sub(r"\s+", " ", str(key)).strip().casefold()
-        if normalized_key == normalized_target:
-            return value
-    return ""
-
-
-def extract_confluence_page_id(page_url):
-    """Read a Confluence page ID from a full page URL (or a legacy numeric ID)."""
-    value = str(page_url or "").strip()
-    if value.isdigit():
-        return value
-    match = re.search(r"(?:/pages/|[?&]pageId=)(\d+)", value, re.IGNORECASE)
-    if match:
-        return match.group(1)
-    raise ValueError("Enter a full Confluence Release history page URL containing /pages/<page-id>/.")
-
-
-def has_history_value(value):
-    """Treat blank placeholders from Confluence as missing values."""
-    return str(value or "").strip().casefold() not in {"", "-", "nan", "none"}
-
-
-def find_history_column_index(html, column_name):
-    """Find the configured column position in the first matching Confluence table."""
-    target = re.sub(r"\s+", " ", str(column_name)).strip().casefold()
-    for table_html in re.findall(r"<table[^>]*>(.*?)</table>", html, flags=re.IGNORECASE | re.DOTALL):
-        header_row = re.search(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.DOTALL)
-        if not header_row:
-            continue
-        cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", header_row.group(1), flags=re.IGNORECASE | re.DOTALL)
-        headers = [re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", "", cell))).strip() for cell in cells]
-        for index, header in enumerate(headers):
-            if header.casefold() == target:
-                return index
-    raise ValueError(f"The configured Release history column '{column_name}' was not found.")
-
-def format_release_date(value):
-    try:
-        return datetime.strptime(str(value), "%Y-%m-%d").strftime("%d.%m.%Y")
-    except ValueError:
-        return str(value)
-
-def build_release_purpose_draft(resolved):
-    """Create an editable fallback release-purpose draft from release tickets."""
-    intro = "The purpose of this release is to rollout the following functionalities:"
-    if resolved is None or resolved.empty:
-        return intro
-
-    items = []
-    grouped = resolved.copy()
-    grouped = grouped[
-        grouped["Type"].astype(str).str.strip().str.lower().isin({"task", "user story"})
-    ].copy()
-    grouped["_epic"] = grouped["Epic"].fillna("-").astype(str).str.strip()
-    # Improvement Epics are represented by their delivered items in the
-    # Improvements section, rather than by a second, redundant Epic heading.
-    grouped = grouped[~grouped["_epic"].str.contains(r"\bimprovements?\b", case=False, na=False)].copy()
-    epic_items = []
-    for epic, _ in grouped[grouped["_epic"].ne("-")].groupby("_epic", sort=True):
-        epic_name = re.sub(r"^[A-Z][A-Z0-9]+-\d+\s*-\s*", "", epic).strip()
-        epic_items.append(f"- {epic_name}")
-
-    if epic_items:
-        items.extend(["Delivered functionality by Epic:", *epic_items])
-
-    improvement_items = build_improvement_purpose_items(resolved)
-    if improvement_items:
-        if items:
-            items.append("")
-        items.extend(["Improvements:", *improvement_items])
-
-    return intro + "\n\n" + "\n".join(items) if items else intro
-
-
-def build_improvement_purpose_items(resolved):
-    """List direct Improvements and delivered items inside Improvement Epics."""
-    if resolved is None or resolved.empty:
-        return []
-    issue_type = resolved["Type"].astype(str).str.strip().str.lower()
-    epic_name = resolved["Epic"].fillna("").astype(str)
-    improvements = resolved[
-        issue_type.eq("improvement")
-        | epic_name.str.contains(r"\bimprovements?\b", case=False, na=False)
-    ]
-    return [f"- {summary}" for summary in improvements["Summary"].dropna().astype(str).drop_duplicates()]
-
-
-def parse_confluence_history_rows(html):
-    """Read Confluence storage tables without requiring optional lxml/bs4 packages."""
-    for table_html in re.findall(r"<table[^>]*>(.*?)</table>", html, flags=re.IGNORECASE | re.DOTALL):
-        rows = []
-        for row_html in re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.DOTALL):
-            cells = []
-            for cell_html in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row_html, flags=re.IGNORECASE | re.DOTALL):
-                cell_html = re.sub(
-                    r'<time[^>]*datetime=["\']([^"\']+)["\'][^>]*/?>',
-                    r'\1',
-                    cell_html,
-                    flags=re.IGNORECASE
-                )
-                cell_text = re.sub(r"<br\s*/?>", "\n", cell_html, flags=re.IGNORECASE)
-                cell_text = unescape(re.sub(r"<[^>]+>", "", cell_text)).strip()
-                cells.append(cell_text)
-            if cells:
-                rows.append(cells)
-        if len(rows) > 1:
-            headers = rows[0]
-            for row in rows[1:]:
-                parsed_row = dict(zip(headers, row))
-                parsed_row["__first_column__"] = row[0] if row else ""
-                yield parsed_row
-
-def fetch_release_history(confluence_server, token, release_version, auth_type, email):
-    page_id = extract_confluence_page_id(st.session_state.release_history_url)
-    confluence_url = f"{confluence_server.rstrip('/')}/rest/api/content/{page_id}"
-    headers = {"Accept": "application/json"}
-    token_clean = token.strip().removeprefix("Bearer ").strip()
-    auth = (email.strip(), token_clean) if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"] else None
-    if auth:
-        response = requests.get(confluence_url, headers=headers, params={"expand": "body.storage"}, auth=auth, timeout=20)
-    else:
-        headers["Authorization"] = f"Bearer {token_clean}"
-        response = requests.get(confluence_url, headers=headers, params={"expand": "body.storage"}, timeout=20)
-    if response.status_code != 200:
-        raise ValueError(f"Could not read Release history Documentation ({response.status_code}).")
-    html = response.json().get("body", {}).get("storage", {}).get("value", "")
-    for row in parse_confluence_history_rows(html):
-        version_value = get_configured_history_value(row, release_history_version_column)
-        if re.search(rf"(?<!\d){re.escape(release_version)}(?!\d)", str(version_value)):
-            deploy_date = (
-                get_configured_history_value(row, release_history_deploy_date_column)
-                or find_history_value(row, ["deploy date", "date"])
-                or row.get("__first_column__", "")
-            )
-            if not deploy_date:
-                raise ValueError(f"Release history has a row for version {release_version}, but '{release_history_deploy_date_column}' is still empty.")
-            return {
-                "deploy_date": format_release_date(deploy_date),
-                "scs": get_configured_history_value(row, release_history_scs_column),
-                "service_center_change": (
-                    get_configured_history_value(row, release_history_service_change_column)
-                    if has_history_value(get_configured_history_value(row, release_history_service_change_column))
-                    else find_history_value(row, ["service center change", "vw service"])
-                ),
-                "test_protocols": find_history_value(row, ["test protocol", "e2e", "protocol"])
-            }
-    raise ValueError(f"There is no Release history row for version {release_version} yet.")
+    return _fetch_jira(server, token, query_val, query_mode, auth_type, email, config=st.session_state)
 
 def prepare_release_notes_from_version_url(version_url):
-    version_id_match = re.search(r"/versions/(\d+)", version_url.strip())
-    project_key_match = re.search(r"/projects/([^/]+)/versions/\d+", version_url.strip(), re.IGNORECASE)
-    if not version_id_match or not project_key_match:
-        raise ValueError("Paste a Jira version URL in the form /projects/<PROJECT_KEY>/versions/<id>.")
-    project_key = project_key_match.group(1).strip()
-    version_response = jira_request(st.session_state.jira_server, st.session_state.jira_token, f"/rest/api/2/version/{version_id_match.group(1)}", auth_type=st.session_state.jira_auth_method, email=st.session_state.jira_email)
-    if version_response.status_code != 200:
-        raise ValueError(f"Could not load the Jira version ({version_response.status_code}).")
-    version_name = version_response.json().get("name", "")
-    release_version = extract_release_version(version_name)
-    history = fetch_release_history(st.session_state.conf_server, st.session_state.conf_token, release_version, st.session_state.jira_auth_method, st.session_state.jira_email)
-    issues = fetch_jira_tickets_dataset(st.session_state.jira_server, st.session_state.jira_token, version_name, query_mode="fix_version", auth_type=st.session_state.jira_auth_method, email=st.session_state.jira_email)
-    if issues is None:
-        raise ValueError("Could not load the release tickets from Jira.")
-    allowed = ["Bug", "User Story", "Task", "Improvement"]
-    resolved = issues[issues["Type"].isin(allowed)].copy()
-    residual_jql_template = st.session_state.residual_anomalies_jql.strip()
-    if not residual_jql_template:
-        raise ValueError("Enter the Residual anomalies JQL query before preparing the Release Note.")
-    residual_jql = (
-        residual_jql_template
-        .replace("{{RELEASE_FIX_VERSION}}", version_name)
-        .replace("{{RELEASE_VERSION}}", release_version)
-        .replace("{{PROJECT_KEY}}", project_key)
-    )
-    residual = fetch_jira_tickets_dataset(st.session_state.jira_server, st.session_state.jira_token, residual_jql, query_mode="custom", auth_type=st.session_state.jira_auth_method, email=st.session_state.jira_email)
-    if residual is not None and not residual.empty:
-        # Exclude only bugs assigned to this exact release. Bugs planned for a
-        # future version (for example 34.0.0 while preparing 33.0.0) remain.
-        residual = residual[
-            ~residual["Fix Version"].astype(str).str.contains(re.escape(release_version), case=False, na=False)
-        ].reset_index(drop=True)
-    return {"version": release_version, "jira_version_name": version_name, "history": history, "resolved": resolved, "residual": residual if residual is not None else pd.DataFrame(), "purpose_draft": build_release_purpose_draft(resolved)}
+    return _prepare_rn(version_url, config=st.session_state)
 
 def publish_release_note_to_history(prepared, pdf_bytes, filename):
-    """Attach the PDF and link it from the Release history row for this version."""
-    base_url = st.session_state.conf_server.rstrip("/")
-    token = st.session_state.conf_token.strip().removeprefix("Bearer ").strip()
-    headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
-    page_id = extract_confluence_page_id(prepared.get("history_page_url", st.session_state.release_history_url))
-    page_response = requests.get(f"{base_url}/rest/api/content/{page_id}", headers=headers, params={"expand": "body.storage,version"}, timeout=20)
-    if page_response.status_code != 200:
-        raise ValueError(f"Could not read Release history Documentation ({page_response.status_code}).")
-    page = page_response.json()
-    release_notes_column_index = find_history_column_index(
-        page["body"]["storage"]["value"], release_history_release_notes_column
-    )
+    return _publish_rn(prepared, pdf_bytes, filename, config=st.session_state)
 
-    upload_headers = {"Accept": "application/json", "Authorization": f"Bearer {token}", "X-Atlassian-Token": "no-check"}
-    attachment_list_response = requests.get(
-        f"{base_url}/rest/api/content/{page_id}/child/attachment",
-        headers=headers,
-        params={"filename": filename, "limit": 1},
-        timeout=20
-    )
-    existing_attachments = attachment_list_response.json().get("results", []) if attachment_list_response.status_code == 200 else []
-    upload_url = f"{base_url}/rest/api/content/{page_id}/child/attachment"
-    if existing_attachments:
-        upload_url = f"{upload_url}/{existing_attachments[0]['id']}/data"
-    attachment_response = requests.post(
-        upload_url,
-        headers=upload_headers,
-        files={"file": (filename, pdf_bytes, "application/pdf")},
-        timeout=30
-    )
-    if attachment_response.status_code not in (200, 201):
-        raise ValueError(f"Could not upload the Release Note PDF ({attachment_response.status_code}).")
-
-    html = page["body"]["storage"]["value"]
-    version = prepared["version"]
-    updated = False
-    def replace_release_note_cell(match):
-        nonlocal updated
-        row_html = match.group(0)
-        row_text = unescape(re.sub(r"<[^>]+>", " ", row_html))
-        if updated or not re.search(rf"(?<!\d){re.escape(version)}(?!\d)", row_text):
-            return row_html
-        cells = list(re.finditer(r"<td[^>]*>.*?</td>", row_html, flags=re.IGNORECASE | re.DOTALL))
-        if len(cells) <= release_notes_column_index:
-            return row_html
-        link = f'<td><p><a href="{base_url}/download/attachments/{page_id}/{quote(filename)}">{filename}</a></p></td>'
-        target = cells[release_notes_column_index]
-        updated = True
-        return row_html[:target.start()] + link + row_html[target.end():]
-
-    new_html = re.sub(r"<tr[^>]*>.*?</tr>", replace_release_note_cell, html, flags=re.IGNORECASE | re.DOTALL)
-    if not updated:
-        raise ValueError(f"Could not find the Release history row for version {version}.")
-    update_response = requests.put(
-        f"{base_url}/rest/api/content/{page_id}",
-        headers={**headers, "Content-Type": "application/json"},
-        json={
-            "id": page_id,
-            "type": "page",
-            "title": page["title"],
-            "body": {"storage": {"value": new_html, "representation": "storage"}},
-            "version": {"number": page["version"]["number"] + 1}
-        },
-        timeout=30
-    )
-    if update_response.status_code != 200:
-        detail = re.sub(r"\s+", " ", update_response.text)[:300]
-        raise ValueError(f"PDF uploaded, but the history row could not be updated ({update_response.status_code}): {detail}")
-    return f"{base_url}/pages/viewpage.action?pageId={page_id}"
-
-def upload_pdf_to_confluence(server_url, auth_type, token, email, space_key, page_title, pdf_bytes, filename):
-    """
-    Finds or creates a Confluence page with the given page_title in space_key,
-    then uploads pdf_bytes as a versioned attachment with filename.
-    Returns the URL to the viewable Confluence page.
-    """
-    if not server_url or not token or not space_key or not page_title:
-        raise Exception("Required configuration fields (URL, Token, Space Key, Page Title) cannot be empty.")
-        
-    base_url = server_url.rstrip("/")
-    # Autocorrect typical Cloud URL structures if user missed '/wiki'
-    if "atlassian.net" in base_url and not base_url.endswith("/wiki"):
-        base_url = base_url + "/wiki"
-        
-    headers = {
-        "Accept": "application/json"
-    }
-    
-    auth = None
-    if auth_type == "Corporate Login (Username + Password)" or auth_type == "Jira Cloud (Email + API Token)":
-        if not email:
-            raise Exception("Username/Email is required for Confluence Basic authentication.")
-        auth = (email, token)
-    else:
-        # Bearer token PAT auth
-        headers["Authorization"] = f"Bearer {token}"
-
-        
-    # Step 1: Find the target page by title in the specified space
-    find_url = f"{base_url}/rest/api/content"
-    params = {
-        "title": page_title,
-        "spaceKey": space_key,
-        "expand": "version"
-    }
-    
-    try:
-        if auth:
-            resp = requests.get(find_url, headers=headers, params=params, auth=auth, timeout=15)
-        else:
-            resp = requests.get(find_url, headers=headers, params=params, timeout=15)
-    except Exception as e:
-        raise Exception(f"Failed to connect to Confluence server: {str(e)}")
-        
-    if resp.status_code != 200:
-        raise Exception(f"Failed to query Confluence page ({resp.status_code}): {resp.text}")
-        
-    results = resp.json().get("results", [])
-    page_id = None
-    
-    body_html = (
-        "<p>This page acts as a repository for automatically generated Sprint Reviews and Release Notes PDFs.</p>"
-        "<p><strong>📂 Attached PDF Documents (Click to download):</strong></p>"
-        "<ac:structured-macro ac:name=\"attachments\"></ac:structured-macro>"
-    )
-    
-    if results:
-        page_id = results[0]["id"]
-        current_version = results[0]["version"]["number"]
-        
-        # Step 2a: Update existing page body to ensure the attachments macro is rendered
-        update_url = f"{base_url}/rest/api/content/{page_id}"
-        update_payload = {
-            "id": page_id,
-            "type": "page",
-            "title": page_title,
-            "space": {"key": space_key},
-            "body": {
-                "storage": {
-                    "value": body_html,
-                    "representation": "storage"
-                }
-            },
-            "version": {
-                "number": current_version + 1
-            }
-        }
-        
-        update_headers = headers.copy()
-        update_headers["Content-Type"] = "application/json"
-        
-        try:
-            if auth:
-                requests.put(update_url, headers=update_headers, json=update_payload, auth=auth, timeout=15)
-            else:
-                requests.put(update_url, headers=update_headers, json=update_payload, timeout=15)
-        except Exception:
-            pass # Non-blocking update failure; proceed to upload attachment
-    else:
-        # Step 2b: Create the page if it doesn't exist
-        create_url = f"{base_url}/rest/api/content"
-        create_payload = {
-            "type": "page",
-            "title": page_title,
-            "space": {"key": space_key},
-            "body": {
-                "storage": {
-                    "value": body_html,
-                    "representation": "storage"
-                }
-            }
-        }
-        
-        # Prepare page creation headers (adding content-type)
-        create_headers = headers.copy()
-        create_headers["Content-Type"] = "application/json"
-        
-        if auth:
-            cr_resp = requests.post(create_url, headers=create_headers, json=create_payload, auth=auth, timeout=15)
-        else:
-            cr_resp = requests.post(create_url, headers=create_headers, json=create_payload, timeout=15)
-            
-        if cr_resp.status_code not in (200, 201):
-            raise Exception(f"Failed to create new Confluence page ({cr_resp.status_code}): {cr_resp.text}")
-            
-        page_id = cr_resp.json().get("id")
-
-        
-    if not page_id:
-        raise Exception("Could not retrieve or create a valid Confluence Page ID.")
-        
-    # Step 3: Check if the attachment already exists on this page
-    att_url = f"{base_url}/rest/api/content/{page_id}/child/attachment"
-    att_params = {"limit": 100}
-    
-    if auth:
-        ar_resp = requests.get(att_url, headers=headers, params=att_params, auth=auth, timeout=15)
-    else:
-        ar_resp = requests.get(att_url, headers=headers, params=att_params, timeout=15)
-        
-    att_results = ar_resp.json().get("results", []) if ar_resp.status_code == 200 else []
-    attachment_id = None
-    for att in att_results:
-        if att.get("title") == filename:
-            attachment_id = att.get("id")
-            break
-            
-    # Step 4: Upload PDF bytes as attachment (handling new vs update/versioning)
-    upload_headers = {
-        "Accept": "application/json",
-        "X-Atlassian-Token": "no-check" # Critical CSRF bypass for attachments API
-    }
-    if auth_type == "Personal Access Token (Bearer PAT)" or auth_type == "Jira Server Token (Bearer)":
-        upload_headers["Authorization"] = f"Bearer {token}"
-
-        
-    files = {
-        "file": (filename, pdf_bytes, "application/pdf")
-    }
-    
-    if attachment_id:
-        # Update existing attachment (increments version)
-        upload_url = f"{base_url}/rest/api/content/{page_id}/child/attachment/{attachment_id}/data"
-    else:
-        # Create new attachment
-        upload_url = f"{base_url}/rest/api/content/{page_id}/child/attachment"
-        
-    if auth:
-        up_resp = requests.post(upload_url, headers=upload_headers, files=files, auth=auth, timeout=20)
-    else:
-        up_resp = requests.post(upload_url, headers=upload_headers, files=files, timeout=20)
-        
-    if up_resp.status_code not in (200, 201):
-        raise Exception(f"Failed to upload attachment to Confluence ({up_resp.status_code}): {up_resp.text}")
-        
-    page_link = f"{base_url}/pages/viewpage.action?pageId={page_id}"
-    return page_link
-
-# Helper to transform Hex colors into ReportLab Color objects
 def build_prepared_release_notes_pdf(prepared):
-    """Generate the standard ReCall 2 Release Note from a prepared Jira version."""
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, leftMargin=54, rightMargin=54, topMargin=72, bottomMargin=60)
-    styles = getSampleStyleSheet()
-    primary = hex_to_reportlab_color(st.session_state.primary_color)
-    title = ParagraphStyle("RNTitle", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=20, leading=24, textColor=colors.black, spaceBefore=14, spaceAfter=10)
-    body = ParagraphStyle("RNBody", parent=styles["Normal"], fontName="Helvetica", fontSize=10.5, leading=14, spaceAfter=8)
-    header = ParagraphStyle("RNHead", parent=body, fontName="Helvetica-Bold", fontSize=8, leading=10, textColor=colors.white)
-    cell = ParagraphStyle("RNCell", parent=body, fontSize=8.5, leading=11)
-    label = ParagraphStyle("RNLabel", parent=cell, fontName="Helvetica-Bold")
-    document_title = str(prepared.get("document_title", st.session_state.release_notes_document_title)).strip() or default_release_notes_document_title
-    story = [Spacer(1, 50), Paragraph(xml_escape(document_title), ParagraphStyle("CoverProject", parent=body, alignment=1, textColor=colors.HexColor("#64748B"))), Paragraph("Release Notes", ParagraphStyle("CoverTitle", parent=title, alignment=1, fontSize=32, leading=38, textColor=primary, spaceBefore=18)), Paragraph(f"Version: {prepared['version']}", ParagraphStyle("CoverVersion", parent=body, alignment=1, fontSize=18, leading=22, textColor=colors.HexColor("#334155"))), Spacer(1, 250), Paragraph("This documentation outlines the software development results of Digital:Hub for the specified release delivered to Volkswagen AG.", ParagraphStyle("CoverFooter", parent=body, alignment=1)), PageBreak()]
-
-    purpose = str(prepared.get("purpose", st.session_state.release_purpose)).strip()
-    purpose_html = xml_escape(purpose).replace("\n", "<br/>")
-    story += [Paragraph("1. Release Purpose", title), Paragraph(purpose_html, body), Paragraph("2. Software Release Information", title)]
-    history = prepared["history"]
-    metadata = [("Release version", prepared["version"]), ("VW Service Center Change number", history.get("service_center_change") or "-"), ("Deploy Date (PROD)", history.get("deploy_date") or "-"), ("SCS", history.get("scs") or "-")]
-    meta_data = [[Paragraph(key, label), Paragraph(value.replace("\n", "<br/>"), cell)] for key, value in metadata]
-    meta_table = Table(meta_data, colWidths=[225, 279])
-    meta_table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), .75, colors.black), ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E7E7E7")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6), ("LEFTPADDING", (0, 0), (-1, -1), 7)]))
-    story += [meta_table, Paragraph("3. Release: Resolved Issues", title), Paragraph("Number of resolved issues by Issue Type:", body)]
-    resolved = prepared["resolved"].copy()
-    display_types = [("Stories", "User Story"), ("Task", "Task"), ("Bugs", "Bug"), ("Improvements", "Improvement")]
-    counts = [[Paragraph("Issue Type", header), Paragraph("Amount", header)]] + [[Paragraph(name, cell), Paragraph(str((resolved["Type"] == issue_type).sum()), cell)] for name, issue_type in display_types]
-    count_table = Table(counts, colWidths=[250, 100])
-    count_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#BFBFBF")), ("GRID", (0, 0), (-1, -1), .4, colors.HexColor("#777777")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
-    story += [count_table, Spacer(1, 12), Paragraph("List of all resolved issues (Jira ticket number) for this release:", body)]
-    resolved["_epic"] = resolved["Epic"].fillna("-").astype(str)
-    resolved.sort_values(["_epic", "Key"], inplace=True)
-    issue_rows = [[Paragraph("Issue Type", header), Paragraph("Key", header), Paragraph("Summary", header)]]
-    epic_group_rows = []
-    last_epic = None
-    for _, row in resolved.iterrows():
-        epic = str(row["_epic"])
-        if epic != last_epic:
-            last_epic = epic
-            epic_group_rows.append(len(issue_rows))
-            issue_rows.append([Paragraph(f"Epic: {epic}", ParagraphStyle("RNEpic", parent=cell, fontName="Helvetica-Bold")), "", ""])
-        issue_rows.append([Paragraph(str(row["Type"]), cell), Paragraph(str(row["Key"]), cell), Paragraph(xml_escape(str(row["Summary"])), cell)])
-    issues_table = Table(issue_rows, colWidths=[105, 125, 274], repeatRows=1)
-    issue_table_style = [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#BFBFBF")), ("GRID", (0, 0), (-1, -1), .6, colors.black), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]
-    for row_index in epic_group_rows:
-        issue_table_style.extend([("SPAN", (0, row_index), (-1, row_index)), ("BACKGROUND", (0, row_index), (-1, row_index), colors.HexColor("#E7E7E7"))])
-    issues_table.setStyle(TableStyle(issue_table_style))
-    story += [issues_table, Paragraph("4. Release: All known residual anomalies", title), Paragraph("List of all known bugs/defects (Severity A or B) not included in this release:", body)]
-    residual = prepared["residual"]
-    residual_rows = [[Paragraph("Issue Type", header), Paragraph("Key", header), Paragraph("Summary", header)]]
-    for _, row in residual.iterrows():
-        residual_rows.append([Paragraph("Bug", cell), Paragraph(str(row["Key"]), cell), Paragraph(str(row["Summary"]), cell)])
-    residual_table = Table(residual_rows, colWidths=[105, 125, 274], repeatRows=1)
-    residual_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#BFBFBF")), ("GRID", (0, 0), (-1, -1), .6, colors.black), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
-    story += [residual_table, Paragraph("5. Test protocols", title)]
-    link = "https://devstack.vwgroup.com/confluence/x/nlEDD"
-    story.append(Paragraph(f'E2E test protocols: <link href="{link}" color="blue">E2E test protocols for release</link>', body))
-    doc.build(story, canvasmaker=partial(NumberedCanvas, header_title=document_title))
-    buffer.seek(0)
-    return buffer
+    return _build_prep_rn(prepared, config=st.session_state)
 
 def build_release_notes_pdf(overview_df):
-    if st.session_state.get("prepared_release_notes") is not None:
-        return build_prepared_release_notes_pdf(st.session_state.prepared_release_notes)
-    pdf_buffer = io.BytesIO()
-    
-    # Setup document
-    doc = SimpleDocTemplate(
-        pdf_buffer,
-        pagesize=letter,
-        leftMargin=54,
-        rightMargin=54,
-        topMargin=72,
-        bottomMargin=72
-    )
-    
-    styles = getSampleStyleSheet()
-    primary_color_hex = st.session_state.primary_color
-    primary_color = hex_to_reportlab_color(primary_color_hex)
-    
-    # Custom styles
-    title_style = ParagraphStyle(
-        'DocTitle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=28,
-        leading=32,
-        textColor=primary_color,
-        spaceAfter=12
-    )
-    
-    subtitle_style = ParagraphStyle(
-        'DocSubtitle',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=12.5,
-        leading=17,
-        textColor=colors.HexColor("#475569"),
-        spaceAfter=20
-    )
-    
-    intro_style = ParagraphStyle(
-        'DocIntro',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=11.0,
-        leading=16.5,
-        textColor=colors.HexColor("#334155"),
-        spaceAfter=20
-    )
-    
-    section_title_style = ParagraphStyle(
-        'SecTitle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=15,
-        leading=19,
-        textColor=primary_color,
-        spaceBefore=15,
-        spaceAfter=8
-    )
-    
-    cell_header_style = ParagraphStyle(
-        'CellHeader',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=8.0,
-        leading=10,
-        textColor=colors.white
-    )
-    
-    cell_body_style = ParagraphStyle(
-        'CellBody',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=7.5,
-        leading=9.5,
-        textColor=colors.HexColor("#1E293B")
-    )
-    
-    cell_body_bold_style = ParagraphStyle(
-        'CellBodyBold',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=7.5,
-        leading=9.5,
-        textColor=colors.HexColor("#1E293B")
-    )
-    
-    sub_section_title_style = ParagraphStyle(
-        'SubSecTitle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=12.5,
-        leading=16,
-        textColor=colors.HexColor("#475569"),
-        spaceBefore=12,
-        spaceAfter=5
-    )
+    return _build_rn(overview_df, config=st.session_state)
 
-    # Cover Page Styles
-    cover_project_style = ParagraphStyle(
-        'CoverProject',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=12,
-        leading=16,
-        textColor=colors.HexColor("#64748B"),
-        alignment=1, # Center
-        spaceAfter=15
-    )
-    
-    cover_title_style = ParagraphStyle(
-        'CoverTitle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=32,
-        leading=38,
-        textColor=primary_color,
-        alignment=1, # Center
-        spaceAfter=10
-    )
-    
-    cover_subtitle_style = ParagraphStyle(
-        'CoverSubtitle',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=18,
-        leading=22,
-        textColor=colors.HexColor("#334155"),
-        alignment=1, # Center
-        spaceAfter=25
-    )
-    
-    cover_date_style = ParagraphStyle(
-        'CoverDate',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=10,
-        leading=14,
-        textColor=colors.HexColor("#64748B"),
-        alignment=1, # Center
-        spaceAfter=30
-    )
-
-    story = []
-
-    # --- STARTING COVER PAGE ---
-    app_version = "v1.3.0"
-    if 'app_version' in st.session_state and str(st.session_state.app_version).strip() != "":
-        app_version = str(st.session_state.app_version).strip()
-        
-    from datetime import datetime
-    current_date = datetime.now().strftime("%d-%m-%Y")
-    
-    story.append(Spacer(1, 50))
-    story.append(Paragraph(st.session_state.project_name.upper(), cover_project_style))
-    story.append(Paragraph("Release Notes", cover_title_style))
-    story.append(Paragraph(f"Version: {app_version}", cover_subtitle_style))
-    story.append(Paragraph(f"Date: {current_date}", cover_date_style))
-    story.append(Spacer(1, 20))
-    
-    cover_image_path = st.session_state.rn_cover_temp_path
-    if cover_image_path and os.path.exists(cover_image_path):
-        try:
-            pil_img = PILImage.open(cover_image_path)
-            orig_w, orig_h = pil_img.size
-            max_w = 400  # max width in points
-            max_h = 300  # max height in points
-            scale = min(max_w / orig_w, max_h / orig_h)
-            img = Image(cover_image_path, width=orig_w * scale, height=orig_h * scale)
-            img.hAlign = 'CENTER'
-            story.append(img)
-            story.append(Spacer(1, 20))
-        except Exception:
-            pass
-            
-    story.append(PageBreak())
-    # --- END OF COVER PAGE ---
-    
-    # 1. Document Title
-    story.append(Paragraph("Release Notes", title_style))
-    story.append(Paragraph("Release highlights and upcoming features.", subtitle_style))
-    story.append(Spacer(1, 5))
-    
-    # 2. Render Custom User Intro Paragraphs
-    intro_markdown = st.session_state.release_notes_intro
-    intro_html = convert_markdown_to_pdf_rich_text(intro_markdown)
-    story.append(Paragraph(intro_html, intro_style))
-    
-    # --- ADDITIONAL METADATA & ITEMS RESUME SECTIONS ---
-    meta_label_style = ParagraphStyle(
-        'MetaLabel',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=10,
-        leading=14,
-        textColor=colors.HexColor("#334155")
-    )
-    
-    meta_val_style = ParagraphStyle(
-        'MetaVal',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=10,
-        leading=14,
-        textColor=colors.HexColor("#475569")
-    )
-    
-    meta_data = []
-    if st.session_state.change_request:
-        meta_data.append([
-            Paragraph("Change Request:", meta_label_style),
-            Paragraph(st.session_state.change_request, meta_val_style)
-        ])
-    if st.session_state.release_date:
-        date_str = st.session_state.release_date.strftime("%d-%m-%Y") if hasattr(st.session_state.release_date, 'strftime') else str(st.session_state.release_date)
-        meta_data.append([
-            Paragraph("Release Date:", meta_label_style),
-            Paragraph(date_str, meta_val_style)
-        ])
-        
-    if meta_data:
-        meta_table = Table(meta_data, colWidths=[110, 394])
-        meta_table.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ]))
-        story.append(meta_table)
-        story.append(Spacer(1, 10))
-        
-    if st.session_state.show_items_resume and overview_df is not None and not overview_df.empty:
-        type_counts = overview_df['Type'].value_counts()
-        if not type_counts.empty:
-            story.append(Paragraph("Items Resume", sub_section_title_style))
-            
-            resume_data = [[
-                Paragraph("Item Type", cell_header_style),
-                Paragraph("Count", cell_header_style)
-            ]]
-            
-            for item_type, count in type_counts.items():
-                resume_data.append([
-                    Paragraph(str(item_type), cell_body_bold_style),
-                    Paragraph(str(count), cell_body_style)
-                ])
-                
-            resume_table = Table(resume_data, colWidths=[150, 60])
-            resume_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('TOPPADDING', (0, 0), (-1, -1), 3),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-                ('LEFTPADDING', (0, 0), (-1, -1), 7),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 7),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-            ]))
-            story.append(resume_table)
-            story.append(Spacer(1, 15))
-    # ---------------------------------------------------
-    
-    # 3. Overview Section
-    topics_ov, bugs_ov = split_bugs_and_topics(overview_df)
-    
-    if not topics_ov.empty or not bugs_ov.empty:
-        prefix_flowables = [
-            Paragraph("Overview:", section_title_style)
-        ]
-        
-        # 3a. Delivered Topics Sub-section
-        if not topics_ov.empty:
-            topics_flowables = []
-            if prefix_flowables:
-                topics_flowables.extend(prefix_flowables)
-                prefix_flowables = []
-            topics_flowables.append(Paragraph("Delivered Topics", sub_section_title_style))
-            # Col Widths: Total = 504pt
-            # Reference: 60pt, Epic Theme: 90pt, Delivered Capability: 274pt, Release Version: 80pt
-            table_data = [[
-                Paragraph("Epic", cell_header_style),
-                Paragraph("Key", cell_header_style),
-                Paragraph("Summary", cell_header_style),
-                Paragraph("Fix Version", cell_header_style)
-            ]]
-            
-            sorted_topics = sort_items_by_type_and_epic(topics_ov)
-            
-            last_epic = None
-            for _, row in sorted_topics.iterrows():
-                epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
-                if epic_val in ["", "No Epic", "nan"]:
-                    epic_val = "-"
-                fv_val = extract_numeric_version(row['Fix Version'])
-                if not fv_val:
-                    fv_val = "-"
-                    
-                display_epic = epic_val
-                if display_epic == last_epic:
-                    if display_epic == "-":
-                        epic_cell = Paragraph("-", cell_body_style)
-                    else:
-                        epic_cell = get_arrow_drawing(colors.HexColor("#64748B"))
-                else:
-                    last_epic = display_epic
-                    epic_cell = Paragraph(display_epic, cell_body_style)
-                    
-                table_data.append([
-                    epic_cell,
-                    Paragraph(str(row['Key']), cell_body_bold_style),
-                    Paragraph(str(row['Summary']), cell_body_style),
-                    Paragraph(fv_val, cell_body_style)
-                ])
-                
-            changelog_table = Table(
-                table_data,
-                colWidths=[105, 95, 254, 50]
-            )
-            changelog_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('TOPPADDING', (0, 0), (-1, -1), 3),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-                ('LEFTPADDING', (0, 0), (-1, -1), 7),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 7),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-            ]))
-            topics_flowables.append(changelog_table)
-            topics_flowables.append(Spacer(1, 10))
-            story.append(SmartKeepTogether(topics_flowables))
-            
-        # 3b. Resolved Bugs Sub-section
-        if not bugs_ov.empty:
-            bugs_flowables = []
-            if prefix_flowables:
-                bugs_flowables.extend(prefix_flowables)
-                prefix_flowables = []
-            bugs_flowables.append(Paragraph("Resolved Bugs", sub_section_title_style))
-            bug_data = [[
-                Paragraph("Epic", cell_header_style),
-                Paragraph("Key", cell_header_style),
-                Paragraph("Summary", cell_header_style),
-                Paragraph("Fix Version", cell_header_style)
-            ]]
-            
-            sorted_bugs = bugs_ov.sort_values("Epic")
-            
-            last_epic = None
-            for _, row in sorted_bugs.iterrows():
-                epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
-                if epic_val in ["", "No Epic", "nan"]:
-                    epic_val = "-"
-                fv_val = extract_numeric_version(row['Fix Version'])
-                if not fv_val:
-                    fv_val = "-"
-                    
-                display_epic = epic_val
-                if display_epic == last_epic:
-                    if display_epic == "-":
-                        epic_cell = Paragraph("-", cell_body_style)
-                    else:
-                        epic_cell = get_arrow_drawing(colors.HexColor("#64748B"))
-                else:
-                    last_epic = display_epic
-                    epic_cell = Paragraph(display_epic, cell_body_style)
-                    
-                bug_data.append([
-                    epic_cell,
-                    Paragraph(str(row['Key']), cell_body_bold_style),
-                    Paragraph(str(row['Summary']), cell_body_style),
-                    Paragraph(fv_val, cell_body_style)
-                ])
-                
-            bugs_table = Table(
-                bug_data,
-                colWidths=[115, 95, 244, 50]
-            )
-            bugs_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), primary_color),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('TOPPADDING', (0, 0), (-1, -1), 3),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-                ('LEFTPADDING', (0, 0), (-1, -1), 7),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 7),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-            ]))
-            bugs_flowables.append(bugs_table)
-            bugs_flowables.append(Spacer(1, 10))
-            story.append(SmartKeepTogether(bugs_flowables))
-        
-    # Render custom extra tables (Release Notes, portrait)
-    for t in st.session_state.custom_tables:
-        df_ext = t["df"]
-        if df_ext is not None and not df_ext.empty:
-            df_render = df_ext.drop(columns=["Select"]) if "Select" in df_ext.columns else df_ext
-            story.append(PageBreak())
-            extra_title = t["title"] if t["title"].strip() != "" else "Special Metrics Overview"
-            extra_blocks = build_custom_extra_table_pdf_block(df_render, primary_color, styles, is_landscape=False)
-            if extra_blocks:
-                story.append(SmartKeepTogether([
-                    Paragraph(extra_title, section_title_style),
-                    Spacer(1, 10)
-                ] + extra_blocks))
-            
-
-        
-    doc.build(story, canvasmaker=partial(NumberedCanvas, header_title=st.session_state.release_notes_document_title))
-    pdf_buffer.seek(0)
-    return pdf_buffer
-
-
-
-# ---------------------------------------------------------
 # 8. Main Application Interface Rendering
 # ---------------------------------------------------------
 st.title("📣 Release Notes Generator")
-st.markdown("Create the release document from a Jira version: we retrieve the release metadata and tickets, draft the release purpose, and generate the PDF ready for review.")
+st.markdown("Automate and customize Release Notes reports securely by connecting directly to **Jira** or importing local files.")
 
 # Programmatic Navigation Sidebar
 st.sidebar.markdown("### 🧭 Navigation Panel")
@@ -1845,8 +691,8 @@ if selected_nav != st.session_state.active_tab:
 # STEP 1: Ingestion & Connection
 # ---------------------------------------------------------
 if st.session_state.active_tab == "🔌 Ingestion":
-    st.subheader("🔌 Release data ingestion")
-    st.write("Paste the Jira version link. PO Tools loads the matching release history row, the resolved release tickets, and the known residual anomalies.")
+    st.subheader("🔌 Jira Backlog Ingestion")
+    st.write("Configure connection details below to load the **Overview** (What We Did) ticket dataset.")
     
     # Ingestion Flash Feedback
     if "ingestion_feedback" in st.session_state:
@@ -1892,34 +738,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
 
 
     st.subheader("📝 Prepare Release Note")
-    st.info("**How it works:** stories and tasks linked to an Epic are used to draft the delivery highlights. Improvements — including delivered items within an Improvement Epic — are listed separately as individual bullets. Bugs and tickets without an Epic are excluded from the Release Purpose, but remain available in the release tables.")
-    with st.expander("Where does the Release Note information come from?", expanded=False):
-        st.markdown(
-            """
-            1. **Jira version link** — identifies the release and loads its tickets through the matching Fix Version.
-            2. **Jira tickets** — provide the resolved Stories, Tasks, Bugs and Improvements shown in the release tables.
-            3. **Confluence Release history** — provides the production deploy date, SCS and VW Service Center Change number for that version.
-            4. **Residual anomalies** — Jira is checked for open Severity A/B bugs that are not assigned to the current release.
-            5. **Release Purpose** — is drafted from Epic-linked Stories and Tasks plus Improvement titles. You can always edit it before exporting the PDF.
-            """
-        )
-    with st.expander("Configure the Release history table for another project", expanded=False):
-        st.markdown(
-            f"""
-            Set these values in the project's `.env` file. The current defaults point to the ReCall2 Release history page.
-
-            - `RELEASE_HISTORY_URL` — the full Confluence URL of the page containing the release-history table (current default: `{st.session_state.release_history_url}`).
-            - `RELEASE_HISTORY_VERSION_COLUMN` — the version column (default: `{release_history_version_column}`).
-            - `RELEASE_HISTORY_DEPLOY_DATE_COLUMN` — production deployment date (default: `{release_history_deploy_date_column}`).
-            - `RELEASE_HISTORY_SCS_COLUMN` — SCS reference (default: `{release_history_scs_column}`).
-            - `RELEASE_HISTORY_SERVICE_CHANGE_COLUMN` — VW Service Center Change number (default: `{release_history_service_change_column}`).
-            - `RELEASE_HISTORY_RELEASE_NOTES_COLUMN` — the column where the generated PDF link is written when publishing (default: `{release_history_release_notes_column}`).
-
-            The table must contain one row per release and all six configured columns. The version value must match the Jira release version, and the deployment-date cell cannot be empty. Column names can differ by project as long as the corresponding `.env` values match them exactly.
-
-            **Residual anomalies:** configure `RESIDUAL_ANOMALIES_JQL` with the Jira query that identifies known residual bugs. Use `{{PROJECT_KEY}}` to scope it to the project extracted from the version link, and `{{RELEASE_FIX_VERSION}}` where the Jira Fix Version of the release should be excluded (the ReCall2 default already does this). `{{RELEASE_VERSION}}` is also available for projects whose Fix Version is only the numeric release value. A safety check removes any issue carrying the current release version afterwards.
-            """
-        )
+    st.write("Paste the Jira version link to load the release metadata, resolved issues, and known residual anomalies.")
     jira_version_link_base = os.getenv("JIRA_VERSION_LINK_BASE", "https://devstack.vwgroup.com/jira/projects/RECALLTWO/versions/")
     release_version_url = st.text_input(
         "Jira version link",
@@ -1927,68 +746,13 @@ if st.session_state.active_tab == "🔌 Ingestion":
         placeholder=f"{jira_version_link_base}543216",
         key="release_version_url"
     )
-    release_history_url_in = st.text_input(
-        "Release history Confluence URL",
-        help="Full URL of the Confluence page containing the release-history table. The default comes from RELEASE_HISTORY_URL in .env.",
-        key="release_history_url"
-    )
-    document_title_in = st.text_input(
-        "Release Notes document title",
-        help="Shown on the cover and in the page header. The default comes from RELEASE_NOTES_DOCUMENT_TITLE in .env.",
-        key="release_notes_document_title"
-    )
-    if st.session_state.get("prepared_release_notes") is not None:
-        st.session_state.prepared_release_notes["document_title"] = document_title_in
-    residual_anomalies_jql_in = st.text_area(
-        "Residual anomalies JQL",
-        height=85,
-        help="Defines which Jira issues are considered residual anomalies. Use {{PROJECT_KEY}} and {{RELEASE_FIX_VERSION}} to insert values from the Jira version link automatically.",
-        key="residual_anomalies_jql"
-    )
-    st.caption(
-        "**How this query is applied:** PO Tools reads the project key and Jira version from the link, replaces "
-        "`{{PROJECT_KEY}}` and `{{RELEASE_FIX_VERSION}}` with those values, and runs the resulting JQL. "
-        "It then removes any returned bug whose Fix Version contains the current numeric release version. "
-        "This keeps open qualifying bugs for future releases, while excluding bugs planned for the release being documented."
-    )
-    # Apply an explicitly requested regenerated draft before rendering the input.
-    # Keeping the widget bound to this state key ensures its value survives tab changes.
-    pending_purpose = st.session_state.pop("release_purpose_pending", None)
-    if pending_purpose is not None:
-        st.session_state.release_purpose = pending_purpose
     purpose_in = st.text_area(
-        "Release purpose (editable)",
-        height=120,
-        help="Review or edit this text before exporting. It is included as section 1 of the Release Notes PDF.",
-        key="release_purpose"
+        "Release purpose",
+        value=st.session_state.release_purpose,
+        height=120
     )
-    if st.session_state.get("prepared_release_notes") is not None:
-        st.session_state.prepared_release_notes["purpose"] = purpose_in
-    st.caption("This text is saved with the prepared release and is printed in section 1 of the PDF. You can refine it before exporting.")
-    available_models = st.session_state.get("ollama_models") or get_ollama_models(st.session_state.get("ollama_url", "http://localhost:11434"))
-    if available_models:
-        st.caption("✨ Local AI is available: when preparing the release, it drafts concise highlights from Epic-linked User Stories and Tasks. Your own text is never overwritten.")
-    else:
-        st.caption("ℹ️ Local AI is not available yet. PO Tools will create the Epic list draft; once an Ollama model is installed, it will create concise delivery highlights automatically.")
-    current_prepared = st.session_state.get("prepared_release_notes")
-    if current_prepared is not None and st.button("✨ Regenerate Release Purpose suggestion", help="Replaces the current Release Purpose text with a new editable AI suggestion."):
-        generated_purpose = current_prepared.get("purpose_draft", "The purpose of this release is to rollout the following functionalities:")
-        if available_models:
-            selected_model = "qwen2.5:7b" if "qwen2.5:7b" in available_models else available_models[0]
-            with st.spinner("Drafting delivery highlights by Epic..."):
-                ai_draft = generate_release_purpose_with_ollama(
-                    selected_model,
-                    current_prepared["resolved"],
-                    st.session_state.get("ollama_url", "http://localhost:11434"),
-                )
-            if ai_draft:
-                improvement_titles = "\n".join(build_improvement_purpose_items(current_prepared["resolved"]))
-                generated_purpose = f"The purpose of this release is to rollout the following functionalities:\n\nDelivered functionality by Epic:\n{ai_draft}"
-                if improvement_titles:
-                    generated_purpose += f"\n\nImprovements:\n{improvement_titles}"
-        st.session_state.release_purpose_pending = generated_purpose
-        current_prepared["purpose"] = generated_purpose
-        st.rerun()
+    st.session_state.release_purpose = purpose_in
+    st.caption("The Jira and Confluence fields are prefilled from your local `.env` file. Any change here is used only in the current session.")
     if st.button("✨ Prepare Release Note", use_container_width=True):
         if not st.session_state.conf_token:
             st.error("Enter a Confluence Personal Access Token to load the release history.")
@@ -1996,34 +760,11 @@ if st.session_state.active_tab == "🔌 Ingestion":
         try:
             with st.spinner("Loading release metadata, tickets, and residual anomalies..."):
                 prepared = prepare_release_notes_from_version_url(release_version_url)
-            default_purpose = "The purpose of this release is to rollout the following functionalities:"
-            generated_purpose = prepared["purpose_draft"]
-            models = st.session_state.get("ollama_models") or get_ollama_models(st.session_state.get("ollama_url", "http://localhost:11434"))
-            if models:
-                selected_model = "qwen2.5:7b" if "qwen2.5:7b" in models else models[0]
-                with st.spinner("Drafting a concise release purpose from Epic-linked stories and tasks..."):
-                    ai_draft = generate_release_purpose_with_ollama(
-                        selected_model,
-                        prepared["resolved"],
-                        st.session_state.get("ollama_url", "http://localhost:11434"),
-                    )
-                if ai_draft:
-                    improvement_titles = "\n".join(build_improvement_purpose_items(prepared["resolved"]))
-                    generated_purpose = f"{default_purpose}\n\nDelivered functionality by Epic:\n{ai_draft}"
-                    if improvement_titles:
-                        generated_purpose += f"\n\nImprovements:\n{improvement_titles}"
-            # Never overwrite purpose text the user has already written. The
-            # generated draft fills the default empty template only.
-            chosen_purpose = generated_purpose if st.session_state.release_purpose.strip() == default_purpose else st.session_state.release_purpose
-            prepared["purpose"] = chosen_purpose
-            prepared["document_title"] = st.session_state.release_notes_document_title
-            prepared["history_page_url"] = st.session_state.release_history_url
-            if chosen_purpose != st.session_state.release_purpose:
-                st.session_state.release_purpose_pending = chosen_purpose
             st.session_state.prepared_release_notes = prepared
             st.session_state.app_version = prepared["version"]
             st.session_state.overview_df = prepared["resolved"].copy()
-            st.success(f"Release {prepared['version']} is ready. Review the Release Purpose, then continue to Workbook or Exporter.")
+            st.session_state.release_purpose = prepared["purpose_draft"]
+            st.success(f"Release {prepared['version']} is ready. Review the generated purpose text and export the PDF.")
             st.rerun()
         except ValueError as error:
             st.error(str(error))
@@ -2833,8 +1574,6 @@ elif st.session_state.active_tab == "🎨 Branding":
             purpose_in = st.text_area("Release purpose text:", value=st.session_state.release_purpose, height=130)
             if purpose_in != st.session_state.release_purpose:
                 st.session_state.release_purpose = purpose_in
-                if st.session_state.get("prepared_release_notes") is not None:
-                    st.session_state.prepared_release_notes["purpose"] = purpose_in
             st.markdown("**Additional introduction (optional)**")
             st.write("Optional introductory content printed after the release purpose.")
             
@@ -2891,6 +1630,11 @@ elif st.session_state.active_tab == "💾 Exporter":
         # Prepare filtered data
         rn_ov_df = st.session_state.overview_df[st.session_state.overview_df["Release Notes"] == True] if st.session_state.overview_df is not None else pd.DataFrame()
         
+        # Prepare primary release version for metadata summaries
+        primary_rel = "Next Releases"
+        if 'next_release_df' in st.session_state and not st.session_state.next_release_df.empty:
+            primary_rel = str(st.session_state.next_release_df.iloc[0]['Version'])
+ 
         with col_export_actions:
             st.markdown("### 📥 Document Downloads")
             
@@ -2898,11 +1642,11 @@ elif st.session_state.active_tab == "💾 Exporter":
             st.markdown(f"""
             <div class="export-card">
                 <h4 style='margin-bottom:6px; color:#FFFFFF;'>📣 Release Notes</h4>
-                <p style='font-size:11.5px; line-height:14px;'>Customer-facing document for the prepared Jira release, featuring:
+                <p style='font-size:11.5px; line-height:14px;'>Customer-facing release document featuring:
                 <ul style='margin-top:2px; margin-bottom:2px; padding-left:15px; font-size:11px;'>
-                    <li><b>Release Purpose:</b> your editable delivery summary by Epic and Improvements.</li>
-                    <li><b>Release information:</b> version, deploy date, SCS and service-change number.</li>
-                    <li><b>Ticket detail:</b> release tickets grouped by Epic, known residual bugs and the E2E test-protocol link.</li>
+                    <li>Your custom rich welcome intro paragraph.</li>
+                    <li><b>Highlights:</b> Consolidated delivered items single table.</li>
+                    <li><b>Roadmap:</b> Consolidated next release highlights (Target: {primary_rel}).</li>
                 </ul>
                 </p>
             </div>

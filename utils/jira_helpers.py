@@ -614,3 +614,56 @@ def attach_files_to_jira_issue(server, token, auth_type, email, issue_key, uploa
         except Exception as e:
             results.append((f.name, False, str(e)))
     return results
+
+def search_jira_issues(server, token, auth_type, email, jql):
+    """
+    Search Jira using JQL and return simplified results.
+    """
+    if not server or not token:
+        return {"error": "Jira server or token not configured"}
+        
+    url = f"{server.rstrip('/')}/rest/api/2/search"
+    headers, auth = get_jira_auth_headers(token, auth_type, email)
+    
+    params = {
+        "jql": jql,
+        "maxResults": 30,
+        "fields": "summary,status,description"
+    }
+    
+    try:
+        if auth:
+            resp = requests.get(url, headers=headers, params=params, auth=auth, timeout=15)
+        else:
+            resp = requests.get(url, headers=headers, params=params, timeout=15)
+            
+        if resp.status_code != 200:
+            return {"error": f"Jira API returned {resp.status_code}: {resp.text}"}
+            
+        data = resp.json()
+        results = []
+        for issue in data.get("issues", []):
+            key = issue.get("key", "")
+            fields = issue.get("fields", {})
+            summary = fields.get("summary", "")
+            status = fields.get("status", {}).get("name", "")
+            
+            description = fields.get("description", "")
+            if description and len(description) > 500:
+                description = description[:500] + "..."
+                
+            issue_url = f"{server.rstrip('/')}/browse/{key}"
+            
+            results.append({
+                "key": key,
+                "summary": summary,
+                "status": status,
+                "description_excerpt": description,
+                "url": issue_url
+            })
+            
+        return {"results": results}
+        
+    except Exception as e:
+        import traceback
+        return {"error": f"Exception during Jira search: {e}\n{traceback.format_exc()}"}

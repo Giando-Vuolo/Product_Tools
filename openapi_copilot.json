@@ -1,0 +1,1217 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "PO Tools API",
+    "description": "API for Agentic interaction with PO Tools",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/generate-issue": {
+      "post": {
+        "tags": [
+          "AI Issue Creator"
+        ],
+        "summary": "Generate Issue",
+        "operationId": "generate_issue_api_v1_generate_issue_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateIssueRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerateIssueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/create-jira-issue": {
+      "post": {
+        "tags": [
+          "AI Issue Creator"
+        ],
+        "summary": "Create Jira Issue Endpoint",
+        "operationId": "create_jira_issue_endpoint_api_v1_create_jira_issue_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateJiraIssueRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateJiraIssueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/kpis/calculate": {
+      "post": {
+        "tags": [
+          "Sprint KPIs"
+        ],
+        "summary": "Calculate Kpis",
+        "operationId": "calculate_kpis_api_v1_kpis_calculate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalculateKPIsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/kpis/publish": {
+      "post": {
+        "tags": [
+          "Sprint KPIs"
+        ],
+        "summary": "Publish Kpis",
+        "operationId": "publish_kpis_api_v1_kpis_publish_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishKPIsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/release-notes/prepare": {
+      "post": {
+        "tags": [
+          "Release Notes"
+        ],
+        "summary": "Prepare Release Notes",
+        "operationId": "prepare_release_notes_api_v1_release_notes_prepare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareReleaseNotesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/release-notes/publish": {
+      "post": {
+        "tags": [
+          "Release Notes"
+        ],
+        "summary": "Publish Release Notes",
+        "operationId": "publish_release_notes_api_v1_release_notes_publish_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishReleaseNotesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/release-notes/generate-pdf": {
+      "post": {
+        "tags": [
+          "Release Notes"
+        ],
+        "summary": "Generate Release Notes Pdf",
+        "operationId": "generate_release_notes_pdf_api_v1_release_notes_generate_pdf_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateReleaseNotesPdfRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/sprint-review/generate-pdf": {
+      "post": {
+        "tags": [
+          "Sprint Review"
+        ],
+        "summary": "Generate Sprint Review Pdf",
+        "operationId": "generate_sprint_review_pdf_api_v1_sprint_review_generate_pdf_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateSprintReviewPdfRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/sprint-review/publish": {
+      "post": {
+        "tags": [
+          "Sprint Review"
+        ],
+        "summary": "Publish Sprint Review",
+        "operationId": "publish_sprint_review_api_v1_sprint_review_publish_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishSprintReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/quarterly-planner/generate-roadmap-pdf": {
+      "post": {
+        "tags": [
+          "Quarterly Planner"
+        ],
+        "summary": "Generate Roadmap Pdf",
+        "operationId": "generate_roadmap_pdf_api_v1_quarterly_planner_generate_roadmap_pdf_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateRoadmapPdfRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/quarterly-planner/generate-progress-pdf": {
+      "post": {
+        "tags": [
+          "Quarterly Planner"
+        ],
+        "summary": "Generate Progress Pdf",
+        "operationId": "generate_progress_pdf_api_v1_quarterly_planner_generate_progress_pdf_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateProgressPdfRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/quarterly-planner/generate-progress-pptx": {
+      "post": {
+        "tags": [
+          "Quarterly Planner"
+        ],
+        "summary": "Generate Progress Pptx",
+        "operationId": "generate_progress_pptx_api_v1_quarterly_planner_generate_progress_pptx_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateProgressPptxRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/quarterly-planner/generate-plan-pdf": {
+      "post": {
+        "tags": [
+          "Quarterly Planner"
+        ],
+        "summary": "Generate Plan Pdf",
+        "operationId": "generate_plan_pdf_api_v1_quarterly_planner_generate_plan_pdf_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeneratePlanPdfRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/v1/search/jira": {
+      "post": {
+        "summary": "Search Jira issues",
+        "description": "Execute a JQL search to find Jira tickets. Returns ticket summaries and links.",
+        "operationId": "search_jira_api_v1_search_jira_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "The search keywords (e.g. 'missed campaigns'). DO NOT write JQL. Provide only plain text keywords. The system will format it."
+                  }
+                },
+                "required": [
+                  "query"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/confluence": {
+      "post": {
+        "summary": "Search Confluence pages",
+        "description": "Execute a CQL search to find Confluence pages. Returns page titles, excerpts, and links.",
+        "operationId": "search_confluence_api_v1_search_confluence_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "The search keywords (e.g. 'missed campaigns'). DO NOT write CQL. Provide only plain text keywords. The system will format it."
+                  }
+                },
+                "required": [
+                  "query"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CalculateKPIsRequest": {
+        "properties": {
+          "sprint_query": {
+            "type": "string",
+            "title": "Sprint Query"
+          },
+          "selected_types": {
+            "title": "Selected Types",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "nullable": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "sprint_query"
+        ],
+        "title": "CalculateKPIsRequest"
+      },
+      "CreateJiraIssueRequest": {
+        "properties": {
+          "project_key": {
+            "type": "string",
+            "title": "Project Key"
+          },
+          "issue_type": {
+            "type": "string",
+            "title": "Issue Type"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "assignee": {
+            "title": "Assignee",
+            "default": "",
+            "type": "string",
+            "nullable": true
+          },
+          "labels": {
+            "title": "Labels",
+            "default": "",
+            "type": "string",
+            "nullable": true
+          },
+          "parent": {
+            "title": "Parent",
+            "default": "",
+            "type": "string",
+            "nullable": true
+          },
+          "story_points": {
+            "title": "Story Points",
+            "default": "",
+            "type": "string",
+            "nullable": true
+          },
+          "fix_version": {
+            "title": "Fix Version",
+            "default": "",
+            "type": "string",
+            "nullable": true
+          },
+          "linked_issue": {
+            "title": "Linked Issue",
+            "default": "",
+            "type": "string",
+            "nullable": true
+          },
+          "sprint": {
+            "title": "Sprint",
+            "default": "",
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_key",
+          "issue_type",
+          "summary",
+          "description"
+        ],
+        "title": "CreateJiraIssueRequest"
+      },
+      "CreateJiraIssueResponse": {
+        "properties": {
+          "issue_key": {
+            "type": "string",
+            "title": "Issue Key"
+          },
+          "issue_link": {
+            "type": "string",
+            "title": "Issue Link"
+          }
+        },
+        "type": "object",
+        "required": [
+          "issue_key",
+          "issue_link"
+        ],
+        "title": "CreateJiraIssueResponse"
+      },
+      "GenerateIssueRequest": {
+        "properties": {
+          "model_name": {
+            "type": "string",
+            "title": "Model Name"
+          },
+          "issue_type": {
+            "type": "string",
+            "title": "Issue Type"
+          },
+          "input_text": {
+            "type": "string",
+            "title": "Input Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_name",
+          "issue_type",
+          "input_text"
+        ],
+        "title": "GenerateIssueRequest"
+      },
+      "GenerateIssueResponse": {
+        "properties": {
+          "generated_description": {
+            "type": "string",
+            "title": "Generated Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "generated_description"
+        ],
+        "title": "GenerateIssueResponse"
+      },
+      "GeneratePlanPdfRequest": {
+        "properties": {
+          "plan_df": {
+            "items": {},
+            "type": "array",
+            "title": "Plan Df"
+          },
+          "primary_color": {
+            "title": "Primary Color",
+            "default": "#3B82F6",
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "plan_df"
+        ],
+        "title": "GeneratePlanPdfRequest"
+      },
+      "GenerateProgressPdfRequest": {
+        "properties": {
+          "progress_df": {
+            "items": {},
+            "type": "array",
+            "title": "Progress Df"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "primary_color": {
+            "title": "Primary Color",
+            "default": "#3B82F6",
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "progress_df",
+          "title"
+        ],
+        "title": "GenerateProgressPdfRequest"
+      },
+      "GenerateProgressPptxRequest": {
+        "properties": {
+          "progress_df": {
+            "items": {},
+            "type": "array",
+            "title": "Progress Df"
+          },
+          "roadmap_df": {
+            "items": {},
+            "type": "array",
+            "title": "Roadmap Df"
+          },
+          "progress_title": {
+            "type": "string",
+            "title": "Progress Title"
+          },
+          "progress_subtitle": {
+            "type": "string",
+            "title": "Progress Subtitle"
+          },
+          "roadmap_title": {
+            "type": "string",
+            "title": "Roadmap Title"
+          },
+          "roadmap_subtitle": {
+            "type": "string",
+            "title": "Roadmap Subtitle"
+          },
+          "primary_color": {
+            "title": "Primary Color",
+            "default": "#3B82F6",
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "progress_df",
+          "roadmap_df",
+          "progress_title",
+          "progress_subtitle",
+          "roadmap_title",
+          "roadmap_subtitle"
+        ],
+        "title": "GenerateProgressPptxRequest"
+      },
+      "GenerateReleaseNotesPdfRequest": {
+        "properties": {
+          "prepared": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Prepared"
+          },
+          "primary_color": {
+            "title": "Primary Color",
+            "default": "#0EA5E9",
+            "type": "string",
+            "nullable": true
+          },
+          "project_name": {
+            "title": "Project Name",
+            "default": "ReCall2",
+            "type": "string",
+            "nullable": true
+          },
+          "app_version": {
+            "title": "App Version",
+            "default": "v1.3.0",
+            "type": "string",
+            "nullable": true
+          },
+          "release_purpose": {
+            "title": "Release Purpose",
+            "default": "",
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "prepared"
+        ],
+        "title": "GenerateReleaseNotesPdfRequest"
+      },
+      "GenerateRoadmapPdfRequest": {
+        "properties": {
+          "roadmap_df": {
+            "items": {},
+            "type": "array",
+            "title": "Roadmap Df"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "primary_color": {
+            "title": "Primary Color",
+            "default": "#3B82F6",
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "roadmap_df",
+          "title"
+        ],
+        "title": "GenerateRoadmapPdfRequest"
+      },
+      "GenerateSprintReviewPdfRequest": {
+        "properties": {
+          "overview_df": {
+            "items": {},
+            "type": "array",
+            "title": "Overview Df"
+          },
+          "outlook_df": {
+            "items": {},
+            "type": "array",
+            "title": "Outlook Df"
+          },
+          "primary_color": {
+            "title": "Primary Color",
+            "default": "#3B82F6",
+            "type": "string",
+            "nullable": true
+          },
+          "project_name": {
+            "title": "Project Name",
+            "default": "PO Tools Enterprise",
+            "type": "string",
+            "nullable": true
+          },
+          "sprint_number": {
+            "title": "Sprint Number",
+            "default": "Sprint 14",
+            "type": "string",
+            "nullable": true
+          },
+          "sprint_welcome_message": {
+            "title": "Sprint Welcome Message",
+            "default": "Welcome to the Sprint Review session.",
+            "type": "string",
+            "nullable": true
+          },
+          "sr_logo_temp_path": {
+            "title": "Sr Logo Temp Path",
+            "type": "string",
+            "nullable": true
+          },
+          "sr_cover_temp_path": {
+            "title": "Sr Cover Temp Path",
+            "type": "string",
+            "nullable": true
+          },
+          "extra_table_df": {
+            "title": "Extra Table Df",
+            "items": {},
+            "type": "array",
+            "nullable": true
+          },
+          "extra_table_title": {
+            "title": "Extra Table Title",
+            "default": "",
+            "type": "string",
+            "nullable": true
+          },
+          "sprint_review_label_order": {
+            "title": "Sprint Review Label Order",
+            "default": [
+              "Bandicode",
+              "Bugbusters",
+              "RC2_Architecture_Team"
+            ],
+            "items": {},
+            "type": "array",
+            "nullable": true
+          },
+          "custom_tables": {
+            "title": "Custom Tables",
+            "default": [],
+            "items": {},
+            "type": "array",
+            "nullable": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "overview_df",
+          "outlook_df"
+        ],
+        "title": "GenerateSprintReviewPdfRequest"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "PrepareReleaseNotesRequest": {
+        "properties": {
+          "version_url": {
+            "type": "string",
+            "title": "Version Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version_url"
+        ],
+        "title": "PrepareReleaseNotesRequest"
+      },
+      "PublishKPIsRequest": {
+        "properties": {
+          "space_key": {
+            "type": "string",
+            "title": "Space Key"
+          },
+          "page_title": {
+            "type": "string",
+            "title": "Page Title"
+          },
+          "sprint_val": {
+            "type": "string",
+            "title": "Sprint Val"
+          },
+          "sprint_name": {
+            "type": "string",
+            "title": "Sprint Name"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metrics"
+          }
+        },
+        "type": "object",
+        "required": [
+          "space_key",
+          "page_title",
+          "sprint_val",
+          "sprint_name",
+          "metrics"
+        ],
+        "title": "PublishKPIsRequest"
+      },
+      "PublishReleaseNotesRequest": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "pdf_base64": {
+            "type": "string",
+            "title": "Pdf Base64"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "pdf_base64",
+          "filename"
+        ],
+        "title": "PublishReleaseNotesRequest"
+      },
+      "PublishSprintReviewRequest": {
+        "properties": {
+          "pdf_base64": {
+            "type": "string",
+            "title": "Pdf Base64"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "space_key": {
+            "type": "string",
+            "title": "Space Key"
+          },
+          "page_title": {
+            "type": "string",
+            "title": "Page Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pdf_base64",
+          "filename",
+          "space_key",
+          "page_title"
+        ],
+        "title": "PublishSprintReviewRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://TU-TUNEL.trycloudflare.com",
+      "description": "Cloudflare Tunnel"
+    },
+    {
+      "url": "http://localhost:8000",
+      "description": "Local server"
+    }
+  ]
+}

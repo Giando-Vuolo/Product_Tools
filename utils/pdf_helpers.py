@@ -90,6 +90,22 @@ def split_bugs_and_topics(df):
     topics_df = df[~is_bug]
     return topics_df, bugs_df
 
+# Helper to extract only the numeric part of a version string (e.g., "1.3.0" from "v1.3.0")
+def extract_numeric_version(v_val):
+    if pd.isna(v_val):
+        return ""
+    v_str = str(v_val).strip()
+    if not v_str:
+        return ""
+    if v_str.lower() in ["n/a", "none", "-", "nan", "general"]:
+        return ""
+    if "not release relevant" in v_str.lower() or v_str.upper() == "N.R.R.":
+        return "N.R.R."
+    matches = re.findall(r'\d+(?:[\.\-]\d+)*', v_str)
+    if matches:
+        return ", ".join(matches)
+    return ""
+
 # Helper to place items with selected team labels first, in the selected order.
 def sort_items_by_label_priority(df, secondary_columns):
     if df is None or df.empty:
