@@ -16,7 +16,7 @@ from reportlab.graphics.shapes import Drawing, Line, PolyLine
 from PIL import Image as PILImage
 from utils.pdf_helpers import (
     SmartKeepTogether, hex_to_reportlab_color, convert_markdown_to_pdf_rich_text,
-    split_bugs_and_topics, sort_items_by_label_priority, get_team_label, sort_items_by_type_and_epic,
+    split_bugs_and_topics, sort_items_by_label_priority, get_team_label, get_custom_label, sort_items_by_type_and_epic,
     draw_background_landscape, NumberedCanvas, build_demos_pdf_block, build_next_releases_pdf_block,
     format_status_with_emoji, build_custom_extra_table_pdf_block, get_arrow_drawing,
     extract_numeric_version
@@ -48,7 +48,7 @@ def fetch_jira_tickets_dataset(server, token, query_val, query_mode="sprint", au
         "Accept": "application/json",
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "X-Atlassian-Token": "no-check"
+        "X-Atlassian-Token": "nocheck"
     }
 
     
@@ -375,7 +375,7 @@ def publish_release_note_to_history(prepared, pdf_bytes, filename, config):
         raise ValueError(f"Could not read Release history Documentation ({page_response.status_code}).")
     page = page_response.json()
 
-    upload_headers = {"Accept": "application/json", "Authorization": f"Bearer {token}", "X-Atlassian-Token": "no-check"}
+    upload_headers = {"Accept": "application/json", "Authorization": f"Bearer {token}", "X-Atlassian-Token": "nocheck"}
     attachment_list_response = requests.get(
         f"{base_url}/rest/api/content/{page_id}/child/attachment",
         headers=headers,
@@ -572,7 +572,7 @@ def upload_pdf_to_confluence(server_url, auth_type, token, email, space_key, pag
     # Step 4: Upload PDF bytes as attachment (handling new vs update/versioning)
     upload_headers = {
         "Accept": "application/json",
-        "X-Atlassian-Token": "no-check" # Critical CSRF bypass for attachments API
+        "X-Atlassian-Token": "nocheck" # Critical CSRF bypass for attachments API
     }
     if auth_type == "Personal Access Token (Bearer PAT)" or auth_type == "Jira Server Token (Bearer)":
         upload_headers["Authorization"] = f"Bearer {token}"
@@ -1003,12 +1003,21 @@ def build_release_notes_pdf(overview_df, config):
                 bugs_flowables.extend(prefix_flowables)
                 prefix_flowables = []
             bugs_flowables.append(Paragraph("Resolved Bugs", sub_section_title_style))
-            bug_data = [[
+            custom_bug_col = config.get("custom_bug_column", {})
+            has_custom_col = custom_bug_col.get("enabled", False)
+            custom_col_name = custom_bug_col.get("name", "Custom")
+            custom_col_labels = custom_bug_col.get("labels", [])
+
+            header_row = [
                 Paragraph("Epic", cell_header_style),
                 Paragraph("Key", cell_header_style),
                 Paragraph("Summary", cell_header_style),
                 Paragraph("Fix Version", cell_header_style)
-            ]]
+            ]
+            if has_custom_col:
+                header_row.insert(3, Paragraph(custom_col_name, cell_header_style))
+                
+            bug_data = [header_row]
             
             sorted_bugs = bugs_ov.sort_values("Epic")
             
@@ -1031,16 +1040,27 @@ def build_release_notes_pdf(overview_df, config):
                     last_epic = display_epic
                     epic_cell = Paragraph(display_epic, cell_body_style)
                     
-                bug_data.append([
+                row_data = [
                     epic_cell,
                     Paragraph(str(row['Key']), cell_body_bold_style),
                     Paragraph(str(row['Summary']), cell_body_style),
                     Paragraph(fv_val, cell_body_style)
-                ])
+                ]
+                
+                if has_custom_col:
+                    custom_label_val = get_custom_label(row.get('Labels', ''), custom_col_labels)
+                    row_data.insert(3, Paragraph(custom_label_val, cell_body_style))
+                    
+                bug_data.append(row_data)
+                
+            if has_custom_col:
+                col_widths = [115, 95, 174, 70, 50]
+            else:
+                col_widths = [115, 95, 244, 50]
                 
             bugs_table = Table(
                 bug_data,
-                colWidths=[115, 95, 244, 50]
+                colWidths=col_widths
             )
             bugs_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), primary_color),

@@ -400,6 +400,13 @@ if 'sprint_review_label_order' not in st.session_state:
     else:
         st.session_state.sprint_review_label_order = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
 
+if 'custom_bug_column' not in st.session_state:
+    st.session_state.custom_bug_column = {
+        "enabled": False,
+        "name": os.getenv("BUGS_CUSTOM_COLUMN_NAME", "Severity"),
+        "labels": [l.strip() for l in os.getenv("BUGS_CUSTOM_COLUMN_LABELS", "Severity_A;Severity_B;Severity_C").split(";") if l.strip()]
+    }
+
 # ---------------------------------------------------------
 # Shared Collaboration Sync Logic
 # ---------------------------------------------------------
@@ -817,7 +824,7 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
         "Accept": "application/json",
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "X-Atlassian-Token": "no-check"
+        "X-Atlassian-Token": "nocheck"
     }
 
     
@@ -1011,7 +1018,7 @@ def fetch_epic_completion(server, token, epic_keys, epic_link_field, auth_type="
         "Accept": "application/json",
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0",
-        "X-Atlassian-Token": "no-check"
+        "X-Atlassian-Token": "nocheck"
     }
     auth = None
     if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"]:
@@ -1695,6 +1702,9 @@ elif st.session_state.active_tab == "✍️ Workbook":
         unsafe_allow_html=True
     )
     st.write("Convert technical Jira summaries into elegant commercial feature descriptions, assign demo presenters, and toggle report targets.")
+    
+
+
     # Show any ingestion feedback carried over from the Ingestion tab (e.g. after auto-navigation)
     if "ingestion_feedback" in st.session_state:
         fb = st.session_state.ingestion_feedback
@@ -1796,6 +1806,34 @@ elif st.session_state.active_tab == "✍️ Workbook":
             placeholder="Choose labels in presentation order...",
             on_change=save_sprint_review_label_order
         )
+        
+        st.markdown("#### 🐛 Bugs Table Configuration")
+        st.caption("Enable a custom column in the Bugs tables by selecting the exact labels you want to extract.")
+        
+        col_bug1, col_bug2 = st.columns([1, 2])
+        with col_bug1:
+            bug_col_name = st.text_input("Custom Column Name:", value=st.session_state.custom_bug_column.get("name", "Severity"))
+            if bug_col_name != st.session_state.custom_bug_column.get("name"):
+                st.session_state.custom_bug_column["name"] = bug_col_name
+                
+        with col_bug2:
+            current_labels = st.session_state.custom_bug_column.get("labels", [])
+            for l in current_labels:
+                if l not in available_labels:
+                    available_labels.append(l)
+                    
+            bug_col_labels = st.multiselect(
+                "Labels to Match",
+                options=available_labels,
+                default=current_labels,
+                placeholder="Choose labels to extract...",
+                key="bug_col_labels_ms"
+            )
+            if bug_col_labels != st.session_state.custom_bug_column.get("labels"):
+                st.session_state.custom_bug_column["labels"] = bug_col_labels
+                st.session_state.custom_bug_column["enabled"] = len(bug_col_labels) > 0
+                st.rerun()
+                
         st.divider()
 
         # Subtabs for separating Overview, Outlook, and optional Custom Table editing

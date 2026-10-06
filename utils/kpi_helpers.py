@@ -11,7 +11,7 @@ def get_auth_headers(server, token, auth_type, email):
         "Accept": "application/json",
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0",
-        "X-Atlassian-Token": "no-check"
+        "X-Atlassian-Token": "nocheck"
     }
     auth = None
     token_clean = token.strip()
@@ -404,7 +404,7 @@ def upload_confluence_attachment(server_url, auth, headers, page_id, file_path, 
 
     upload_headers = {
         "Accept": "application/json",
-        "X-Atlassian-Token": "no-check"
+        "X-Atlassian-Token": "nocheck"
     }
     if headers and "Authorization" in headers:
         upload_headers["Authorization"] = headers["Authorization"]

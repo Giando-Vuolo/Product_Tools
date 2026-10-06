@@ -17,7 +17,7 @@ from reportlab.graphics.shapes import Drawing, Line, PolyLine
 from PIL import Image as PILImage
 from utils.pdf_helpers import (
     SmartKeepTogether, hex_to_reportlab_color, convert_markdown_to_pdf_rich_text,
-    split_bugs_and_topics, sort_items_by_label_priority, get_team_label, sort_items_by_type_and_epic,
+    split_bugs_and_topics, sort_items_by_label_priority, get_team_label, get_custom_label, sort_items_by_type_and_epic,
     draw_background_landscape, NumberedCanvas, build_demos_pdf_block, build_next_releases_pdf_block,
     format_status_with_emoji, build_custom_extra_table_pdf_block, get_arrow_drawing, get_jira_link_paragraph,
     extract_numeric_version
@@ -321,14 +321,23 @@ def build_sprint_review_pdf(overview_df, outlook_df, config):
                 bugs_flowables.extend(prefix_flowables)
                 prefix_flowables = []
             bugs_flowables.append(Paragraph("Bugs", sub_section_title_style))
-            bug_data = [[
+            custom_bug_col = config.get("custom_bug_column", {})
+            has_custom_col = custom_bug_col.get("enabled", False)
+            custom_col_name = custom_bug_col.get("name", "Custom")
+            custom_col_labels = custom_bug_col.get("labels", [])
+
+            header_row = [
                 Paragraph("Epic", cell_header_style),
                 Paragraph("Key", cell_header_style),
                 Paragraph("Summary", cell_header_style),
                 Paragraph("Status", cell_header_center_style),
                 Paragraph("Fix Version", cell_header_style),
                 Paragraph("Team", cell_header_style)
-            ]]
+            ]
+            if has_custom_col:
+                header_row.insert(5, Paragraph(custom_col_name, cell_header_style))
+                
+            bug_data = [header_row]
             
             sorted_bugs = sort_items_by_label_priority(bugs_ov, ["Epic", "Key"])
             
@@ -355,18 +364,29 @@ def build_sprint_review_pdf(overview_df, outlook_df, config):
                     last_epic = display_epic
                     epic_cell = Paragraph(display_epic, cell_body_style)
                     
-                bug_data.append([
+                row_data = [
                     epic_cell,
                     get_jira_link_paragraph(row['Key'], cell_body_bold_style),
                     Paragraph(str(row['Summary']), cell_body_style),
                     Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
                     Paragraph(fv_val, cell_body_style),
                     Paragraph(get_team_label(row.get('Labels', '')), cell_body_style)
-                ])
+                ]
+                
+                if has_custom_col:
+                    custom_label_val = get_custom_label(row.get('Labels', ''), custom_col_labels)
+                    row_data.insert(5, Paragraph(custom_label_val, cell_body_style))
+                    
+                bug_data.append(row_data)
+                
+            if has_custom_col:
+                col_widths = [130, 75, 205, 50, 59, 70, 95]
+            else:
+                col_widths = [130, 75, 275, 50, 59, 95]
                 
             bugs_table = Table(
                 bug_data,
-                colWidths=[130, 75, 275, 50, 59, 95]
+                colWidths=col_widths
             )
             bugs_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), primary_color),
@@ -528,14 +548,23 @@ def build_sprint_review_pdf(overview_df, outlook_df, config):
                 bugs_outlook_flowables.extend(prefix_flowables)
                 prefix_flowables = []
             bugs_outlook_flowables.append(Paragraph("Planned Bugs", sub_section_title_style))
-            bug_data_outlook = [[
+            custom_bug_col = config.get("custom_bug_column", {})
+            has_custom_col = custom_bug_col.get("enabled", False)
+            custom_col_name = custom_bug_col.get("name", "Custom")
+            custom_col_labels = custom_bug_col.get("labels", [])
+
+            header_row = [
                 Paragraph("Epic", cell_header_style),
                 Paragraph("Key", cell_header_style),
                 Paragraph("Summary", cell_header_style),
                 Paragraph("Status", cell_header_center_style),
                 Paragraph("Fix Version", cell_header_style),
                 Paragraph("Team", cell_header_style)
-            ]]
+            ]
+            if has_custom_col:
+                header_row.insert(5, Paragraph(custom_col_name, cell_header_style))
+                
+            bug_data_outlook = [header_row]
             
             sorted_outlook_bugs = sort_items_by_label_priority(bugs_ot, ["Epic", "Key"])
             
@@ -562,18 +591,29 @@ def build_sprint_review_pdf(overview_df, outlook_df, config):
                     last_epic = display_epic
                     epic_cell = Paragraph(display_epic, cell_body_style)
                     
-                bug_data_outlook.append([
+                row_data = [
                     epic_cell,
                     get_jira_link_paragraph(row['Key'], cell_body_bold_style),
                     Paragraph(str(row['Summary']), cell_body_style),
                     Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
                     Paragraph(fv_val, cell_body_style),
                     Paragraph(get_team_label(row.get('Labels', '')), cell_body_style)
-                ])
+                ]
+                
+                if has_custom_col:
+                    custom_label_val = get_custom_label(row.get('Labels', ''), custom_col_labels)
+                    row_data.insert(5, Paragraph(custom_label_val, cell_body_style))
+                    
+                bug_data_outlook.append(row_data)
+                
+            if has_custom_col:
+                col_widths = [130, 75, 205, 50, 59, 70, 95]
+            else:
+                col_widths = [130, 75, 275, 50, 59, 95]
                 
             bugs_outlook_table = Table(
                 bug_data_outlook,
-                colWidths=[130, 75, 275, 50, 59, 95]
+                colWidths=col_widths
             )
             bugs_outlook_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), primary_color),

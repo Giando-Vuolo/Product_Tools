@@ -134,7 +134,7 @@ def fetch_jira_tickets_dataset(server, token, query_val, is_sprint=True, auth_ty
         "Accept": "application/json",
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0",
-        "X-Atlassian-Token": "no-check"
+        "X-Atlassian-Token": "nocheck"
     }
 
     auth = None
@@ -289,7 +289,7 @@ def fetch_epic_completion(server, token, epic_keys, epic_link_field, auth_type="
         "Accept": "application/json",
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0",
-        "X-Atlassian-Token": "no-check"
+        "X-Atlassian-Token": "nocheck"
     }
     auth = None
     if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"]:
@@ -471,7 +471,7 @@ def get_jira_auth_headers(token, auth_type, email):
         "Accept": "application/json",
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0",
-        "X-Atlassian-Token": "no-check"
+        "X-Atlassian-Token": "nocheck"
     }
     auth = None
     if auth_type in ["Corporate Login (Username + Password)", "Jira Cloud/Server Basic (Email/User + Token)"]:
@@ -597,7 +597,7 @@ def attach_files_to_jira_issue(server, token, auth_type, email, issue_key, uploa
     headers, auth = get_jira_auth_headers(token, auth_type, email)
     if "Content-Type" in headers:
         del headers["Content-Type"]
-    headers["X-Atlassian-Token"] = "no-check"
+    headers["X-Atlassian-Token"] = "nocheck"
     
     results = []
     for f in uploaded_files:

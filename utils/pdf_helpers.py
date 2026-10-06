@@ -146,6 +146,13 @@ def get_team_label(labels):
     item_labels = {label.strip().lower() for label in re.split(r'[\s,]+', str(labels)) if label.strip()}
     return next((label for label in selected_labels if label.strip().lower() in item_labels), "-")
 
+def get_custom_label(labels, target_labels):
+    """Return the first matching custom label assigned to an item based on the target labels list."""
+    if not target_labels:
+        return "-"
+    item_labels = {label.strip().lower() for label in re.split(r'[\s,]+', str(labels)) if label.strip()}
+    return next((label for label in target_labels if label.strip().lower() in item_labels), "-")
+
 # Helper to sort items by selected team label, then Type order (User Story -> Task -> Technical Task) and Epic
 def sort_items_by_type_and_epic(df):
     if df is None or df.empty:

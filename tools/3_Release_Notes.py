@@ -335,6 +335,13 @@ if 'prepared_release_notes' not in st.session_state:
 if 'release_purpose' not in st.session_state:
     st.session_state.release_purpose = "The purpose of this release is to rollout the following functionalities:"
 
+if 'custom_bug_column' not in st.session_state:
+    st.session_state.custom_bug_column = {
+        "enabled": False,
+        "name": os.getenv("BUGS_CUSTOM_COLUMN_NAME", "Severity"),
+        "labels": [l.strip() for l in os.getenv("BUGS_CUSTOM_COLUMN_LABELS", "Severity_A;Severity_B;Severity_C").split(";") if l.strip()]
+    }
+
 # ---------------------------------------------------------
 # Shared Collaboration Sync Logic
 # ---------------------------------------------------------
@@ -1044,6 +1051,47 @@ elif st.session_state.active_tab == "✍️ Workbook":
         f"</div>",
         unsafe_allow_html=True
     )
+    
+    label_sources = [st.session_state.overview_df]
+    found_labels = {
+        label.strip()
+        for df in label_sources
+        if df is not None and "Labels" in df.columns
+        for labels in df["Labels"].dropna()
+        for label in str(labels).split(",")
+        if label.strip()
+    }
+    available_labels = sorted(list(found_labels), key=str.lower)
+    
+    st.markdown("#### 🐛 Bugs Table Configuration")
+    st.caption("Enable a custom column in the Bugs tables by selecting the exact labels you want to extract.")
+    
+    col_bug1, col_bug2 = st.columns([1, 2])
+    with col_bug1:
+        bug_col_name = st.text_input("Custom Column Name:", value=st.session_state.custom_bug_column.get("name", "Severity"), key="rn_bug_col_name")
+        if bug_col_name != st.session_state.custom_bug_column.get("name"):
+            st.session_state.custom_bug_column["name"] = bug_col_name
+            
+    with col_bug2:
+        current_labels = st.session_state.custom_bug_column.get("labels", [])
+        for l in current_labels:
+            if l not in available_labels:
+                available_labels.append(l)
+                
+        bug_col_labels = st.multiselect(
+            "Labels to Match",
+            options=available_labels,
+            default=current_labels,
+            placeholder="Choose labels to extract...",
+            key="rn_bug_col_labels_ms"
+        )
+        if bug_col_labels != st.session_state.custom_bug_column.get("labels"):
+            st.session_state.custom_bug_column["labels"] = bug_col_labels
+            st.session_state.custom_bug_column["enabled"] = len(bug_col_labels) > 0
+            st.rerun()
+            
+    st.divider()
+
     if st.session_state.get("prepared_release_notes") is not None:
         st.subheader("✍️ Review Release Note data")
         st.write("Remove or adjust rows before export. These are the only two ticket tables used in the Release Note.")
