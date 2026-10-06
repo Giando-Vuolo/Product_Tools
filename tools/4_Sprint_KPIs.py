@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np
 from html.parser import HTMLParser
 import altair as alt
@@ -15,8 +15,14 @@ from utils.kpi_helpers import (
     generate_and_save_kpi_charts,
     sort_df_chronologically,
     format_sprint_label,
-    parse_confluence_html_table
+    parse_confluence_html_table,
+    QUALITY_KPIS, configured_quality_kpis, build_code_quality_chart
 )
+
+from utils.sonar_helpers import SONAR_KPIS, sonar_configured, fetch_sonar_kpis, format_kpi_value
+from utils.sbom_helpers import SBOM_KPI, sbom_configured, fetch_dependency_findings
+from utils.vanguard_helpers import VANGUARD_KPI, vanguard_configured, fetch_platform_findings
+
 
 def fetch_sprint_kpi_dataset():
     st.session_state.kpi_loading = True
@@ -36,6 +42,26 @@ def fetch_sprint_kpi_dataset():
         st.session_state.kpi_loading = False
         return
         
+    quality_kpis = {}
+    if sonar_configured():
+        try:
+            quality_kpis = fetch_sonar_kpis(res.get("sprint_end"))
+        except Exception as e:
+            st.session_state.kpi_error += f"\nWarning: SonarQube: {str(e)}"
+    if sbom_configured():
+        try:
+            quality_kpis[SBOM_KPI] = fetch_dependency_findings()
+        except Exception as e:
+            st.session_state.kpi_error += f"\nWarning: SBOM Inventory: {str(e)}"
+    st.session_state.kpi_vanguard_fetched_at = None
+    if vanguard_configured():
+        try:
+            quality_kpis[VANGUARD_KPI] = fetch_platform_findings()
+            st.session_state.kpi_vanguard_fetched_at = datetime.now(timezone.utc)
+        except ValueError as e:
+            st.session_state.kpi_error += f"\nWarning: {e}"
+
+    st.session_state.kpi_quality = quality_kpis
     st.session_state.kpi_data = res.get("df", pd.DataFrame())
     st.session_state.kpi_gh_added_keys = res.get("gh_added_keys", [])
     st.session_state.kpi_releases_count = res.get("releases_count", 0)
@@ -80,7 +106,9 @@ def render_confluence_kpi_charts(df_hist):
             new_row = {}
             for col in df_plot.columns:
                 col_lower = col.lower().strip()
-                if "sprint name" in col_lower:
+                if col.strip() in QUALITY_KPIS:
+                    new_row[col] = current_metrics.get("quality", {}).get(col.strip(), "")
+                elif "sprint name" in col_lower:
                     new_row[col] = sprint_name_val
                 elif "sprint" in col_lower:
                     new_row[col] = sprint_name_val
@@ -253,6 +281,14 @@ def render_confluence_kpi_charts(df_hist):
         else:
             st.info("No Bugs data found in table.")
 
+    for name in QUALITY_KPIS:
+        if find_column(df_plot, [name]):
+            df_plot[name] = extract_numeric_col(df_plot, [name])
+    chart_quality = build_code_quality_chart(df_plot)
+    if chart_quality is not None:
+        st.markdown("<br/>", unsafe_allow_html=True)
+        st.caption("Code Quality Trend (SonarQube, SBOM Inventory, Vanguard)")
+        st.altair_chart(chart_quality)
 def render_dashboard():
     df = st.session_state.kpi_data
     if df is None or df.empty:
@@ -319,6 +355,7 @@ def render_dashboard():
         
     # Store calculated metrics in session state so charts can include the current un-published sprint
     date_str = f"{s_start.strftime('%Y-%m-%d')} to {s_end.strftime('%Y-%m-%d')}" if (s_start and s_end) else "Unknown"
+    quality_kpis = st.session_state.get("kpi_quality") or {}
     st.session_state.current_sprint_metrics = {
         "sprint_name": st.session_state.get("kpi_sprint_name") or st.session_state.get("kpi_sprint_query"),
         "dates": date_str,
@@ -329,7 +366,8 @@ def render_dashboard():
         "open_bugs": open_bugs,
         "crit_bugs": open_critical_bugs,
         "resolved_bugs": resolved_bugs,
-        "cycle_time": avg_cycle_time
+        "cycle_time": avg_cycle_time,
+        "quality": {name: format_kpi_value(name, quality_kpis.get(name)) for name in QUALITY_KPIS}
     }
     
     col1, col2, col3, col4 = st.columns(4)
@@ -345,7 +383,25 @@ def render_dashboard():
     with col4:
         st.metric("Project Open Bugs (Sev A + B)", str(open_bugs), help="Counts all tickets of type 'Bug' with labels Sev-A or Sev-B that were created before the sprint ended, and were either still unresolved or resolved after the sprint started.")
         st.metric("Project Critical Open Bugs (Sev A)", str(open_critical_bugs), help="Same calculation as Open Bugs, but strictly filtered for the Sev-A label.")
-        
+
+    quality_names = configured_quality_kpis()
+    if quality_names:
+        sources = []
+        if sonar_configured():
+            sources.append(f"SonarQube ({os.getenv('SONAR_COMPONENT')}) at sprint end")
+        if sbom_configured():
+            sources.append(f"{SBOM_KPI}: SBOM Inventory today, dev + prod")
+        if vanguard_configured():
+            captured_at = st.session_state.get("kpi_vanguard_fetched_at")
+            if captured_at:
+                sources.append(f"Vanguard: open findings, excluding previews, captured {captured_at:%Y-%m-%d %H:%M UTC}")
+            else:
+                sources.append("Vanguard: current findings not available; calculate KPIs to retry")
+        st.caption("Code Quality from " + " · ".join(sources))
+        for start in range(0, len(quality_names), 4):
+            for col, name in zip(st.columns(4), quality_names[start:start + 4]):
+                col.metric(name, format_kpi_value(name, quality_kpis.get(name)) or "N/A")
+
     st.divider()
     
     st.markdown("#### 📋 Issue Details (Cycle Times)")
@@ -404,34 +460,64 @@ def render_dashboard():
         with col_p:
             page_title = st.text_input("Page Title", value=default_conf_page, key="kpi_conf_page")
             
-        col_btn1, col_btn2 = st.columns([2, 1])
+        col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 1])
         with col_btn1:
             append_clicked = st.button("🚀 Append KPIs to Confluence", use_container_width=True)
         with col_btn2:
             fetch_clicked = st.button("🔄 Fetch Confluence History", use_container_width=True)
+        with col_btn3:
+            preview_clicked = st.button("👀 Preview (no upload)", use_container_width=True)
 
         auth_type = st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)")
         email = st.session_state.get("jira_email", "")
 
+        metrics = {
+            "dates": date_str,
+            "total_sp": f"{total_sp:g}",
+            "achieved_sp": f"{achieved_sp:g}",
+            "sprint_pct": f"{sprint_pct:.1f}%",
+            "releases": str(releases_count),
+            "open_bugs": str(open_bugs),
+            "crit_bugs": str(open_critical_bugs),
+            "resolved_bugs": str(resolved_bugs),
+            "cycle_time": f"{avg_cycle_time:.1f}" if pd.notna(avg_cycle_time) else "N/A",
+            "quality": st.session_state.current_sprint_metrics["quality"]
+        }
+        sprint_query_val = st.session_state.get("kpi_sprint_query", "Current Sprint")
+        sprint_name_val = st.session_state.get("kpi_sprint_name", sprint_query_val)
+
+        # Preview the exact table and charts without uploading to Confluence
+        if preview_clicked:
+            with st.spinner("Building preview from the Confluence page..."):
+                try:
+                    preview_body = publish_kpis_to_confluence(
+                        server_url=conf_server,
+                        auth_type=auth_type,
+                        token=conf_token,
+                        email=email,
+                        space_key=space_key,
+                        page_title=page_title,
+                        sprint_val=sprint_query_val,
+                        sprint_name=sprint_name_val,
+                        metrics=metrics,
+                        dry_run=True
+                    )
+                    st.info("Preview only: nothing was uploaded to Confluence.")
+                    df_preview = parse_confluence_html_table(preview_body)
+                    if df_preview is None:
+                        st.warning("Could not read the KPI table from the preview.")
+                    else:
+                        st.dataframe(df_preview, use_container_width=True, hide_index=True)
+                        for temp_path, chart_name in generate_and_save_kpi_charts(df_preview):
+                            with open(temp_path, "rb") as f:
+                                st.image(f.read(), caption=chart_name)
+                            os.remove(temp_path)
+                except Exception as ex:
+                    st.error(f"Failed to build preview: {str(ex)}")
+
         if append_clicked:
             with st.spinner("Publishing to Confluence..."):
                 try:
-                    date_str = f"{s_start.strftime('%Y-%m-%d')} to {s_end.strftime('%Y-%m-%d')}" if (s_start and s_end) else "Unknown"
-                    metrics = {
-                        "dates": date_str,
-                        "total_sp": f"{total_sp:g}",
-                        "achieved_sp": f"{achieved_sp:g}",
-                        "sprint_pct": f"{sprint_pct:.1f}%",
-                        "releases": str(releases_count),
-                        "open_bugs": str(open_bugs),
-                        "crit_bugs": str(open_critical_bugs),
-                        "resolved_bugs": str(resolved_bugs),
-                        "cycle_time": f"{avg_cycle_time:.1f}" if pd.notna(avg_cycle_time) else "N/A"
-                    }
-                    
-                    sprint_query_val = st.session_state.get("kpi_sprint_query", "Current Sprint")
-                    sprint_name_val = st.session_state.get("kpi_sprint_name", sprint_query_val)
-
                     page_url = publish_kpis_to_confluence(
                         server_url=conf_server,
                         auth_type=auth_type,
@@ -468,7 +554,6 @@ def render_dashboard():
             st.divider()
             st.markdown("#### 📊 Historical KPI Evolution (from Confluence Page)")
             render_confluence_kpi_charts(df_hist)
-
 
 if "kpi_data" not in st.session_state:
     st.session_state.kpi_data = None
