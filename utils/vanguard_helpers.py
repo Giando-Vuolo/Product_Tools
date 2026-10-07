@@ -41,7 +41,7 @@ def fetch_platform_findings():
 
     try:
         auth = _read_json(requests.post(
-            "https://auth.api.vwapps.cloud/oauth2/token",
+            "https://auth.api.your-company.com/oauth2/token",
             data={
                 "grant_type": "client_credentials",
                 "client_id": os.environ["VANGUARD_CLIENT_ID"].strip(),
@@ -60,7 +60,7 @@ def fetch_platform_findings():
         # A safety ceiling fails explicitly rather than returning a partial KPI.
         for _ in range(1000):
             payload = _read_json(requests.get(
-                f"https://api.vwapps.cloud/projects/{project_id}/findings",
+                f"https://api.your-company.com/projects/{project_id}/findings",
                 headers=headers, params=dict(params), timeout=30, allow_redirects=False,
             ), "findings query")
             findings = payload.get("findings")

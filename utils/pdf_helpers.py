@@ -117,7 +117,7 @@ def sort_items_by_label_priority(df, secondary_columns):
         if env_labels:
             selected_labels = [l.strip() for l in env_labels.split(",") if l.strip()]
         else:
-            selected_labels = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
+            selected_labels = ["Frontend_Team", "Backend_Team", "Architecture_Team"]
         
     if "Labels" not in df.columns:
         return df.sort_values(secondary_columns, kind="stable")
@@ -142,7 +142,7 @@ def get_team_label(labels):
         if env_labels:
             selected_labels = [l.strip() for l in env_labels.split(",") if l.strip()]
         else:
-            selected_labels = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
+            selected_labels = ["Frontend_Team", "Backend_Team", "Architecture_Team"]
     item_labels = {label.strip().lower() for label in re.split(r'[\s,]+', str(labels)) if label.strip()}
     return next((label for label in selected_labels if label.strip().lower() in item_labels), "-")
 

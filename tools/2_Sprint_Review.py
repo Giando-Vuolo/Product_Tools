@@ -398,7 +398,7 @@ if 'sprint_review_label_order' not in st.session_state:
     if env_labels:
         st.session_state.sprint_review_label_order = [l.strip() for l in env_labels.split(",") if l.strip()]
     else:
-        st.session_state.sprint_review_label_order = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
+        st.session_state.sprint_review_label_order = ["Frontend_Team", "Backend_Team", "Architecture_Team"]
 
 if 'custom_bug_column' not in st.session_state:
     st.session_state.custom_bug_column = {
@@ -1257,8 +1257,8 @@ if st.session_state.active_tab == "🔌 Ingestion":
     
     # Standard quarterly Epic progress table
     st.subheader("📈 Quarterly Epic Progress")
-    committed_label_env = os.getenv("COMMITTED_LABEL", "RC2_committed")
-    quarter_label_env = os.getenv("QUARTER_LABEL", "RC2_FB_18")
+    committed_label_env = os.getenv("COMMITTED_LABEL", "Project_committed")
+    quarter_label_env = os.getenv("QUARTER_LABEL", "Project_Quarter_1")
     table_title_env = os.getenv("QUARTER_STATUS_TABLE_TITLE", "Epics Q3 - Current Progress")
     
     st.write("Add the standard progress table for committed Epics. It queries Epics requiring both configured labels.")
@@ -1267,8 +1267,8 @@ if st.session_state.active_tab == "🔌 Ingestion":
         with col_proj:
             project_key = st.text_input(
                 "Project",
-                value="RECALLTWO",
-                placeholder="e.g. RECALLTWO"
+                value="MYPROJECT",
+                placeholder="e.g. MYPROJECT"
             )
         with col_committed:
             committed_epic_label = st.text_input(
@@ -1789,7 +1789,7 @@ elif st.session_state.active_tab == "✍️ Workbook":
         if env_labels:
             preset_defaults = [l.strip() for l in env_labels.split(",") if l.strip()]
         else:
-            preset_defaults = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
+            preset_defaults = ["Frontend_Team", "Backend_Team", "Architecture_Team"]
         available_labels = sorted(list(found_labels.union(preset_defaults).union(set(st.session_state.get("sprint_review_label_order", [])))), key=str.lower)
 
         st.markdown("#### 🏷️ Sprint Review team order")

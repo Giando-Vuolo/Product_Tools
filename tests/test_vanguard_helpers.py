@@ -40,13 +40,13 @@ class VanguardTest(unittest.TestCase):
         ]
         self.assertEqual(fetch_platform_findings(), 3)
         self.auth.assert_called_once_with(
-            "https://auth.api.vwapps.cloud/oauth2/token",
+            "https://auth.api.your-company.com/oauth2/token",
             data={"grant_type": "client_credentials", "client_id": "test-client", "client_secret": "test-secret"},
             timeout=30, allow_redirects=False,
         )
         self.assertEqual(self.read.call_count, 2)
         for call in self.read.call_args_list:
-            self.assertEqual(call.args, (f"https://api.vwapps.cloud/projects/{PROJECT}/findings",))
+            self.assertEqual(call.args, (f"https://api.your-company.com/projects/{PROJECT}/findings",))
             self.assertEqual(call.kwargs["params"]["state"], "open")
             self.assertEqual(call.kwargs["params"]["preview"], "false")
             self.assertEqual(call.kwargs["params"]["page_size"], 100)

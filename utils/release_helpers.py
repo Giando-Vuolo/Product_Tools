@@ -602,7 +602,7 @@ def upload_pdf_to_confluence(server_url, auth_type, token, email, space_key, pag
 
 # Helper to transform Hex colors into ReportLab Color objects
 def build_prepared_release_notes_pdf(prepared, config):
-    """Generate the standard ReCall 2 Release Note from a prepared Jira version."""
+    """Generate the standard MyProject Release Note from a prepared Jira version."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, leftMargin=54, rightMargin=54, topMargin=72, bottomMargin=60)
     styles = getSampleStyleSheet()
@@ -612,11 +612,11 @@ def build_prepared_release_notes_pdf(prepared, config):
     header = ParagraphStyle("RNHead", parent=body, fontName="Helvetica-Bold", fontSize=8, leading=10, textColor=colors.white)
     cell = ParagraphStyle("RNCell", parent=body, fontSize=8.5, leading=11)
     label = ParagraphStyle("RNLabel", parent=cell, fontName="Helvetica-Bold")
-    story = [Spacer(1, 50), Paragraph("ReCall2 - Software Release Note", ParagraphStyle("CoverProject", parent=body, alignment=1, textColor=colors.HexColor("#64748B"))), Paragraph("Release Notes", ParagraphStyle("CoverTitle", parent=title, alignment=1, fontSize=32, leading=38, textColor=primary, spaceBefore=18)), Paragraph(f"Version: {prepared['version']}", ParagraphStyle("CoverVersion", parent=body, alignment=1, fontSize=18, leading=22, textColor=colors.HexColor("#334155"))), Spacer(1, 250), Paragraph("This documentation outlines the software development results of Digital:Hub for the specified release delivered to Volkswagen AG.", ParagraphStyle("CoverFooter", parent=body, alignment=1)), PageBreak()]
+    story = [Spacer(1, 50), Paragraph("MyProject - Software Release Note", ParagraphStyle("CoverProject", parent=body, alignment=1, textColor=colors.HexColor("#64748B"))), Paragraph("Release Notes", ParagraphStyle("CoverTitle", parent=title, alignment=1, fontSize=32, leading=38, textColor=primary, spaceBefore=18)), Paragraph(f"Version: {prepared['version']}", ParagraphStyle("CoverVersion", parent=body, alignment=1, fontSize=18, leading=22, textColor=colors.HexColor("#334155"))), Spacer(1, 250), Paragraph("This documentation outlines the software development results of Digital:Hub for the specified release.", ParagraphStyle("CoverFooter", parent=body, alignment=1)), PageBreak()]
 
     story += [Paragraph("1. Release Purpose", title), Paragraph(config.get('release_purpose').replace("\n", "<br/>"), body), Paragraph("2. Software Release Information", title)]
     history = prepared["history"]
-    metadata = [("Release version (ReCall2)", prepared["version"]), ("VW Service Center Change number", history.get("service_center_change") or "-"), ("Deploy Date (PROD)", history.get("deploy_date") or "-"), ("SCS", history.get("scs") or "-")]
+    metadata = [("Release version (MyProject)", prepared["version"]), ("Service Center Change number", history.get("service_center_change") or "-"), ("Deploy Date (PROD)", history.get("deploy_date") or "-"), ("SCS", history.get("scs") or "-")]
     meta_data = [[Paragraph(key, label), Paragraph(value.replace("\n", "<br/>"), cell)] for key, value in metadata]
     meta_table = Table(meta_data, colWidths=[225, 279])
     meta_table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), .75, colors.black), ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E7E7E7")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6), ("LEFTPADDING", (0, 0), (-1, -1), 7)]))
@@ -652,7 +652,7 @@ def build_prepared_release_notes_pdf(prepared, config):
     residual_table = Table(residual_rows, colWidths=[105, 125, 274], repeatRows=1)
     residual_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#BFBFBF")), ("GRID", (0, 0), (-1, -1), .6, colors.black), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
     story += [residual_table, Paragraph("5. Test protocols", title)]
-    link = "https://devstack.vwgroup.com/confluence/x/nlEDD"
+    link = "https://your-company.atlassian.net/confluence/x/nlEDD"
     story.append(Paragraph(f'E2E test protocols: <link href="{link}" color="blue">E2E test protocols for release</link>', body))
     doc.build(story, canvasmaker=NumberedCanvas)
     buffer.seek(0)

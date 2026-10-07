@@ -33,6 +33,17 @@ def save_credentials_to_env():
     kv["CONFLUENCE_SERVER"] = st.session_state.conf_server
     kv["CONFLUENCE_API_TOKEN"] = st.session_state.conf_token
     kv["OLLAMA_URL"] = st.session_state.ollama_url
+    kv["SONAR_SERVER"] = st.session_state.sonar_server
+    kv["SONAR_TOKEN"] = st.session_state.sonar_token
+    kv["SONAR_COMPONENT"] = st.session_state.sonar_component
+    kv["SBOM_SERVER"] = st.session_state.sbom_server
+    kv["SBOM_API_KEY"] = st.session_state.sbom_api_key
+    kv["SBOM_API_SECRET"] = st.session_state.sbom_api_secret
+    kv["SBOM_NAMESPACE_ID"] = st.session_state.sbom_namespace_id
+    kv["SBOM_APP_ID"] = st.session_state.sbom_app_id
+    kv["VANGUARD_PROJECT_ID"] = st.session_state.vanguard_project_id
+    kv["VANGUARD_CLIENT_ID"] = st.session_state.vanguard_client_id
+    kv["VANGUARD_CLIENT_SECRET"] = st.session_state.vanguard_client_secret
 
     new_lines = []
     keys_written = set()
@@ -71,6 +82,31 @@ if "ollama_url" not in st.session_state:
     st.session_state.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
 if "ollama_models" not in st.session_state:
     st.session_state.ollama_models = []
+
+if "sonar_server" not in st.session_state:
+    st.session_state.sonar_server = os.getenv("SONAR_SERVER", "https://sonar.your-company.com")
+if "sonar_token" not in st.session_state:
+    st.session_state.sonar_token = os.getenv("SONAR_TOKEN", "")
+if "sonar_component" not in st.session_state:
+    st.session_state.sonar_component = os.getenv("SONAR_COMPONENT", "")
+
+if "sbom_server" not in st.session_state:
+    st.session_state.sbom_server = os.getenv("SBOM_SERVER", "https://sbom.your-company.com")
+if "sbom_api_key" not in st.session_state:
+    st.session_state.sbom_api_key = os.getenv("SBOM_API_KEY", "")
+if "sbom_api_secret" not in st.session_state:
+    st.session_state.sbom_api_secret = os.getenv("SBOM_API_SECRET", "")
+if "sbom_namespace_id" not in st.session_state:
+    st.session_state.sbom_namespace_id = os.getenv("SBOM_NAMESPACE_ID", "")
+if "sbom_app_id" not in st.session_state:
+    st.session_state.sbom_app_id = os.getenv("SBOM_APP_ID", "")
+
+if "vanguard_project_id" not in st.session_state:
+    st.session_state.vanguard_project_id = os.getenv("VANGUARD_PROJECT_ID", "")
+if "vanguard_client_id" not in st.session_state:
+    st.session_state.vanguard_client_id = os.getenv("VANGUARD_CLIENT_ID", "")
+if "vanguard_client_secret" not in st.session_state:
+    st.session_state.vanguard_client_secret = os.getenv("VANGUARD_CLIENT_SECRET", "")
 
 # Perform automatic connection checks on session initialization
 if "jira_connection_status" not in st.session_state:
@@ -496,6 +532,38 @@ def show_home():
         with col_ourl:
             ourl_in = st.text_input("Ollama API URL:", value=st.session_state.ollama_url, key="central_ollama_url")
 
+        st.markdown("---")
+        st.markdown("##### 📡 Quality & Security Integrations (KPIs)")
+        
+        st.markdown("**SonarQube**")
+        sq_col1, sq_col2, sq_col3 = st.columns(3)
+        with sq_col1:
+            sonar_server_in = st.text_input("SonarQube Server:", value=st.session_state.sonar_server, key="central_sonar_server")
+        with sq_col2:
+            sonar_token_in = st.text_input("SonarQube Token:", value=st.session_state.sonar_token, type="password", key="central_sonar_token")
+        with sq_col3:
+            sonar_comp_in = st.text_input("SonarQube Component:", value=st.session_state.sonar_component, key="central_sonar_component")
+
+        st.markdown("**SBOM Inventory**")
+        sb_col1, sb_col2, sb_col3 = st.columns(3)
+        with sb_col1:
+            sbom_server_in = st.text_input("SBOM Server:", value=st.session_state.sbom_server, key="central_sbom_server")
+            sbom_namespace_in = st.text_input("SBOM Namespace ID:", value=st.session_state.sbom_namespace_id, key="central_sbom_namespace")
+        with sb_col2:
+            sbom_api_key_in = st.text_input("SBOM API Key:", value=st.session_state.sbom_api_key, key="central_sbom_api_key")
+            sbom_app_in = st.text_input("SBOM App ID:", value=st.session_state.sbom_app_id, key="central_sbom_app_id")
+        with sb_col3:
+            sbom_api_secret_in = st.text_input("SBOM API Secret:", value=st.session_state.sbom_api_secret, type="password", key="central_sbom_api_secret")
+            
+        st.markdown("**Vanguard**")
+        vg_col1, vg_col2, vg_col3 = st.columns(3)
+        with vg_col1:
+            vg_project_in = st.text_input("Vanguard Project ID:", value=st.session_state.vanguard_project_id, key="central_vg_project")
+        with vg_col2:
+            vg_client_id_in = st.text_input("Vanguard Client ID:", value=st.session_state.vanguard_client_id, key="central_vg_client_id")
+        with vg_col3:
+            vg_client_secret_in = st.text_input("Vanguard Client Secret:", value=st.session_state.vanguard_client_secret, type="password", key="central_vg_secret")
+
         settings_changed = (
             st.session_state.jira_server != srv_in or
             st.session_state.jira_token != tok_in or
@@ -503,7 +571,18 @@ def show_home():
             st.session_state.jira_email != mail_in or
             st.session_state.conf_server != csrv_in or
             st.session_state.conf_token != ctok_in or
-            st.session_state.ollama_url != ourl_in
+            st.session_state.ollama_url != ourl_in or
+            st.session_state.sonar_server != sonar_server_in or
+            st.session_state.sonar_token != sonar_token_in or
+            st.session_state.sonar_component != sonar_comp_in or
+            st.session_state.sbom_server != sbom_server_in or
+            st.session_state.sbom_api_key != sbom_api_key_in or
+            st.session_state.sbom_api_secret != sbom_api_secret_in or
+            st.session_state.sbom_namespace_id != sbom_namespace_in or
+            st.session_state.sbom_app_id != sbom_app_in or
+            st.session_state.vanguard_project_id != vg_project_in or
+            st.session_state.vanguard_client_id != vg_client_id_in or
+            st.session_state.vanguard_client_secret != vg_client_secret_in
         )
 
         if settings_changed:
@@ -514,6 +593,17 @@ def show_home():
             st.session_state.conf_server = csrv_in
             st.session_state.conf_token = ctok_in
             st.session_state.ollama_url = ourl_in
+            st.session_state.sonar_server = sonar_server_in
+            st.session_state.sonar_token = sonar_token_in
+            st.session_state.sonar_component = sonar_comp_in
+            st.session_state.sbom_server = sbom_server_in
+            st.session_state.sbom_api_key = sbom_api_key_in
+            st.session_state.sbom_api_secret = sbom_api_secret_in
+            st.session_state.sbom_namespace_id = sbom_namespace_in
+            st.session_state.sbom_app_id = sbom_app_in
+            st.session_state.vanguard_project_id = vg_project_in
+            st.session_state.vanguard_client_id = vg_client_id_in
+            st.session_state.vanguard_client_secret = vg_client_secret_in
             save_credentials_to_env()
             st.toast("Integrations updated and saved centrally! ✅")
 

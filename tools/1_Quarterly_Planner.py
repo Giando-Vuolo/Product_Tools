@@ -650,14 +650,14 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
     with st.container(border=True):
         col_project, col_committed, col_quarter = st.columns(3)
         with col_project:
-            progress_project = st.text_input("Project", value="RECALLTWO", key="qp_progress_project")
+            progress_project = st.text_input("Project", value="MYPROJECT", key="qp_progress_project")
         with col_committed:
             progress_committed_label = st.text_input(
-                "Committed Epic label", value=os.getenv("COMMITTED_LABEL", "RC2_committed"), key="qp_progress_committed"
+                "Committed Epic label", value=os.getenv("COMMITTED_LABEL", "Project_committed"), key="qp_progress_committed"
             )
         with col_quarter:
             progress_quarter_label = st.text_input(
-                "Quarter label", value=os.getenv("QUARTER_LABEL", "RC2_FB_18"), key="qp_progress_quarter"
+                "Quarter label", value=os.getenv("QUARTER_LABEL", "Project_Quarter_1"), key="qp_progress_quarter"
             )
         progress_title = st.text_input("Progress slide title", value="Committed Epics Q3 - Status", key="qp_progress_title")
         progress_subtitle = st.text_input("Progress slide subtitle", value="Detail overview of Epics Progress for Q3", key="qp_progress_subtitle")
@@ -680,7 +680,7 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
                         "Quarterly Planner",
                         st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)"),
                         st.session_state.get("jira_email", ""),
-                        project_key=progress_project.strip() or "RECALLTWO",
+                        project_key=progress_project.strip() or "MYPROJECT",
                     )
                 if result is None:
                     st.error("The quarterly Epic progress could not be loaded. Check the Jira connection and labels.")

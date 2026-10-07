@@ -33,7 +33,7 @@ if "agent_messages" not in st.session_state:
     ]
 
 # Credentials from session state or .env
-API_KEY = os.getenv("API_KEY", "PO_Tools_2026_Secreta")
+API_KEY = os.getenv("API_KEY", "")
 API_BASE_URL = "http://localhost:8000"
 
 # ==========================================

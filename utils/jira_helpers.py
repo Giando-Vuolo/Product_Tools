@@ -378,7 +378,7 @@ def fetch_epic_completion(server, token, epic_keys, epic_link_field, auth_type="
 
     return (completion_by_epic, issue_status_counts_by_epic) if return_issue_counts else completion_by_epic
 
-def build_quarterly_epic_progress_table(server, token, committed_label, quarter_label, title, position, auth_type, email, project_key="RECALLTWO"):
+def build_quarterly_epic_progress_table(server, token, committed_label, quarter_label, title, position, auth_type, email, project_key="MYPROJECT"):
     """
     Query committed quarterly epics strictly requiring both configured labels.
     Calculates progress for each Epic from child issues linked via parent or Epic Link.

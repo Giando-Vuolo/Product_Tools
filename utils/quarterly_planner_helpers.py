@@ -359,7 +359,7 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex):
         ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#CBD5E1")),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
     ]))
-    project_name = os.getenv("PROJECT_NAME", "RECALL2")
+    project_name = os.getenv("PROJECT_NAME", "MYPROJECT")
     generated = pd.Timestamp.today().strftime("%d %b %Y")
     story = [
         Paragraph(html.escape(title), title_style),
@@ -676,7 +676,7 @@ def build_quarterly_plan_pdf(df, primary_color_hex):
 
     story = []
     story.append(Paragraph("🎯 QUARTERLY PLAN ROADMAP", title_style))
-    proj_name = os.getenv("PROJECT_NAME", "RECALL2")
+    proj_name = os.getenv("PROJECT_NAME", "MYPROJECT")
     today_str = pd.Timestamp.today().strftime('%d-%b-%Y')
     story.append(Paragraph(f"<b>Project:</b> {proj_name} | <b>Generated:</b> {today_str} | <b>Total Epics:</b> {len(df)}", subtitle_style))
     

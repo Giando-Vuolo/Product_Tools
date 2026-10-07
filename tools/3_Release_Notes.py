@@ -746,7 +746,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
 
     st.subheader("📝 Prepare Release Note")
     st.write("Paste the Jira version link to load the release metadata, resolved issues, and known residual anomalies.")
-    jira_version_link_base = os.getenv("JIRA_VERSION_LINK_BASE", "https://devstack.vwgroup.com/jira/projects/RECALLTWO/versions/")
+    jira_version_link_base = os.getenv("JIRA_VERSION_LINK_BASE", "https://your-company.atlassian.net/jira/projects/MYPROJECT/versions/")
     release_version_url = st.text_input(
         "Jira version link",
         value=jira_version_link_base,
@@ -1725,7 +1725,7 @@ elif st.session_state.active_tab == "💾 Exporter":
                     try:
                         with st.spinner("Uploading the PDF and updating the Release history row..."):
                             history_pdf = build_release_notes_pdf(rn_ov_df)
-                            history_filename = f"Software_Release_Note_ReCall2_v{st.session_state.prepared_release_notes['version']}.pdf"
+                            history_filename = f"Software_Release_Note_MyProject_v{st.session_state.prepared_release_notes['version']}.pdf"
                             history_url = publish_release_note_to_history(
                                 st.session_state.prepared_release_notes,
                                 history_pdf.getvalue(),

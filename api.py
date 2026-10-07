@@ -285,7 +285,7 @@ from typing import Dict, Any
 class GenerateReleaseNotesPdfRequest(BaseModel):
     prepared: Dict[str, Any]
     primary_color: Optional[str] = "#0EA5E9"
-    project_name: Optional[str] = "ReCall2"
+    project_name: Optional[str] = "MyProject"
     app_version: Optional[str] = "v1.3.0"
     release_purpose: Optional[str] = ""
 
@@ -328,7 +328,7 @@ class GenerateSprintReviewPdfRequest(BaseModel):
     sr_cover_temp_path: Optional[str] = None
     extra_table_df: Optional[list] = None
     extra_table_title: Optional[str] = ""
-    sprint_review_label_order: Optional[list] = ["Bandicode", "Bugbusters", "RC2_Architecture_Team"]
+    sprint_review_label_order: Optional[list] = ["Frontend_Team", "Backend_Team", "Architecture_Team"]
     custom_tables: Optional[list] = []
 
 @app.post("/api/v1/sprint-review/generate-pdf", tags=["Sprint Review"])
