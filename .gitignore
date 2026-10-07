@@ -31,3 +31,4 @@ data/
 # Agent state
 .gemini/
 
+.codeagentswarm/

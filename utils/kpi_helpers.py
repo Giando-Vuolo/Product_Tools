@@ -6,6 +6,19 @@ from datetime import datetime
 import numpy as np
 from html.parser import HTMLParser
 
+import altair as alt
+from utils.sonar_helpers import SONAR_KPIS, sonar_configured
+from utils.sbom_helpers import SBOM_KPI, sbom_configured
+from utils.vanguard_helpers import VANGUARD_KPI, vanguard_configured
+
+QUALITY_KPIS = [*SONAR_KPIS.values(), SBOM_KPI, VANGUARD_KPI]
+
+def configured_quality_kpis():
+    return ((list(SONAR_KPIS.values()) if sonar_configured() else [])
+            + ([SBOM_KPI] if sbom_configured() else [])
+            + ([VANGUARD_KPI] if vanguard_configured() else []))
+
+
 def get_auth_headers(server, token, auth_type, email):
     headers = {
         "Accept": "application/json",
@@ -475,6 +488,24 @@ def format_sprint_label(label, max_len=12):
         return s
     return "..." + s[-(max_len - 3):]
 
+def build_code_quality_chart(df_plot):
+    """One small line chart per quality KPI, each with its own scale (smells ~3000, coverage ~90%, issues ~3)."""
+    cols = [c for c in QUALITY_KPIS if c in df_plot.columns]
+    df_q = df_plot[["Sprint Display"] + cols].dropna(subset=cols, how="all") if cols else pd.DataFrame()
+    if df_q.empty:
+        return None
+    df_q = df_q.melt(id_vars=["Sprint Display"], value_vars=cols, var_name="Metric", value_name="Value").dropna(subset=["Value"])
+    line = alt.Chart().mark_line(point=True, color="#26a69a").encode(
+        x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0), sort=None),
+        y=alt.Y("Value:Q", title=None, scale=alt.Scale(zero=False, padding=24)),
+        tooltip=["Sprint Display", "Metric", "Value"]
+    )
+    text = line.mark_text(baseline="bottom", dy=-6).encode(text=alt.Text("Value:Q", format=",.4~f"))
+    return alt.layer(line, text, data=df_q).properties(width=150, height=200).facet(
+        column=alt.Column("Metric:N", title=None, sort=QUALITY_KPIS)
+    ).resolve_scale(y="independent")
+
+
 def generate_and_save_kpi_charts(df_hist):
     if df_hist is None or df_hist.empty:
         return []
@@ -592,6 +623,16 @@ def generate_and_save_kpi_charts(df_hist):
         chart_bugs.save(path_bugs)
         saved_files.append((path_bugs, "bugs_chart.png"))
 
+    # 5. Code Quality Chart (quality columns, only if the table has them)
+    for name in QUALITY_KPIS:
+        if find_column(df_plot, [name]):
+            df_plot[name] = extract_numeric_col(df_plot, [name])
+    chart_quality = build_code_quality_chart(df_plot)
+    if chart_quality is not None:
+        path_quality = "temp_code_quality_chart.png"
+        chart_quality.save(path_quality)
+        saved_files.append((path_quality, "code_quality_chart.png"))
+
     return saved_files
 
 class TableParser(HTMLParser):
@@ -636,7 +677,8 @@ def parse_confluence_html_table(html_body):
             return None
         headers = parser.rows[0]
         data_rows = parser.rows[1:]
-        valid_rows = [r for r in data_rows if len(r) == len(headers)]
+        # Pad rows written before the quality columns existed; drop any other length mismatch for safety
+        valid_rows = [r + [""] * (len(headers) - len(r)) for r in data_rows if len(r) <= len(headers) and all(h in QUALITY_KPIS for h in headers[len(r):])]
         return pd.DataFrame(valid_rows, columns=headers)
     except Exception:
         return None
@@ -658,20 +700,35 @@ def fetch_confluence_kpi_history(server_url, auth_type, token, email, space_key,
     else:
         headers["Authorization"] = f"Bearer {token}"
         
-    find_url = f"{base_url}/rest/api/content"
-    params = {"title": page_title, "spaceKey": space_key, "expand": "body.storage"}
-    
     try:
-        resp = requests.get(find_url, headers=headers, params=params, auth=auth, timeout=15) if auth else requests.get(find_url, headers=headers, params=params, timeout=15)
-        if resp.status_code != 200:
+        page = find_confluence_page(base_url, headers, auth, space_key, page_title)
+        if not page:
             return None
-        results = resp.json().get("results", [])
-        if not results:
-            return None
-        html_body = results[0].get("body", {}).get("storage", {}).get("value", "")
+
+        html_body = page.get("body", {}).get("storage", {}).get("value", "")
         return parse_confluence_html_table(html_body)
     except Exception:
         return None
+
+def find_confluence_page(base_url, headers, auth, space_key, page_title, attempts=15):
+    # Confluence Data Center often answers "no results" (or 500) when the page body is expanded, while
+    # the same lookup without the body is reliable. Confirm the page exists first, then retry the body
+    # read, so a flaky answer is never mistaken for a missing page.
+    find_url = f"{base_url}/rest/api/content"
+    params = {"title": page_title, "spaceKey": space_key}
+    resp = requests.get(find_url, headers=headers, params={**params, "expand": "version"}, auth=auth, timeout=15)
+    if resp.status_code != 200:
+        raise Exception(f"Failed to query Confluence page ({resp.status_code}): {resp.text}")
+    found = resp.json().get("results", [])
+    if not found:
+        return None
+    for _ in range(attempts):
+        resp = requests.get(find_url, headers=headers, params={**params, "expand": "body.storage"}, auth=auth, timeout=15)
+        results = resp.json().get("results", []) if resp.status_code == 200 else []
+        if results:
+            return {**found[0], "body": results[0]["body"]}
+    raise Exception("Confluence found the page but did not return its content. Please try again in a moment.")
+
 
 def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, page_title, sprint_val, sprint_name, metrics):
     if not server_url or not token or not space_key or not page_title:
@@ -682,18 +739,26 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         base_url = base_url + "/wiki"
         
     headers, auth = get_auth_headers(server_url, token, auth_type, email)
-        
-    find_url = f"{base_url}/rest/api/content"
-    params = {"title": page_title, "spaceKey": space_key, "expand": "version,body.storage"}
-    
-    resp = requests.get(find_url, headers=headers, params=params, auth=auth, timeout=15) if auth else requests.get(find_url, headers=headers, params=params, timeout=15)
-    if resp.status_code != 200:
-        raise Exception(f"Failed to query Confluence page ({resp.status_code}): {resp.text}")
-        
-    results = resp.json().get("results", [])
-    
+
+    page = find_confluence_page(base_url, headers, auth, space_key, page_title)
+    results = [page] if page else []
+
     display_sprint = sprint_name if sprint_name else sprint_val
 
+    # Quality columns (SonarQube, SBOM Inventory, Vanguard) go at the end of the table. Each one is appended to an existing
+    # table the first time its source is configured, and kept (empty if the source is unavailable) once there.
+    current_body = results[0]["body"]["storage"]["value"] if results else ""
+    header_parser = TableParser()
+    header_parser.feed(current_body)
+    existing_headers = header_parser.rows[0] if header_parser.rows else []
+    added_columns = [name for name in configured_quality_kpis() if name not in existing_headers]
+    quality_columns = [h for h in existing_headers if h in QUALITY_KPIS] + added_columns
+    quality_values = metrics.get("quality", {})
+    quality_th = "".join(f"<th>{name}</th>" for name in added_columns)
+    quality_td = "".join(f"<td>{quality_values.get(name, '')}</td>" for name in quality_columns)
+    quality_cols = "<col/>" * len(added_columns)
+
+    # Standard single Sprint column format (10 columns)
     new_row_single = f"""
     <tr>
         <td>{display_sprint}</td>
@@ -706,9 +771,11 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         <td>{metrics.get('crit_bugs', '')}</td>
         <td>{metrics.get('resolved_bugs', '')}</td>
         <td>{metrics.get('cycle_time', '')}</td>
+        {quality_td}
     </tr>
     """
 
+    # Double Sprint column format (11 columns - for compatibility with pages containing both Sprint and Sprint Name)
     new_row_double = f"""
     <tr>
         <td>{sprint_val}</td>
@@ -722,12 +789,13 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         <td>{metrics.get('crit_bugs', '')}</td>
         <td>{metrics.get('resolved_bugs', '')}</td>
         <td>{metrics.get('cycle_time', '')}</td>
+        {quality_td}
     </tr>
     """
 
     base_table = f"""
     <table class="wrapped">
-        <colgroup><col/><col/><col/><col/><col/><col/><col/><col/><col/><col/></colgroup>
+        <colgroup><col/><col/><col/><col/><col/><col/><col/><col/><col/><col/>{quality_cols}</colgroup>
         <tbody>
             <tr>
                 <th>Sprint</th>
@@ -740,6 +808,7 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
                 <th>Critical Bugs (Sev A)</th>
                 <th>Resolved Bugs</th>
                 <th>Avg Cycle Time (Days)</th>
+                {quality_th}
             </tr>
             {new_row_single}
         </tbody>
@@ -789,15 +858,30 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         </tbody>
     </table>
     """
-    
+
+    quality_image_markup = """
+    <p><strong>Code Quality Evolution (SonarQube, SBOM Inventory, Vanguard)</strong></p>
+    <ac:image ac:original-height="250" ac:original-width="560">
+        <ri:attachment ri:filename="code_quality_chart.png" />
+    </ac:image>
+    """
+
     if results:
         page_id = results[0]["id"]
         current_version = results[0]["version"]["number"]
-        current_body = results[0]["body"]["storage"]["value"]
-        
+
+        if added_columns and existing_headers:
+            # ponytail: assumes the KPI table is the first table on the page, same as TableParser
+            header_end = current_body.find("</tr>")
+            current_body = current_body[:header_end] + quality_th + current_body[header_end:]
+            colgroup_end = current_body.find("</colgroup>")
+            if -1 < colgroup_end < header_end:
+                current_body = current_body[:colgroup_end] + quality_cols + current_body[colgroup_end:]
+
+        # Check if existing table has 10 columns (contains both Sprint and Sprint Name)
         is_double_header = "<th>Sprint Name</th>" in current_body and "<th>Sprint</th>" in current_body
         row_to_insert = new_row_double if is_double_header else new_row_single
-        
+        # Append row to existing table if present
         if "</tbody>" in current_body:
             new_body = current_body.replace("</tbody>", f"{row_to_insert}</tbody>", 1)
         elif "</table>" in current_body:
@@ -810,6 +894,9 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         new_body = re.sub(r'<p><strong>Historical KPI Evolution</strong></p>.*?</table>', '', new_body, flags=re.DOTALL)
         new_body = new_body.strip() + "<br/>" + image_markup
         
+        if quality_columns and "code_quality_chart.png" not in new_body:
+            new_body = new_body + "<br/>" + quality_image_markup
+
         update_url = f"{base_url}/rest/api/content/{page_id}"
         update_payload = {
             "id": page_id,
@@ -830,6 +917,8 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
     else:
         create_url = f"{base_url}/rest/api/content"
         new_body = f"<p>Sprint KPIs Overview</p>{base_table}<br/>{image_markup}"
+        if quality_columns:
+            new_body = new_body + "<br/>" + quality_image_markup
         create_payload = {
             "type": "page",
             "title": page_title,
@@ -846,6 +935,7 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         
         page_id = c_resp.json().get("id")
 
+    # Generate PNG charts from the updated table body and upload them
     df_hist = parse_confluence_html_table(new_body)
     if df_hist is not None:
         try:
