@@ -730,7 +730,7 @@ def find_confluence_page(base_url, headers, auth, space_key, page_title, attempt
     raise Exception("Confluence found the page but did not return its content. Please try again in a moment.")
 
 
-def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, page_title, sprint_val, sprint_name, metrics, dry_run=False):
+def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, page_title, sprint_val, sprint_name, metrics):
     if not server_url or not token or not space_key or not page_title:
         raise Exception("Required configuration fields (URL, Token, Space Key, Page Title) cannot be empty.")
         
@@ -896,8 +896,6 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         
         if quality_columns and "code_quality_chart.png" not in new_body:
             new_body = new_body + "<br/>" + quality_image_markup
-        if dry_run:
-            return new_body
 
         update_url = f"{base_url}/rest/api/content/{page_id}"
         update_payload = {
@@ -921,8 +919,6 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         new_body = f"<p>Sprint KPIs Overview</p>{base_table}<br/>{image_markup}"
         if quality_columns:
             new_body = new_body + "<br/>" + quality_image_markup
-        if dry_run:
-            return new_body
         create_payload = {
             "type": "page",
             "title": page_title,

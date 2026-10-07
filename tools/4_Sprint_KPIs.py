@@ -12,10 +12,8 @@ from utils.kpi_helpers import (
     fetch_sprint_kpi_data,
     publish_kpis_to_confluence,
     fetch_confluence_kpi_history,
-    generate_and_save_kpi_charts,
     sort_df_chronologically,
     format_sprint_label,
-    parse_confluence_html_table,
     QUALITY_KPIS, configured_quality_kpis, build_code_quality_chart
 )
 
@@ -460,64 +458,33 @@ def render_dashboard():
         with col_p:
             page_title = st.text_input("Page Title", value=default_conf_page, key="kpi_conf_page")
             
-        col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 1])
+        col_btn1, col_btn2 = st.columns([2, 1])
         with col_btn1:
             append_clicked = st.button("🚀 Append KPIs to Confluence", use_container_width=True)
         with col_btn2:
             fetch_clicked = st.button("🔄 Fetch Confluence History", use_container_width=True)
-        with col_btn3:
-            preview_clicked = st.button("👀 Preview (no upload)", use_container_width=True)
 
         auth_type = st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)")
         email = st.session_state.get("jira_email", "")
 
-        metrics = {
-            "dates": date_str,
-            "total_sp": f"{total_sp:g}",
-            "achieved_sp": f"{achieved_sp:g}",
-            "sprint_pct": f"{sprint_pct:.1f}%",
-            "releases": str(releases_count),
-            "open_bugs": str(open_bugs),
-            "crit_bugs": str(open_critical_bugs),
-            "resolved_bugs": str(resolved_bugs),
-            "cycle_time": f"{avg_cycle_time:.1f}" if pd.notna(avg_cycle_time) else "N/A",
-            "quality": st.session_state.current_sprint_metrics["quality"]
-        }
-        sprint_query_val = st.session_state.get("kpi_sprint_query", "Current Sprint")
-        sprint_name_val = st.session_state.get("kpi_sprint_name", sprint_query_val)
-
-        # Preview the exact table and charts without uploading to Confluence
-        if preview_clicked:
-            with st.spinner("Building preview from the Confluence page..."):
-                try:
-                    preview_body = publish_kpis_to_confluence(
-                        server_url=conf_server,
-                        auth_type=auth_type,
-                        token=conf_token,
-                        email=email,
-                        space_key=space_key,
-                        page_title=page_title,
-                        sprint_val=sprint_query_val,
-                        sprint_name=sprint_name_val,
-                        metrics=metrics,
-                        dry_run=True
-                    )
-                    st.info("Preview only: nothing was uploaded to Confluence.")
-                    df_preview = parse_confluence_html_table(preview_body)
-                    if df_preview is None:
-                        st.warning("Could not read the KPI table from the preview.")
-                    else:
-                        st.dataframe(df_preview, use_container_width=True, hide_index=True)
-                        for temp_path, chart_name in generate_and_save_kpi_charts(df_preview):
-                            with open(temp_path, "rb") as f:
-                                st.image(f.read(), caption=chart_name)
-                            os.remove(temp_path)
-                except Exception as ex:
-                    st.error(f"Failed to build preview: {str(ex)}")
-
         if append_clicked:
             with st.spinner("Publishing to Confluence..."):
                 try:
+                    metrics = {
+                        "dates": date_str,
+                        "total_sp": f"{total_sp:g}",
+                        "achieved_sp": f"{achieved_sp:g}",
+                        "sprint_pct": f"{sprint_pct:.1f}%",
+                        "releases": str(releases_count),
+                        "open_bugs": str(open_bugs),
+                        "crit_bugs": str(open_critical_bugs),
+                        "resolved_bugs": str(resolved_bugs),
+                        "cycle_time": f"{avg_cycle_time:.1f}" if pd.notna(avg_cycle_time) else "N/A",
+                        "quality": st.session_state.current_sprint_metrics["quality"]
+                    }
+                    sprint_query_val = st.session_state.get("kpi_sprint_query", "Current Sprint")
+                    sprint_name_val = st.session_state.get("kpi_sprint_name", sprint_query_val)
+
                     page_url = publish_kpis_to_confluence(
                         server_url=conf_server,
                         auth_type=auth_type,
