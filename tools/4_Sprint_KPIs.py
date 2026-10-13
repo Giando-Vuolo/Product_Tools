@@ -14,7 +14,8 @@ from utils.kpi_helpers import (
     fetch_confluence_kpi_history,
     sort_df_chronologically,
     format_sprint_label,
-    QUALITY_KPIS, configured_quality_kpis, build_code_quality_chart
+    QUALITY_KPIS, configured_quality_kpis, build_code_quality_chart,
+    SCOPE_KPIS, build_scope_chart
 )
 
 from utils.sonar_helpers import SONAR_KPIS, sonar_configured, fetch_sonar_kpis, format_kpi_value
@@ -62,6 +63,8 @@ def fetch_sprint_kpi_dataset():
     st.session_state.kpi_quality = quality_kpis
     st.session_state.kpi_data = res.get("df", pd.DataFrame())
     st.session_state.kpi_gh_added_keys = res.get("gh_added_keys", [])
+    st.session_state.kpi_scope_counts = res.get("scope_counts")
+    st.session_state.kpi_scope_error = res.get("scope_error")
     st.session_state.kpi_releases_count = res.get("releases_count", 0)
     st.session_state.kpi_global_open_bugs = res.get("global_open_bugs", 0)
     st.session_state.kpi_global_critical_bugs = res.get("global_critical_bugs", 0)
@@ -106,6 +109,8 @@ def render_confluence_kpi_charts(df_hist):
                 col_lower = col.lower().strip()
                 if col.strip() in QUALITY_KPIS:
                     new_row[col] = current_metrics.get("quality", {}).get(col.strip(), "")
+                elif col.strip() in SCOPE_KPIS:
+                    new_row[col] = current_metrics.get("scope", {}).get(col.strip(), "")
                 elif "sprint name" in col_lower:
                     new_row[col] = sprint_name_val
                 elif "sprint" in col_lower:
@@ -287,6 +292,16 @@ def render_confluence_kpi_charts(df_hist):
         st.markdown("<br/>", unsafe_allow_html=True)
         st.caption("Code Quality Trend (SonarQube, SBOM Inventory, Vanguard)")
         st.altair_chart(chart_quality)
+
+    for name in SCOPE_KPIS:
+        if find_column(df_plot, [name]):
+            df_plot[name] = extract_numeric_col(df_plot, [name])
+    chart_scope = build_scope_chart(df_plot)
+    if chart_scope is not None:
+        st.markdown("<br/>", unsafe_allow_html=True)
+        st.markdown("**Sprint Scope (Issues)**")
+        st.markdown("<small>Shows how the sprint scope changed and how much of it was finished.<br/><b>Calculation:</b> Counts from Jira's sprint report for the selected issue types (no sub-tasks). Issues at Sprint Start includes issues removed later; Issues Completed includes issues added during the sprint.</small>", unsafe_allow_html=True)
+        st.altair_chart(chart_scope, use_container_width=True)
 def render_dashboard():
     df = st.session_state.kpi_data
     if df is None or df.empty:
@@ -319,18 +334,28 @@ def render_dashboard():
         st.caption("⚠️ Could not detect Sprint dates. Releases metric will be 0.")
         
     gh_added_keys = st.session_state.get("kpi_gh_added_keys", [])
-    
-    # "Committed SP (at Start)": Exclude any issue that was added after the sprint started (scope creep)
-    # This ensures we respect the user's Issue Type filters (e.g. if they unchecked "Task")
-    total_sp = df_calc[~df_calc["Key"].isin(gh_added_keys)]["Story Points"].sum()
-    
-    # "Delivered SP (Total)": Sum of all resolved issues (including scope creep)
+
+    # Scope: in the sprint when it started, or added later (from Jira's sprint report; unknown without it)
+    if st.session_state.get("kpi_scope_counts"):
+        df["Scope"] = df["Key"].apply(lambda k: "Additional scope" if k in gh_added_keys else "Sprint scope")
+    else:
+        df["Scope"] = "Unknown"
+    df_calc = df[df["Include"] == True]
+
+    # "Committed SP (at Start)": issues with Sprint scope (all included issues if the scope is unknown)
+    total_sp = df_calc[df_calc["Scope"] != "Additional scope"]["Story Points"].sum()
+
+    # "Delivered SP (Total)": issues resolved in this sprint (Sprint Resolved), Sprint or Additional scope
     achieved_sp = df_calc[df_calc["Resolved"] == True]["Story Points"].sum()
     
     if gh_added_keys:
         st.caption("✨ Committed SP accurately excludes scope creep tickets added mid-sprint.")
     
     sprint_pct = (achieved_sp / total_sp * 100) if total_sp > 0 else 0
+
+    # Issue counts come straight from Jira's sprint report so they match its sprint report and burndown chart.
+    scope_counts = st.session_state.get("kpi_scope_counts")
+    scope_kpis = {name: str(scope_counts[name]) if scope_counts else "" for name in SCOPE_KPIS}
     
     releases_count = st.session_state.get("kpi_releases_count", 0)
     
@@ -365,15 +390,16 @@ def render_dashboard():
         "crit_bugs": open_critical_bugs,
         "resolved_bugs": resolved_bugs,
         "cycle_time": avg_cycle_time,
+        "scope": scope_kpis,
         "quality": {name: format_kpi_value(name, quality_kpis.get(name)) for name in QUALITY_KPIS}
     }
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Committed SP (at Start)", f"{total_sp:g}", help="Sums the Story Points of all tickets in the sprint, strictly excluding any tickets identified by Jira as being added after the sprint started (scope creep).")
-        st.metric("Delivered SP (Total)", f"{achieved_sp:g}", help="Sums the Story Points of all tickets in the sprint where a resolution date exists and is on or before the sprint's official End Date.")
+        st.metric("Committed SP (at Start)", f"{total_sp:g}", help="Sums the Story Points of the tickets with Scope = 'Sprint scope' (in the sprint when it started). Tickets added after the sprint started (Additional scope) are excluded.")
+        st.metric("Delivered SP (Total)", f"{achieved_sp:g}", help="Sums the Story Points of the tickets resolved in this sprint (Sprint Resolved = this sprint), both Sprint scope and Additional scope. Tickets resolved in a later sprint are excluded.")
     with col2:
-        st.metric("Delivery %", f"{sprint_pct:.1f}%", help="Calculated as (Delivered SP / Committed SP) * 100. It is possible for this metric to exceed 100% if the team completes scope creep tickets.")
+        st.metric("Delivery %", f"{sprint_pct:.1f}%", help="Calculated as (Delivered SP / Committed SP) * 100. It can exceed 100% if the team completes Additional scope tickets.")
         st.metric("Sprint Releases", str(releases_count))
     with col3:
         st.metric("Resolved Bugs", str(resolved_bugs))
@@ -381,6 +407,14 @@ def render_dashboard():
     with col4:
         st.metric("Project Open Bugs (Sev A + B)", str(open_bugs), help="Counts all tickets of type 'Bug' with labels Sev-A or Sev-B that were created before the sprint ended, and were either still unresolved or resolved after the sprint started.")
         st.metric("Project Critical Open Bugs (Sev A)", str(open_critical_bugs), help="Same calculation as Open Bugs, but strictly filtered for the Sev-A label.")
+
+    st.caption("Sprint Scope (Issues), from Jira's sprint report for the selected issue types (sub-tasks are never included)"
+               + ("" if scope_counts else " · ⚠️ Click 🚀 Calculate KPIs to load these counts." if "kpi_scope_error" not in st.session_state
+                  else f" · ⚠️ Jira's sprint report could not be read ({st.session_state.kpi_scope_error})."))
+    col_s1, col_s2, col_s3, _ = st.columns(4)
+    col_s1.metric(SCOPE_KPIS[0], scope_kpis[SCOPE_KPIS[0]] or "N/A", help="Issues in the sprint when it started, including those removed from the sprint later. Matches the starting issue count of Jira's burndown chart.")
+    col_s2.metric(SCOPE_KPIS[1], scope_kpis[SCOPE_KPIS[1]] or "N/A", help="Issues Jira's sprint report lists as added after the sprint started (scope creep), including those removed again.")
+    col_s3.metric(SCOPE_KPIS[2], scope_kpis[SCOPE_KPIS[2]] or "N/A", help="Issues Jira's sprint report lists as completed in this sprint, including those added during the sprint.")
 
     quality_names = configured_quality_kpis()
     if quality_names:
@@ -407,10 +441,11 @@ def render_dashboard():
     server_clean = st.session_state.get("jira_server", "").rstrip("/")
     if "Jira URL" not in df.columns:
         df["Jira URL"] = df["Key"].apply(lambda k: f"{server_clean}/browse/{k}" if server_clean else k)
-    if "Labels" not in df.columns:
-        df["Labels"] = ""
+    for col in ("Labels", "Summary", "Sprint Resolved"):
+        if col not in df.columns:
+            df[col] = ""
 
-    disp_df = df[["Include", "Jira URL", "Type", "Status", "Labels", "Story Points", "Resolved", "Last In Progress", "Resolved At", "Cycle Time (Days)"]].copy()
+    disp_df = df[["Include", "Jira URL", "Summary", "Scope", "Type", "Status", "Labels", "Story Points", "Resolved", "Sprint Resolved", "Last In Progress", "Resolved At", "Cycle Time (Days)"]].copy()
     disp_df["Last In Progress"] = disp_df["Last In Progress"].apply(lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else "-")
     disp_df["Resolved At"] = disp_df["Resolved At"].apply(lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else "-")
     disp_df = disp_df.rename(columns={
@@ -425,7 +460,7 @@ def render_dashboard():
         disp_df,
         key="kpi_editor",
         use_container_width=True,
-        disabled=["Key", "Type", "Status", "Labels", "Story Points", "Resolved", "Start Date", "Resolved Date", "Cycle Time (Days)"],
+        disabled=["Key", "Summary", "Scope", "Sprint Resolved", "Type", "Status", "Labels", "Story Points", "Resolved", "Start Date", "Resolved Date", "Cycle Time (Days)"],
         column_config={
             "Include": st.column_config.CheckboxColumn("Include", default=True),
             "Key": st.column_config.LinkColumn(
@@ -480,6 +515,7 @@ def render_dashboard():
                         "crit_bugs": str(open_critical_bugs),
                         "resolved_bugs": str(resolved_bugs),
                         "cycle_time": f"{avg_cycle_time:.1f}" if pd.notna(avg_cycle_time) else "N/A",
+                        "scope": scope_kpis,
                         "quality": st.session_state.current_sprint_metrics["quality"]
                     }
                     sprint_query_val = st.session_state.get("kpi_sprint_query", "Current Sprint")
@@ -542,33 +578,32 @@ with col_s:
 
 st.markdown("**Filter Ingested Issue Types**")
 st.write("Select which issue types should be loaded into the workspace:")
-DEFAULT_INCLUDED_TYPES = os.getenv("DEFAULT_INCLUDED_TYPES", "User Story, Task, Improvement, Bug")
 col_cb1, col_cb2, col_cb3, col_cb4, col_cb5, col_cb6, col_cb7 = st.columns(7)
 with col_cb1:
     inc_all = st.checkbox("All / Everything", value=False, key="kpi_inc_all")
 with col_cb2:
-    inc_story = st.checkbox("User Story", value=("User Story" in DEFAULT_INCLUDED_TYPES), key="kpi_inc_story", disabled=inc_all)
+    inc_story = st.checkbox("User Story", value=True, key="kpi_inc_story", disabled=inc_all)
 with col_cb3:
-    inc_task = st.checkbox("Task", value=("Task" in DEFAULT_INCLUDED_TYPES), key="kpi_inc_task", disabled=inc_all)
+    inc_task = st.checkbox("Task", value=True, key="kpi_inc_task", disabled=inc_all)
 with col_cb4:
-    inc_tech = st.checkbox("Technical Task", value=("Technical Task" in DEFAULT_INCLUDED_TYPES), key="kpi_inc_tech", disabled=inc_all)
+    inc_improvement = st.checkbox("Improvement", value=True, key="kpi_inc_improvement", disabled=inc_all)
 with col_cb5:
-    inc_subtask = st.checkbox("Sub-task", value=("Sub-task" in DEFAULT_INCLUDED_TYPES), key="kpi_inc_subtask", disabled=inc_all)
+    inc_bug = st.checkbox("Bug", value=True, key="kpi_inc_bug", disabled=inc_all)
 with col_cb6:
-    inc_improvement = st.checkbox("Improvement", value=("Improvement" in DEFAULT_INCLUDED_TYPES), key="kpi_inc_improvement", disabled=inc_all)
+    inc_tech = st.checkbox("Technical Task", value=False, key="kpi_inc_tech", disabled=inc_all)
 with col_cb7:
-    inc_bug = st.checkbox("Bug", value=("Bug" in DEFAULT_INCLUDED_TYPES), key="kpi_inc_bug", disabled=inc_all)
+    inc_subtask = st.checkbox("Sub-task", value=False, key="kpi_inc_subtask", disabled=inc_all)
 
 st.markdown("<br/>", unsafe_allow_html=True)
 if st.button("🚀 Calculate KPIs", use_container_width=True):
     selected_types = []
     if not inc_all:
-        if inc_story: selected_types.append("User Story")
+        if inc_story: selected_types += ["User Story", "Story"]  # Jira names this type "Story" on some instances
         if inc_task: selected_types.append("Task")
-        if inc_tech: selected_types.append("Technical Task")
-        if inc_subtask: selected_types.append("Sub-task")
         if inc_improvement: selected_types.append("Improvement")
         if inc_bug: selected_types.append("Bug")
+        if inc_tech: selected_types.append("Technical Task")
+        if inc_subtask: selected_types.append("Sub-task")
     st.session_state.kpi_selected_types = selected_types
     fetch_sprint_kpi_dataset()
 
