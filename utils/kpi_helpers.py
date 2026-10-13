@@ -13,8 +13,90 @@ from utils.vanguard_helpers import VANGUARD_KPI, vanguard_configured
 
 QUALITY_KPIS = [*SONAR_KPIS.values(), SBOM_KPI, VANGUARD_KPI]
 
-# Issue counts for the sprint scope: dashboard metrics, Confluence columns and the Sprint Scope chart.
-SCOPE_KPIS = ["Issues at Sprint Start", "Issues Added During Sprint", "Issues Completed in Sprint"]
+# Item-count KPIs (number of tickets, not story points). Counts come from Jira's sprint report
+# (see fetch_exact_sprint_report), so they match Jira's sprint report and burndown chart.
+ITEMS_COMMITTED_KPI = "Committed"
+ITEMS_ADDED_KPI = "Added"
+ITEMS_DELIVERED_KPI = "Delivered"
+ITEM_KPIS = [ITEMS_COMMITTED_KPI, ITEMS_ADDED_KPI, ITEMS_DELIVERED_KPI]
+
+# Headers an upstream version used for the same counts; only kept so existing Confluence tables still parse.
+LEGACY_SCOPE_KPIS = ["Issues at Sprint Start", "Issues Added During Sprint", "Issues Completed in Sprint"]
+
+# Columns that may be appended at the end of an existing Confluence KPI table
+APPENDABLE_KPIS = ITEM_KPIS + LEGACY_SCOPE_KPIS + QUALITY_KPIS
+
+# Standard (non-appendable) columns of the Confluence KPI table, in order
+BASE_KPI_HEADERS = [
+    "Sprint", "Target Dates", "Committed SP (at Start)", "Delivered SP (Total)", "Delivery %", "Releases",
+    "Open Bugs (Sev A+B)", "Critical Bugs (Sev A)", "Resolved Bugs", "Avg Cycle Time (Days)",
+]
+BASE_METRIC_KEYS = ["dates", "total_sp", "achieved_sp", "sprint_pct", "releases", "open_bugs", "crit_bugs", "resolved_bugs", "cycle_time"]
+
+
+def compute_sprint_metrics(res):
+    """Turns a fetch_sprint_kpi_data() result into the metrics dict used by publish_kpis_to_confluence (all issues included)."""
+    df = res.get("df")
+    if df is None:
+        df = pd.DataFrame()
+    added_keys = res.get("gh_added_keys") or []
+    scope_counts = res.get("scope_counts")
+    s_start, s_end = res.get("sprint_start"), res.get("sprint_end")
+
+    if df.empty:
+        total_sp = achieved_sp = 0.0
+        resolved_bugs = 0
+        avg_cycle_time = 0
+    else:
+        # Scope is only known when Jira's sprint report could be read; otherwise everything counts as committed
+        is_added = df["Key"].isin(added_keys) if scope_counts else pd.Series(False, index=df.index)
+        # "Resolved" already means "resolved in this sprint" (Sprint Resolved == sprint), set in fetch_sprint_kpi_data
+        resolved = df["Resolved"] == True
+        total_sp = df[~is_added]["Story Points"].sum()
+        achieved_sp = df[resolved]["Story Points"].sum()
+        resolved_bugs = int((resolved & (df["Is Bug"] == True)).sum())
+        avg_cycle_time = df["Cycle Time (Days)"].mean()
+        avg_cycle_time = round(avg_cycle_time, 2) if pd.notnull(avg_cycle_time) else 0
+
+    sprint_pct = (achieved_sp / total_sp * 100) if total_sp > 0 else 0
+    return {
+        "dates": f"{s_start.strftime('%Y-%m-%d')} to {s_end.strftime('%Y-%m-%d')}" if (s_start and s_end) else "Unknown",
+        "total_sp": f"{total_sp:g}",
+        "achieved_sp": f"{achieved_sp:g}",
+        "sprint_pct": f"{sprint_pct:.1f}%",
+        "releases": str(res.get("releases_count", 0)),
+        "open_bugs": str(res.get("global_open_bugs", 0)),
+        "crit_bugs": str(res.get("global_critical_bugs", 0)),
+        "resolved_bugs": str(resolved_bugs),
+        "cycle_time": f"{avg_cycle_time:.1f}",
+        "items": {name: str(scope_counts[name]) if scope_counts else "" for name in ITEM_KPIS},
+        "quality": {},
+    }
+
+
+def metrics_to_table_row(sprint_name, metrics):
+    """One row with the same column names as the Confluence KPI table."""
+    row = dict(zip(BASE_KPI_HEADERS, [sprint_name] + [metrics.get(k, "") for k in BASE_METRIC_KEYS]))
+    row.update(metrics.get("items", {}))
+    row.update({k: v for k, v in metrics.get("quality", {}).items() if v not in (None, "")})
+    return row
+
+
+def remove_sprint_rows(body, sprint_names):
+    """Removes rows of the first table whose first or second cell matches one of sprint_names."""
+    names = {str(n).strip() for n in sprint_names if n}
+    start = body.find("<table")
+    end = body.find("</table>", start)
+    if start == -1 or end == -1 or not names:
+        return body
+    table = body[start:end]
+
+    def keep(match):
+        cells = [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<td[^>]*>(.*?)</td>", match.group(0), flags=re.DOTALL)]
+        return "" if any(c in names for c in cells[:2]) else match.group(0)
+
+    table = re.sub(r"<tr\b.*?</tr>", keep, table, flags=re.DOTALL)
+    return body[:start] + table + body[end:]
 
 def configured_quality_kpis():
     return ((list(SONAR_KPIS.values()) if sonar_configured() else [])
@@ -130,7 +212,7 @@ def fetch_exact_sprint_report(server, headers, auth, sprint_id, selected_types=N
                         if not selected_types or type_names.get(str(issue.get("typeId"))) in selected_types}
             report_keys = keys_in(("completedIssues", "issuesNotCompletedInCurrentSprint", "puntedIssues", "issuesCompletedInAnotherSprint"))
             issues_added = len(report_keys & set(added_keys))
-            scope_counts = dict(zip(SCOPE_KPIS, (len(report_keys) - issues_added, issues_added, len(keys_in(("completedIssues",))))))
+            scope_counts = dict(zip(ITEM_KPIS, (len(report_keys) - issues_added, issues_added, len(keys_in(("completedIssues",))))))
 
             return total_committed, total_achieved, added_keys, scope_counts, None
         except Exception as e:
@@ -533,6 +615,119 @@ def format_sprint_label(label, max_len=12):
         return s
     return "..." + s[-(max_len - 3):]
 
+def build_items_chart(df_plot):
+    """Stacked/Grouped bars: items committed + added are stacked vs delivered. Expects numeric ITEM_KPIS columns."""
+    req_cols = ["Sprint Display", ITEMS_COMMITTED_KPI, ITEMS_ADDED_KPI, ITEMS_DELIVERED_KPI]
+    missing = [c for c in req_cols if c not in df_plot.columns]
+    if missing:
+        return None
+        
+    df_items = df_plot[req_cols].dropna(
+        subset=[ITEMS_COMMITTED_KPI, ITEMS_ADDED_KPI, ITEMS_DELIVERED_KPI], 
+        how="all"
+    )
+    if df_items.empty:
+        return None
+
+    # Melt the dataframe for Altair
+    df_melted = df_items.melt(
+        id_vars=["Sprint Display"],
+        value_vars=[ITEMS_COMMITTED_KPI, ITEMS_ADDED_KPI, ITEMS_DELIVERED_KPI],
+        var_name="Metric",
+        value_name="Items"
+    ).dropna(subset=["Items"])
+    
+    # Create a "Group" column to split the visualization into two distinct columns per sprint
+    df_melted["Group"] = df_melted["Metric"].apply(
+        lambda m: "Scope (Committed + Added)" if m in [ITEMS_COMMITTED_KPI, ITEMS_ADDED_KPI] else "Delivered"
+    )
+    
+    # Map a stack order so 'Committed' is always on the bottom of the stacked bar
+    order_map = {ITEMS_COMMITTED_KPI: 1, ITEMS_ADDED_KPI: 2, ITEMS_DELIVERED_KPI: 1}
+    df_melted["StackOrder"] = df_melted["Metric"].map(order_map)
+
+    # Pre-calcular las posiciones verticales (Y) para centrar los textos correctamente en las barras apiladas
+    df_melted = df_melted.sort_values(by=["Sprint Display", "Group", "StackOrder"])
+    df_melted["y_top"] = df_melted.groupby(["Sprint Display", "Group"])["Items"].cumsum()
+    df_melted["y_mid"] = df_melted["y_top"] - (df_melted["Items"] / 2)
+
+    # Configuración base compartida
+    base = alt.Chart(df_melted).encode(
+        x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0), sort=None),
+        xOffset=alt.XOffset("Group:N", sort=["Scope (Committed + Added)", "Delivered"])
+    )
+
+    # 1. Capa de las Barras
+    bars = base.mark_bar().encode(
+        y=alt.Y("Items:Q", title="Items"),
+        color=alt.Color(
+            "Metric:N", 
+            legend=alt.Legend(orient="top", title=None, symbolType="circle"),
+            scale=alt.Scale(
+                domain=[ITEMS_COMMITTED_KPI, ITEMS_ADDED_KPI, ITEMS_DELIVERED_KPI],
+                range=["#42a5f5", "#ff7043", "#66bb6a"] # Azul claro, Naranja claro, Verde
+            )
+        ),
+        order=alt.Order("StackOrder:O", sort="ascending"),
+        tooltip=[
+            alt.Tooltip("Sprint Display:N", title="Sprint"),
+            alt.Tooltip("Group:N", title="Category"),
+            alt.Tooltip("Metric:N", title="Metric"),
+            alt.Tooltip("Items:Q", title="Items")
+        ]
+    )
+    
+    # 2. Capa de Texto para Scope (Committed y Added): Centrado en su sección de la barra
+    text_scope = base.transform_filter(
+        (alt.datum.Metric != ITEMS_DELIVERED_KPI) & (alt.datum.Items > 0)
+    ).mark_text(
+        align='center', 
+        baseline='middle'
+    ).encode(
+        y=alt.Y("y_mid:Q"),
+        text=alt.Text("Items:Q", format=".0f"),
+        color=alt.condition(
+            alt.datum.Metric == ITEMS_COMMITTED_KPI,
+            alt.value("#0d47a1"), # Azul más oscuro
+            alt.value("#bf360c")  # Naranja más oscuro
+        )
+    )
+
+    # 3. Capa de Texto para el TOTAL de Scope: Flotando encima de la barra apilada en color blanco
+    text_scope_total = base.transform_filter(
+        alt.datum.Group == "Scope (Committed + Added)"
+    ).transform_aggregate(
+        total_items='sum(Items)',
+        groupby=['Sprint Display', 'Group']
+    ).transform_filter(
+        alt.datum.total_items > 0
+    ).mark_text(
+        align='center', 
+        baseline='bottom', 
+        dy=-5,
+        color='white'
+    ).encode(
+        y=alt.Y("total_items:Q"),
+        text=alt.Text("total_items:Q", format=".0f")
+    )
+    
+    # 4. Capa de Texto para Delivered: Flotando encima de la barra
+    text_delivered = base.transform_filter(
+        (alt.datum.Metric == ITEMS_DELIVERED_KPI) & (alt.datum.Items > 0)
+    ).mark_text(
+        align='center', 
+        baseline='bottom', 
+        dy=-5,
+        color='#66bb6a' # Mismo color verde que la barra
+    ).encode(
+        y=alt.Y("y_top:Q"),
+        text=alt.Text("Items:Q", format=".0f")
+    )
+    
+    # Combinar todas las capas (añadimos text_scope_total)
+    return bars + text_scope + text_scope_total + text_delivered
+
+
 def build_code_quality_chart(df_plot):
     """One small line chart per quality KPI, each with its own scale (smells ~3000, coverage ~90%, issues ~3)."""
     cols = [c for c in QUALITY_KPIS if c in df_plot.columns]
@@ -549,24 +744,6 @@ def build_code_quality_chart(df_plot):
     return alt.layer(line, text, data=df_q).properties(width=150, height=200).facet(
         column=alt.Column("Metric:N", title=None, sort=QUALITY_KPIS)
     ).resolve_scale(y="independent")
-
-
-def build_scope_chart(df_plot):
-    """Grouped bars: issues at sprint start, added during the sprint and completed, per sprint."""
-    cols = [c for c in SCOPE_KPIS if c in df_plot.columns]
-    df_s = df_plot[["Sprint Display"] + cols].dropna(subset=cols, how="all") if cols else pd.DataFrame()
-    if df_s.empty:
-        return None
-    df_s = df_s.melt(id_vars=["Sprint Display"], value_vars=cols, var_name="Metric", value_name="Issues").dropna(subset=["Issues"])
-    bars = alt.Chart(df_s).mark_bar().encode(
-        x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0), sort=None),
-        xOffset=alt.XOffset("Metric:N", sort=SCOPE_KPIS),
-        y=alt.Y("Issues:Q", title="Issues"),
-        color=alt.Color("Metric:N", sort=SCOPE_KPIS, legend=alt.Legend(orient="top", title=None), scale=alt.Scale(domain=SCOPE_KPIS, range=["#42a5f5", "#ff7043", "#66bb6a"])),
-        tooltip=["Sprint Display", "Metric", "Issues"]
-    )
-    text = bars.mark_text(align='center', baseline='bottom', dy=-5).encode(text=alt.Text("Issues:Q", format=".0f"))
-    return (bars + text).properties(height=280)
 
 
 def generate_and_save_kpi_charts(df_hist):
@@ -686,6 +863,16 @@ def generate_and_save_kpi_charts(df_hist):
         chart_bugs.save(path_bugs)
         saved_files.append((path_bugs, "bugs_chart.png"))
 
+    # Items Committed vs Added vs Delivered (only if the table has the item columns)
+    for name in ITEM_KPIS:
+        if name in df_plot.columns:  # exact match: "Committed" must not pick up "Committed SP (at Start)"
+            df_plot[name] = extract_numeric_col(df_plot, [name])
+    chart_items = build_items_chart(df_plot)
+    if chart_items is not None:
+        path_items = "temp_items_chart.png"
+        chart_items.properties(width=500, height=280).save(path_items)
+        saved_files.append((path_items, "items_chart.png"))
+
     # 5. Code Quality Chart (quality columns, only if the table has them)
     for name in QUALITY_KPIS:
         if find_column(df_plot, [name]):
@@ -695,15 +882,6 @@ def generate_and_save_kpi_charts(df_hist):
         path_quality = "temp_code_quality_chart.png"
         chart_quality.save(path_quality)
         saved_files.append((path_quality, "code_quality_chart.png"))
-
-    for name in SCOPE_KPIS:
-        if find_column(df_plot, [name]):
-            df_plot[name] = extract_numeric_col(df_plot, [name])
-    chart_scope = build_scope_chart(df_plot)
-    if chart_scope is not None:
-        path_scope = "temp_scope_chart.png"
-        chart_scope.properties(width=500).save(path_scope)
-        saved_files.append((path_scope, "scope_chart.png"))
 
     return saved_files
 
@@ -749,8 +927,8 @@ def parse_confluence_html_table(html_body):
             return None
         headers = parser.rows[0]
         data_rows = parser.rows[1:]
-        # Pad rows written before the scope or quality columns existed; drop any other length mismatch for safety
-        valid_rows = [r + [""] * (len(headers) - len(r)) for r in data_rows if len(r) <= len(headers) and all(h in SCOPE_KPIS + QUALITY_KPIS for h in headers[len(r):])]
+        # Pad rows written before the item-count or quality columns existed; drop any other length mismatch for safety
+        valid_rows = [r + [""] * (len(headers) - len(r)) for r in data_rows if len(r) <= len(headers) and all(h in APPENDABLE_KPIS for h in headers[len(r):])]
         return pd.DataFrame(valid_rows, columns=headers)
     except Exception:
         return None
@@ -802,7 +980,8 @@ def find_confluence_page(base_url, headers, auth, space_key, page_title, attempt
     raise Exception("Confluence found the page but did not return its content. Please try again in a moment.")
 
 
-def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, page_title, sprint_val, sprint_name, metrics):
+def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, page_title, sprint_val, sprint_name, metrics,
+                               replace_existing=False, upload_charts=True):
     if not server_url or not token or not space_key or not page_title:
         raise Exception("Required configuration fields (URL, Token, Space Key, Page Title) cannot be empty.")
         
@@ -817,16 +996,18 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
 
     display_sprint = sprint_name if sprint_name else sprint_val
 
-    # Extra columns (sprint scope issue counts, then SonarQube, SBOM Inventory, Vanguard) go at the end of the table.
-    # Each one is appended to an existing table the first time it is available, and kept (empty if unavailable) once there.
+    # Item-count columns and quality columns (SonarQube, SBOM Inventory, Vanguard) go at the end of the table. Each one is
+    # appended to an existing table the first time it is available, and kept (empty if the source is unavailable) once there.
     current_body = results[0]["body"]["storage"]["value"] if results else ""
     header_parser = TableParser()
     header_parser.feed(current_body)
     existing_headers = header_parser.rows[0] if header_parser.rows else []
-    added_columns = [name for name in SCOPE_KPIS + configured_quality_kpis() if name not in existing_headers]
-    extra_columns = [h for h in existing_headers if h in SCOPE_KPIS + QUALITY_KPIS] + added_columns
-    quality_columns = [h for h in extra_columns if h in QUALITY_KPIS]
-    extra_values = {**metrics.get("scope", {}), **metrics.get("quality", {})}
+    added_columns = [name for name in ITEM_KPIS + configured_quality_kpis() if name not in existing_headers]
+    extra_columns = [h for h in existing_headers if h in APPENDABLE_KPIS] + added_columns
+    quality_columns = [c for c in extra_columns if c in QUALITY_KPIS]
+    item_values = metrics.get("items", {})
+    legacy_values = {legacy: item_values.get(name, "") for legacy, name in zip(LEGACY_SCOPE_KPIS, ITEM_KPIS)}
+    extra_values = {**item_values, **legacy_values, **metrics.get("quality", {})}
     quality_th = "".join(f"<th>{name}</th>" for name in added_columns)
     quality_td = "".join(f"<td>{extra_values.get(name, '')}</td>" for name in extra_columns)
     quality_cols = "<col/>" * len(added_columns)
@@ -928,6 +1109,17 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
                     </ac:image>
                 </td>
             </tr>
+            <tr>
+                <td style="text-align: center;">
+                    <h4>Items Committed vs Added vs Delivered</h4>
+                    <p style="font-size: 12px; color: #555;"><em>Compares the number of tickets committed at sprint start, added during the sprint and finally delivered.</em><br/>
+                    <span style="font-size: 11px;"><b>Calculation:</b> Committed = tickets in the sprint at start (excludes scope creep). Added = tickets flagged by Jira as added after sprint start. Delivered = all tickets resolved on or before the sprint's End Date.</span></p>
+                    <ac:image ac:original-height="280" ac:original-width="500">
+                        <ri:attachment ri:filename="items_chart.png" />
+                    </ac:image>
+                </td>
+                <td></td>
+            </tr>
         </tbody>
     </table>
     """
@@ -936,14 +1128,6 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
     <p><strong>Code Quality Evolution (SonarQube, SBOM Inventory, Vanguard)</strong></p>
     <ac:image ac:original-height="250" ac:original-width="560">
         <ri:attachment ri:filename="code_quality_chart.png" />
-    </ac:image>
-    """
-
-    scope_image_markup = """
-    <p><strong>Sprint Scope Evolution (Issues)</strong></p>
-    <p style="font-size: 12px; color: #555;"><em>Issues in the sprint when it started, issues added after it started, and issues completed, as counted by Jira's sprint report.</em></p>
-    <ac:image ac:original-height="280" ac:original-width="500">
-        <ri:attachment ri:filename="scope_chart.png" />
     </ac:image>
     """
 
@@ -962,6 +1146,8 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         # Check if existing table has 10 columns (contains both Sprint and Sprint Name)
         is_double_header = "<th>Sprint Name</th>" in current_body and "<th>Sprint</th>" in current_body
         row_to_insert = new_row_double if is_double_header else new_row_single
+        if replace_existing:
+            current_body = remove_sprint_rows(current_body, [display_sprint, sprint_val])
         # Append row to existing table if present
         if "</tbody>" in current_body:
             new_body = current_body.replace("</tbody>", f"{row_to_insert}</tbody>", 1)
@@ -972,13 +1158,13 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
 
         # Always update the charts section to ensure the latest titles and descriptions are visible
         new_body = re.sub(r'<br/>\s*<p><strong>Historical KPI Evolution</strong></p>.*?</table>', '', new_body, flags=re.DOTALL)
-        new_body = re.sub(r'<p><strong>Historical KPI Evolution</strong></p>.*?</table>', '', new_body, flags=re.DOTALL)
+        new_body = re.sub(r'\s*<p><strong>Historical KPI Evolution</strong></p>.*?</table>', '', new_body, flags=re.DOTALL)
+        # The separate "Sprint Scope Evolution" section is superseded by the items chart in Historical KPI Evolution
+        new_body = re.sub(r'(<br/>)?\s*<p><strong>Sprint Scope Evolution \(Issues\)</strong></p>.*?</ac:image>', '', new_body, flags=re.DOTALL)
         new_body = new_body.strip() + "<br/>" + image_markup
         
         if quality_columns and "code_quality_chart.png" not in new_body:
             new_body = new_body + "<br/>" + quality_image_markup
-        if "scope_chart.png" not in new_body:
-            new_body = new_body + "<br/>" + scope_image_markup
 
         update_url = f"{base_url}/rest/api/content/{page_id}"
         update_payload = {
@@ -999,7 +1185,7 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
             
     else:
         create_url = f"{base_url}/rest/api/content"
-        new_body = f"<p>Sprint KPIs Overview</p>{base_table}<br/>{image_markup}<br/>{scope_image_markup}"
+        new_body = f"<p>Sprint KPIs Overview</p>{base_table}<br/>{image_markup}"
         if quality_columns:
             new_body = new_body + "<br/>" + quality_image_markup
         create_payload = {
@@ -1019,7 +1205,7 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         page_id = c_resp.json().get("id")
 
     # Generate PNG charts from the updated table body and upload them
-    df_hist = parse_confluence_html_table(new_body)
+    df_hist = parse_confluence_html_table(new_body) if upload_charts else None
     if df_hist is not None:
         try:
             saved_files = generate_and_save_kpi_charts(df_hist)

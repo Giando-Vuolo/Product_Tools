@@ -15,7 +15,8 @@ from utils.kpi_helpers import (
     sort_df_chronologically,
     format_sprint_label,
     QUALITY_KPIS, configured_quality_kpis, build_code_quality_chart,
-    SCOPE_KPIS, build_scope_chart
+    ITEM_KPIS, ITEMS_COMMITTED_KPI, ITEMS_ADDED_KPI, ITEMS_DELIVERED_KPI, build_items_chart,
+    compute_sprint_metrics, metrics_to_table_row
 )
 
 from utils.sonar_helpers import SONAR_KPIS, sonar_configured, fetch_sonar_kpis, format_kpi_value
@@ -73,7 +74,7 @@ def fetch_sprint_kpi_dataset():
     st.session_state.kpi_sprint_name = res.get("sprint_name")
     st.session_state.kpi_loading = False
 
-def render_confluence_kpi_charts(df_hist):
+def render_confluence_kpi_charts(df_hist, include_current=True, max_sprints=5):
     if df_hist is None or df_hist.empty:
         st.info("No historical KPI data found on Confluence.")
         return
@@ -93,7 +94,7 @@ def render_confluence_kpi_charts(df_hist):
         sprint_col = df_plot.columns[0]
 
     # Dynamically append currently calculated sprint metrics if not already present in the history
-    current_metrics = st.session_state.get("current_sprint_metrics")
+    current_metrics = st.session_state.get("current_sprint_metrics") if include_current else None
     if current_metrics:
         sprint_name_val = current_metrics["sprint_name"]
         sprint_exists = False
@@ -109,8 +110,8 @@ def render_confluence_kpi_charts(df_hist):
                 col_lower = col.lower().strip()
                 if col.strip() in QUALITY_KPIS:
                     new_row[col] = current_metrics.get("quality", {}).get(col.strip(), "")
-                elif col.strip() in SCOPE_KPIS:
-                    new_row[col] = current_metrics.get("scope", {}).get(col.strip(), "")
+                elif col.strip() in ITEM_KPIS:
+                    new_row[col] = current_metrics.get("items", {}).get(col.strip(), "")
                 elif "sprint name" in col_lower:
                     new_row[col] = sprint_name_val
                 elif "sprint" in col_lower:
@@ -136,6 +137,13 @@ def render_confluence_kpi_charts(df_hist):
                 else:
                     new_row[col] = ""
             df_plot = pd.concat([df_plot, pd.DataFrame([new_row])], ignore_index=True)
+
+        # History tables published before the item columns existed: still show the current sprint's item counts
+        for name in ITEM_KPIS:
+            if name not in df_plot.columns:
+                df_plot[name] = ""
+                mask = df_plot[sprint_col].astype(str) == str(sprint_name_val)
+                df_plot.loc[mask, name] = current_metrics.get("items", {}).get(name, "")
 
     def find_column(df_target, patterns):
         cols = list(df_target.columns)
@@ -167,8 +175,9 @@ def render_confluence_kpi_charts(df_hist):
 
     df_plot["Sprint Display"] = df_plot[sprint_col].apply(lambda x: format_sprint_label(x, 12))
 
-    # Keep at most the last 5 sprints for the chart
-    df_plot = df_plot.tail(5)
+    # Keep at most the last N sprints for the chart
+    if max_sprints:
+        df_plot = df_plot.tail(max_sprints)
 
     df_plot["Committed SP"] = extract_numeric_col(df_plot, ["committed sp (at start)", "committed sp", "committed"])
     df_plot["Delivered SP"] = extract_numeric_col(df_plot, ["delivered sp (total)", "delivered sp", "delivered", "achieved"])
@@ -211,8 +220,8 @@ def render_confluence_kpi_charts(df_hist):
             st.info("No Story Points data found in table.")
 
     with r1_col2:
-        st.markdown("**Delivery % Trend**")
-        st.markdown("<small>Measures the team's ability to complete their committed workload, indicating predictability and sprint success rate over time.<br/><b>Calculation:</b> (Delivered SP / Committed SP) * 100. Can exceed 100% if scope creep tickets are completed.</small>", unsafe_allow_html=True)
+        st.markdown("**Delivery SP % Trend**")
+        st.markdown("<small>Measures the team's ability to complete their committed workload, indicating predictability and sprint success rate over time, based on Story Points.<br/><b>Calculation:</b> (Delivered SP / Committed SP) * 100. Can exceed 100% if scope creep tickets are completed.</small>", unsafe_allow_html=True)
         df_pct = df_plot[["Sprint Display", "Delivery %"]].dropna(subset=["Delivery %"])
         if not df_pct.empty:
             bars_pct = alt.Chart(df_pct).mark_bar(color="#ab47bc").encode(
@@ -284,6 +293,20 @@ def render_confluence_kpi_charts(df_hist):
         else:
             st.info("No Bugs data found in table.")
 
+    for name in ITEM_KPIS:
+        if name in df_plot.columns:  # exact match: "Committed" must not pick up "Committed SP (at Start)"
+            df_plot[name] = extract_numeric_col(df_plot, [name])
+    st.markdown("<br/>", unsafe_allow_html=True)
+    r3_col1, _ = st.columns(2)
+    with r3_col1:
+        st.markdown("**Items Committed vs Added vs Delivered**")
+        st.markdown("<small>Compares the number of tickets committed at the beginning of the sprint, the tickets added during the sprint (scope creep) and the tickets finally delivered.<br/><b>Calculation:</b> Counts from Jira's sprint report for the selected issue types (no sub-tasks). Committed = issues in the sprint when it started (incl. issues removed later). Added = issues added after the sprint started. Delivered = issues completed in this sprint (incl. added ones).</small>", unsafe_allow_html=True)
+        chart_items = build_items_chart(df_plot)
+        if chart_items is not None:
+            st.altair_chart(chart_items.properties(height=280), use_container_width=True)
+        else:
+            st.info("No Items data found in table.")
+
     for name in QUALITY_KPIS:
         if find_column(df_plot, [name]):
             df_plot[name] = extract_numeric_col(df_plot, [name])
@@ -293,15 +316,6 @@ def render_confluence_kpi_charts(df_hist):
         st.caption("Code Quality Trend (SonarQube, SBOM Inventory, Vanguard)")
         st.altair_chart(chart_quality)
 
-    for name in SCOPE_KPIS:
-        if find_column(df_plot, [name]):
-            df_plot[name] = extract_numeric_col(df_plot, [name])
-    chart_scope = build_scope_chart(df_plot)
-    if chart_scope is not None:
-        st.markdown("<br/>", unsafe_allow_html=True)
-        st.markdown("**Sprint Scope (Issues)**")
-        st.markdown("<small>Shows how the sprint scope changed and how much of it was finished.<br/><b>Calculation:</b> Counts from Jira's sprint report for the selected issue types (no sub-tasks). Issues at Sprint Start includes issues removed later; Issues Completed includes issues added during the sprint.</small>", unsafe_allow_html=True)
-        st.altair_chart(chart_scope, use_container_width=True)
 def render_dashboard():
     df = st.session_state.kpi_data
     if df is None or df.empty:
@@ -353,9 +367,9 @@ def render_dashboard():
     
     sprint_pct = (achieved_sp / total_sp * 100) if total_sp > 0 else 0
 
-    # Issue counts come straight from Jira's sprint report so they match its sprint report and burndown chart.
+    # Item counts come straight from Jira's sprint report so they match its sprint report and burndown chart.
     scope_counts = st.session_state.get("kpi_scope_counts")
-    scope_kpis = {name: str(scope_counts[name]) if scope_counts else "" for name in SCOPE_KPIS}
+    items_metrics = {name: str(scope_counts[name]) if scope_counts else "" for name in ITEM_KPIS}
     
     releases_count = st.session_state.get("kpi_releases_count", 0)
     
@@ -390,7 +404,7 @@ def render_dashboard():
         "crit_bugs": open_critical_bugs,
         "resolved_bugs": resolved_bugs,
         "cycle_time": avg_cycle_time,
-        "scope": scope_kpis,
+        "items": items_metrics,
         "quality": {name: format_kpi_value(name, quality_kpis.get(name)) for name in QUALITY_KPIS}
     }
     
@@ -408,13 +422,16 @@ def render_dashboard():
         st.metric("Project Open Bugs (Sev A + B)", str(open_bugs), help="Counts all tickets of type 'Bug' with labels Sev-A or Sev-B that were created before the sprint ended, and were either still unresolved or resolved after the sprint started.")
         st.metric("Project Critical Open Bugs (Sev A)", str(open_critical_bugs), help="Same calculation as Open Bugs, but strictly filtered for the Sev-A label.")
 
-    st.caption("Sprint Scope (Issues), from Jira's sprint report for the selected issue types (sub-tasks are never included)"
+    st.caption("Sprint Scope (Items), from Jira's sprint report for the selected issue types (sub-tasks are never included)"
                + ("" if scope_counts else " · ⚠️ Click 🚀 Calculate KPIs to load these counts." if "kpi_scope_error" not in st.session_state
                   else f" · ⚠️ Jira's sprint report could not be read ({st.session_state.kpi_scope_error})."))
-    col_s1, col_s2, col_s3, _ = st.columns(4)
-    col_s1.metric(SCOPE_KPIS[0], scope_kpis[SCOPE_KPIS[0]] or "N/A", help="Issues in the sprint when it started, including those removed from the sprint later. Matches the starting issue count of Jira's burndown chart.")
-    col_s2.metric(SCOPE_KPIS[1], scope_kpis[SCOPE_KPIS[1]] or "N/A", help="Issues Jira's sprint report lists as added after the sprint started (scope creep), including those removed again.")
-    col_s3.metric(SCOPE_KPIS[2], scope_kpis[SCOPE_KPIS[2]] or "N/A", help="Issues Jira's sprint report lists as completed in this sprint, including those added during the sprint.")
+    ic1, ic2, ic3, ic4 = st.columns(4)
+    ic1.metric(ITEMS_COMMITTED_KPI, items_metrics[ITEMS_COMMITTED_KPI] or "N/A", help="Issues in the sprint when it started, including those removed from the sprint later. Matches the starting issue count of Jira's burndown chart.")
+    ic2.metric(ITEMS_ADDED_KPI, items_metrics[ITEMS_ADDED_KPI] or "N/A", help="Issues Jira's sprint report lists as added after the sprint started (scope creep), including those removed again.")
+    ic3.metric(ITEMS_DELIVERED_KPI, items_metrics[ITEMS_DELIVERED_KPI] or "N/A", help="Issues Jira's sprint report lists as completed in this sprint, including those added during the sprint.")
+    if scope_counts:
+        total_items = scope_counts[ITEMS_COMMITTED_KPI] + scope_counts[ITEMS_ADDED_KPI]
+        ic4.metric("Items Delivery %", f"{(scope_counts[ITEMS_DELIVERED_KPI] / total_items * 100) if total_items else 0:.1f}%", help="Delivered / (Committed + Added) * 100.")
 
     quality_names = configured_quality_kpis()
     if quality_names:
@@ -515,7 +532,7 @@ def render_dashboard():
                         "crit_bugs": str(open_critical_bugs),
                         "resolved_bugs": str(resolved_bugs),
                         "cycle_time": f"{avg_cycle_time:.1f}" if pd.notna(avg_cycle_time) else "N/A",
-                        "scope": scope_kpis,
+                        "items": items_metrics,
                         "quality": st.session_state.current_sprint_metrics["quality"]
                     }
                     sprint_query_val = st.session_state.get("kpi_sprint_query", "Current Sprint")
@@ -615,3 +632,141 @@ if st.session_state.get("kpi_error"):
 
 if st.session_state.kpi_data is not None:
     render_dashboard()
+
+
+def parse_sprint_list(text):
+    return [s.strip() for s in re.split(r"[,\n;]+", text or "") if s.strip()]
+
+
+def run_batch_kpis(sprints, selected_types):
+    server = st.session_state.get("jira_server", "")
+    token = st.session_state.get("jira_token", "")
+    auth_type = st.session_state.get("jira_auth_method", "")
+    email = st.session_state.get("jira_email", "")
+    rows, errors = [], []
+    progress = st.progress(0.0, text="Calculating sprints...")
+    for i, sprint in enumerate(sprints):
+        progress.progress(i / len(sprints), text=f"Calculating {sprint} ({i + 1}/{len(sprints)})...")
+        res = fetch_sprint_kpi_data(server, token, auth_type, email, sprint, selected_types)
+        if res.get("error"):
+            errors.append(f"{sprint}: {res['error'][:300]}")
+            continue
+        if res.get("df") is None or res["df"].empty:
+            errors.append(f"{sprint}: no issues found.")
+            continue
+        metrics = compute_sprint_metrics(res)
+        # Only SonarQube is historical (value at sprint end); SBOM/Vanguard are "today" values so they stay empty
+        if sonar_configured() and res.get("sprint_end") is not None:
+            try:
+                sonar = fetch_sonar_kpis(res.get("sprint_end"))
+                metrics["quality"] = {name: format_kpi_value(name, sonar.get(name)) for name in SONAR_KPIS.values()}
+            except Exception as e:
+                errors.append(f"{sprint}: SonarQube warning: {e}")
+        rows.append({"sprint_val": sprint, "sprint_name": res.get("sprint_name") or sprint, "metrics": metrics})
+    progress.empty()
+    st.session_state.batch_kpi_rows = rows
+    st.session_state.batch_kpi_errors = errors
+
+
+def build_batch_preview_df(rows, df_hist=None):
+    df_batch = pd.DataFrame([metrics_to_table_row(r["sprint_name"], r["metrics"]) for r in rows])
+    if df_hist is None or df_hist.empty or df_batch.empty:
+        return df_batch
+    # Use the history's sprint column name, and let the new values replace any existing row for the same sprint
+    hist_sprint_col = next((c for c in df_hist.columns if "sprint name" in c.lower()), None) \
+        or next((c for c in df_hist.columns if "sprint" in c.lower()), df_hist.columns[0])
+    df_batch = df_batch.rename(columns={"Sprint": hist_sprint_col})
+    batch_names = set(df_batch[hist_sprint_col].astype(str)) | {str(r["sprint_val"]) for r in rows}
+    df_old = df_hist[~df_hist[hist_sprint_col].astype(str).str.strip().isin(batch_names)]
+    return pd.concat([df_old, df_batch], ignore_index=True)
+
+
+st.divider()
+st.markdown("### 🗂️ Batch KPIs (multiple sprints)")
+st.markdown("Calculate the KPIs of several sprints at once, review the table and charts, and only then decide whether to publish them to Confluence. "
+            "Uses the issue type filters above. All issues are included (no manual exclusions).")
+
+batch_text = st.text_area("Sprints (names or IDs, separated by commas or new lines)", key="batch_kpi_sprints",
+                          placeholder="e.g.\n140\n141\nSprint 15")
+if st.button("🧮 Calculate Batch KPIs", use_container_width=True, key="batch_kpi_calc"):
+    sprints = parse_sprint_list(batch_text)
+    if not sprints:
+        st.warning("Please enter at least one sprint.")
+    else:
+        batch_types = []
+        if not inc_all:
+            for enabled, names in [(inc_story, ["User Story", "Story"]), (inc_task, ["Task"]), (inc_improvement, ["Improvement"]),
+                                   (inc_bug, ["Bug"]), (inc_tech, ["Technical Task"]), (inc_subtask, ["Sub-task"])]:
+                if enabled:
+                    batch_types += names
+        run_batch_kpis(sprints, batch_types)
+
+for err in st.session_state.get("batch_kpi_errors", []):
+    st.warning(err)
+
+batch_rows = st.session_state.get("batch_kpi_rows") or []
+if batch_rows:
+    st.markdown("#### 📋 Calculated KPIs (preview, not published yet)")
+    df_batch_table = pd.DataFrame([metrics_to_table_row(r["sprint_name"], r["metrics"]) for r in batch_rows])
+    df_batch_table = sort_df_chronologically(df_batch_table, "Sprint")
+    st.dataframe(df_batch_table, use_container_width=True, hide_index=True)
+
+    default_conf_server = os.getenv("CONFLUENCE_SERVER", "")
+    default_conf_token = os.getenv("CONFLUENCE_API_TOKEN", "")
+    conf_server = st.session_state.get("conf_server", default_conf_server)
+    conf_token = st.session_state.get("conf_token", default_conf_token)
+    auth_type = st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)")
+    email = st.session_state.get("jira_email", "")
+
+    col_bs, col_bp = st.columns(2)
+    with col_bs:
+        batch_space = st.text_input("Space Key", value=os.getenv("CONFLUENCE_SPACE", "DS"), key="batch_conf_space")
+    with col_bp:
+        batch_page = st.text_input("Page Title", value=os.getenv("CONFLUENCE_KPI_PAGE", "70_Project KPIs"), key="batch_conf_page")
+
+    can_use_confluence = bool(conf_server and conf_token)
+    combine = st.checkbox("Combine with existing Confluence history in the charts", value=False, key="batch_combine_hist",
+                          disabled=not can_use_confluence)
+    df_hist_batch = None
+    if combine and can_use_confluence:
+        cache_key = (batch_space, batch_page)
+        if st.session_state.get("batch_hist_key") != cache_key:
+            with st.spinner("Fetching KPI history from Confluence..."):
+                st.session_state.batch_hist = fetch_confluence_kpi_history(conf_server, auth_type, conf_token, email, batch_space, batch_page)
+                st.session_state.batch_hist_key = cache_key
+        df_hist_batch = st.session_state.get("batch_hist")
+        if df_hist_batch is None:
+            st.caption("⚠️ Could not read history from Confluence; showing only the calculated sprints.")
+
+    df_preview = build_batch_preview_df(batch_rows, df_hist_batch)
+    max_sprints = st.slider("Sprints shown in charts", min_value=1, max_value=max(len(df_preview), 1),
+                            value=min(len(df_preview), max(5, len(batch_rows))), key="batch_max_sprints") if len(df_preview) > 1 else 1
+    st.markdown("#### 📊 Chart Preview")
+    render_confluence_kpi_charts(df_preview, include_current=False, max_sprints=max_sprints)
+
+    st.markdown("#### 🚀 Publish")
+    if not can_use_confluence:
+        st.warning("⚠️ **Confluence Connection**: Not configured. Please set CONFLUENCE_SERVER and CONFLUENCE_API_TOKEN.")
+    else:
+        names = [r["sprint_name"] for r in batch_rows]
+        to_publish = st.multiselect("Sprints to publish", options=names, default=names, key="batch_to_publish")
+        st.caption("Sprints already present in the Confluence table will be replaced with the new values (moved to the end of the table).")
+        if st.button("🚀 Publish selected sprints to Confluence", use_container_width=True, key="batch_publish", disabled=not to_publish):
+            selected = [r for r in batch_rows if r["sprint_name"] in to_publish]
+            selected.sort(key=lambda r: df_batch_table["Sprint"].tolist().index(r["sprint_name"]))
+            page_url = None
+            with st.spinner("Publishing to Confluence..."):
+                try:
+                    for i, r in enumerate(selected):
+                        page_url = publish_kpis_to_confluence(
+                            server_url=conf_server, auth_type=auth_type, token=conf_token, email=email,
+                            space_key=batch_space, page_title=batch_page,
+                            sprint_val=r["sprint_val"], sprint_name=r["sprint_name"], metrics=r["metrics"],
+                            replace_existing=True,
+                            upload_charts=(i == len(selected) - 1),  # charts only once, after the last row
+                        )
+                    st.success(f"🎉 **{len(selected)} sprint(s) published to Confluence!**")
+                    st.markdown(f"[👉 Click here to view Confluence Page]({page_url})")
+                    st.session_state.pop("batch_hist_key", None)
+                except Exception as ex:
+                    st.error(f"Failed to publish to Confluence: {ex}")
