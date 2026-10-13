@@ -13,6 +13,9 @@ from utils.vanguard_helpers import VANGUARD_KPI, vanguard_configured
 
 QUALITY_KPIS = [*SONAR_KPIS.values(), SBOM_KPI, VANGUARD_KPI]
 
+# Issue counts for the sprint scope: dashboard metrics, Confluence columns and the Sprint Scope chart.
+SCOPE_KPIS = ["Issues at Sprint Start", "Issues Added During Sprint", "Issues Completed in Sprint"]
+
 def configured_quality_kpis():
     return ((list(SONAR_KPIS.values()) if sonar_configured() else [])
             + ([SBOM_KPI] if sbom_configured() else [])
@@ -93,31 +96,46 @@ def get_story_points_field_id(server, headers, auth):
         pass
     return os.getenv("JIRA_STORY_POINTS_FIELD", "customfield_10016")
 
-def fetch_exact_sprint_report(server, headers, auth, sprint_id):
-    try:
-        sprint_url = f"{server.rstrip('/')}/rest/agile/1.0/sprint/{sprint_id}"
-        sprint_resp = requests.get(sprint_url, headers=headers, auth=auth, timeout=10) if auth else requests.get(sprint_url, headers=headers, timeout=10)
-        board_id = sprint_resp.json().get("originBoardId")
-        if not board_id:
-            return None, None, []
-            
-        report_url = f"{server.rstrip('/')}/rest/greenhopper/1.0/rapid/charts/sprintreport?rapidViewId={board_id}&sprintId={sprint_id}"
-        report_resp = requests.get(report_url, headers=headers, auth=auth, timeout=10) if auth else requests.get(report_url, headers=headers, timeout=10)
-        
-        contents = report_resp.json().get("contents", {})
-        
-        completed_initial = contents.get("completedIssuesInitialEstimateSum", {}).get("value", 0)
-        not_completed_initial = contents.get("issuesNotCompletedInitialEstimateSum", {}).get("value", 0)
-        punted_initial = contents.get("puntedIssuesInitialEstimateSum", {}).get("value", 0)
-        outside_initial = contents.get("issuesCompletedInAnotherSprintInitialEstimateSum", {}).get("value", 0)
-        
-        total_committed = (completed_initial or 0) + (not_completed_initial or 0) + (punted_initial or 0) + (outside_initial or 0)
-        total_achieved = contents.get("completedIssuesEstimateSum", {}).get("value", 0)
-        added_keys = list(contents.get("issueKeysAddedDuringSprint", {}).keys())
-        
-        return total_committed, total_achieved, added_keys
-    except Exception as e:
-        return None, None, []
+def fetch_exact_sprint_report(server, headers, auth, sprint_id, selected_types=None):
+    """Returns (committed SP, achieved SP, added keys, scope counts, error). Tries twice: the sprint report endpoint can fail transiently."""
+    def get_json(url):
+        resp = requests.get(url, headers=headers, auth=auth, timeout=30) if auth else requests.get(url, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            raise Exception(f"{url.split('/rest/')[-1].split('?')[0]} returned {resp.status_code}")
+        return resp.json()
+
+    error = None
+    for _ in range(2):
+        try:
+            board_id = get_json(f"{server.rstrip('/')}/rest/agile/1.0/sprint/{sprint_id}").get("originBoardId")
+            if not board_id:
+                return None, None, [], None, f"sprint {sprint_id} has no board"
+
+            contents = get_json(f"{server.rstrip('/')}/rest/greenhopper/1.0/rapid/charts/sprintreport?rapidViewId={board_id}&sprintId={sprint_id}").get("contents", {})
+
+            completed_initial = contents.get("completedIssuesInitialEstimateSum", {}).get("value", 0)
+            not_completed_initial = contents.get("issuesNotCompletedInitialEstimateSum", {}).get("value", 0)
+            punted_initial = contents.get("puntedIssuesInitialEstimateSum", {}).get("value", 0)
+            outside_initial = contents.get("issuesCompletedInAnotherSprintInitialEstimateSum", {}).get("value", 0)
+
+            total_committed = (completed_initial or 0) + (not_completed_initial or 0) + (punted_initial or 0) + (outside_initial or 0)
+            total_achieved = contents.get("completedIssuesEstimateSum", {}).get("value", 0)
+            added_keys = list(contents.get("issueKeysAddedDuringSprint", {}).keys())
+
+            # Issue counts as Jira's sprint report and burndown show them (they include issues removed during the
+            # sprint and exclude sub-tasks), limited to the selected issue types. The report only has type ids.
+            type_names = {str(t.get("id")): t.get("name") for t in get_json(f"{server.rstrip('/')}/rest/api/2/issuetype")} if selected_types else {}
+            def keys_in(list_names):
+                return {issue["key"] for name in list_names for issue in contents.get(name, [])
+                        if not selected_types or type_names.get(str(issue.get("typeId"))) in selected_types}
+            report_keys = keys_in(("completedIssues", "issuesNotCompletedInCurrentSprint", "puntedIssues", "issuesCompletedInAnotherSprint"))
+            issues_added = len(report_keys & set(added_keys))
+            scope_counts = dict(zip(SCOPE_KPIS, (len(report_keys) - issues_added, issues_added, len(keys_in(("completedIssues",))))))
+
+            return total_committed, total_achieved, added_keys, scope_counts, None
+        except Exception as e:
+            error = str(e)
+    return None, None, [], None, error
 
 def get_sprint_field_id(server, headers, auth):
     url = f"{server.rstrip('/')}/rest/api/2/field"
@@ -250,9 +268,29 @@ def fetch_sprint_kpi_data(server, token, auth_type, email, sprint_query, selecte
             server_clean = server.rstrip('/') if server else ""
             jira_url = f"{server_clean}/browse/{key}" if server_clean else key
 
+            # Sprint Resolved: the issue's latest sprint that had started when the issue was resolved.
+            # Sprint field values are dicts or "com.atlassian...Sprint@x[id=1,name=Sprint 1,startDate=...]" strings
+            sprint_resolved = ""
+            if res_date is not None:
+                started_sprints = []
+                for s_val in fields_data.get(sprint_field) or fields_data.get("customfield_10020") or []:
+                    if isinstance(s_val, dict):
+                        s_name, s_start = s_val.get("name", ""), s_val.get("startDate")
+                    else:
+                        name_match = re.search(r'name=([^,]+)', str(s_val))
+                        start_match = re.search(r'startDate=([^,]+)', str(s_val))
+                        s_name = name_match.group(1) if name_match else ""
+                        s_start = start_match.group(1) if start_match and start_match.group(1) != "<null>" else None
+                    if s_start and pd.to_datetime(s_start).tz_localize(None) <= res_date:
+                        started_sprints.append((pd.to_datetime(s_start).tz_localize(None), s_name))
+                if started_sprints:
+                    sprint_resolved = max(started_sprints)[1]
+
             rows.append({
                 "Key": key,
                 "Jira URL": jira_url,
+                "Summary": fields_data.get("summary", ""),
+                "Sprint Resolved": sprint_resolved,
                 "Type": issuetype,
                 "Status": status_name,
                 "Labels": labels_str,
@@ -391,13 +429,20 @@ def fetch_sprint_kpi_data(server, token, auth_type, email, sprint_query, selecte
         except Exception:
             pass
             
-        gh_committed, gh_achieved, gh_added_keys = None, None, []
+        # Delivered in this sprint = resolved while this sprint was the issue's current sprint (see Sprint Resolved).
+        # The loop above runs before the sprint is known, so it cannot check this itself.
+        if sprint_name:
+            df["Resolved"] = df["Sprint Resolved"] == sprint_name
+
+        gh_committed, gh_achieved, gh_added_keys, scope_counts, scope_error = None, None, [], None, "no sprint found on the issues"
         if most_common_id:
-            gh_committed, gh_achieved, gh_added_keys = fetch_exact_sprint_report(server, headers, auth, most_common_id)
+            gh_committed, gh_achieved, gh_added_keys, scope_counts, scope_error = fetch_exact_sprint_report(server, headers, auth, most_common_id, selected_types)
                             
         return {
             "df": df,
             "gh_added_keys": gh_added_keys,
+            "scope_counts": scope_counts,
+            "scope_error": scope_error,
             "releases_count": releases_count,
             "global_open_bugs": global_open_bugs,
             "global_critical_bugs": global_critical_bugs,
@@ -504,6 +549,24 @@ def build_code_quality_chart(df_plot):
     return alt.layer(line, text, data=df_q).properties(width=150, height=200).facet(
         column=alt.Column("Metric:N", title=None, sort=QUALITY_KPIS)
     ).resolve_scale(y="independent")
+
+
+def build_scope_chart(df_plot):
+    """Grouped bars: issues at sprint start, added during the sprint and completed, per sprint."""
+    cols = [c for c in SCOPE_KPIS if c in df_plot.columns]
+    df_s = df_plot[["Sprint Display"] + cols].dropna(subset=cols, how="all") if cols else pd.DataFrame()
+    if df_s.empty:
+        return None
+    df_s = df_s.melt(id_vars=["Sprint Display"], value_vars=cols, var_name="Metric", value_name="Issues").dropna(subset=["Issues"])
+    bars = alt.Chart(df_s).mark_bar().encode(
+        x=alt.X("Sprint Display:N", title=None, axis=alt.Axis(labelAngle=0), sort=None),
+        xOffset=alt.XOffset("Metric:N", sort=SCOPE_KPIS),
+        y=alt.Y("Issues:Q", title="Issues"),
+        color=alt.Color("Metric:N", sort=SCOPE_KPIS, legend=alt.Legend(orient="top", title=None), scale=alt.Scale(domain=SCOPE_KPIS, range=["#42a5f5", "#ff7043", "#66bb6a"])),
+        tooltip=["Sprint Display", "Metric", "Issues"]
+    )
+    text = bars.mark_text(align='center', baseline='bottom', dy=-5).encode(text=alt.Text("Issues:Q", format=".0f"))
+    return (bars + text).properties(height=280)
 
 
 def generate_and_save_kpi_charts(df_hist):
@@ -633,6 +696,15 @@ def generate_and_save_kpi_charts(df_hist):
         chart_quality.save(path_quality)
         saved_files.append((path_quality, "code_quality_chart.png"))
 
+    for name in SCOPE_KPIS:
+        if find_column(df_plot, [name]):
+            df_plot[name] = extract_numeric_col(df_plot, [name])
+    chart_scope = build_scope_chart(df_plot)
+    if chart_scope is not None:
+        path_scope = "temp_scope_chart.png"
+        chart_scope.properties(width=500).save(path_scope)
+        saved_files.append((path_scope, "scope_chart.png"))
+
     return saved_files
 
 class TableParser(HTMLParser):
@@ -677,8 +749,8 @@ def parse_confluence_html_table(html_body):
             return None
         headers = parser.rows[0]
         data_rows = parser.rows[1:]
-        # Pad rows written before the quality columns existed; drop any other length mismatch for safety
-        valid_rows = [r + [""] * (len(headers) - len(r)) for r in data_rows if len(r) <= len(headers) and all(h in QUALITY_KPIS for h in headers[len(r):])]
+        # Pad rows written before the scope or quality columns existed; drop any other length mismatch for safety
+        valid_rows = [r + [""] * (len(headers) - len(r)) for r in data_rows if len(r) <= len(headers) and all(h in SCOPE_KPIS + QUALITY_KPIS for h in headers[len(r):])]
         return pd.DataFrame(valid_rows, columns=headers)
     except Exception:
         return None
@@ -745,17 +817,18 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
 
     display_sprint = sprint_name if sprint_name else sprint_val
 
-    # Quality columns (SonarQube, SBOM Inventory, Vanguard) go at the end of the table. Each one is appended to an existing
-    # table the first time its source is configured, and kept (empty if the source is unavailable) once there.
+    # Extra columns (sprint scope issue counts, then SonarQube, SBOM Inventory, Vanguard) go at the end of the table.
+    # Each one is appended to an existing table the first time it is available, and kept (empty if unavailable) once there.
     current_body = results[0]["body"]["storage"]["value"] if results else ""
     header_parser = TableParser()
     header_parser.feed(current_body)
     existing_headers = header_parser.rows[0] if header_parser.rows else []
-    added_columns = [name for name in configured_quality_kpis() if name not in existing_headers]
-    quality_columns = [h for h in existing_headers if h in QUALITY_KPIS] + added_columns
-    quality_values = metrics.get("quality", {})
+    added_columns = [name for name in SCOPE_KPIS + configured_quality_kpis() if name not in existing_headers]
+    extra_columns = [h for h in existing_headers if h in SCOPE_KPIS + QUALITY_KPIS] + added_columns
+    quality_columns = [h for h in extra_columns if h in QUALITY_KPIS]
+    extra_values = {**metrics.get("scope", {}), **metrics.get("quality", {})}
     quality_th = "".join(f"<th>{name}</th>" for name in added_columns)
-    quality_td = "".join(f"<td>{quality_values.get(name, '')}</td>" for name in quality_columns)
+    quality_td = "".join(f"<td>{extra_values.get(name, '')}</td>" for name in extra_columns)
     quality_cols = "<col/>" * len(added_columns)
 
     # Standard single Sprint column format (10 columns)
@@ -866,6 +939,14 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
     </ac:image>
     """
 
+    scope_image_markup = """
+    <p><strong>Sprint Scope Evolution (Issues)</strong></p>
+    <p style="font-size: 12px; color: #555;"><em>Issues in the sprint when it started, issues added after it started, and issues completed, as counted by Jira's sprint report.</em></p>
+    <ac:image ac:original-height="280" ac:original-width="500">
+        <ri:attachment ri:filename="scope_chart.png" />
+    </ac:image>
+    """
+
     if results:
         page_id = results[0]["id"]
         current_version = results[0]["version"]["number"]
@@ -896,6 +977,8 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
         
         if quality_columns and "code_quality_chart.png" not in new_body:
             new_body = new_body + "<br/>" + quality_image_markup
+        if "scope_chart.png" not in new_body:
+            new_body = new_body + "<br/>" + scope_image_markup
 
         update_url = f"{base_url}/rest/api/content/{page_id}"
         update_payload = {
@@ -916,7 +999,7 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
             
     else:
         create_url = f"{base_url}/rest/api/content"
-        new_body = f"<p>Sprint KPIs Overview</p>{base_table}<br/>{image_markup}"
+        new_body = f"<p>Sprint KPIs Overview</p>{base_table}<br/>{image_markup}<br/>{scope_image_markup}"
         if quality_columns:
             new_body = new_body + "<br/>" + quality_image_markup
         create_payload = {
