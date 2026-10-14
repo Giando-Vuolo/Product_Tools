@@ -210,6 +210,7 @@ release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", 
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
 ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="AI Issue Creator", icon="🤖")
 ai_agent_page = st.Page("tools/6_AI_Agent.py", title="AI Agent", icon="💬")
+release_plan_page = st.Page("tools/7_Release_Plan.py", title="Release Plan Post-actions", icon="🚀")
 
 # 2. Define the Home Page rendering function
 def show_home():
@@ -715,7 +716,7 @@ def show_home():
 home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
 
 # 4. Setup and run navigation
-pg = st.navigation([home_page, planner_page, sprint_review_page, release_notes_page, sprint_kpis_page, ai_creator_page, ai_agent_page])
+pg = st.navigation([home_page, planner_page, sprint_review_page, release_notes_page, sprint_kpis_page, ai_creator_page, ai_agent_page, release_plan_page])
 st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
 
 # Hide the AI Agent from the sidebar menu globally
