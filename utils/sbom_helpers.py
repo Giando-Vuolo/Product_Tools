@@ -23,6 +23,22 @@ def fetch_dependency_findings():
     return count_findings(resp.json(), os.getenv("SBOM_APP_ID"))
 
 
+def check_sbom_connection(server, api_key, api_secret, namespace_id, app_id, timeout=8):
+    """Returns (ok, message): validates credentials, namespace and app in one call."""
+    if not all((server, api_key, api_secret, namespace_id, app_id)):
+        return False, "Server, credentials, namespace or app ID empty"
+    try:
+        resp = requests.get(f"{server.rstrip('/')}/ns/{namespace_id}/apps", auth=(api_key, api_secret), timeout=timeout)
+    except requests.RequestException as e:
+        return False, f"Connection Failed ({e})"
+    if resp.status_code != 200:
+        return False, f"Auth Failed (HTTP {resp.status_code})"
+    try:
+        return True, f"App found ({count_findings(resp.json(), app_id)} findings)"
+    except Exception as e:
+        return False, str(e)
+
+
 def count_findings(payload, app_id):
     # cve_rating counts every vulnerable component once per stage (dev + prod), same total as the UI app card
     app = next((a for a in payload.get("apps", []) if a.get("guid") == app_id), None)
