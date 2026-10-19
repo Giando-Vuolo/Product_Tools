@@ -157,7 +157,7 @@ def sync_editor_changes(df_key, editor_key, display_df_indices):
         if idx < len(display_df_indices):
             actual_idx = display_df_indices[idx]
             for col, val in col_changes.items():
-                if col != "Select":
+                if col != "Select" and col in df.columns:
                     df.at[actual_idx, col] = val
                     has_real_edits = True
                 
@@ -401,10 +401,11 @@ if 'sprint_review_label_order' not in st.session_state:
         st.session_state.sprint_review_label_order = ["Frontend_Team", "Backend_Team", "Architecture_Team"]
 
 if 'custom_bug_column' not in st.session_state:
+    _default_bug_col_labels = [l.strip() for l in os.getenv("BUGS_CUSTOM_COLUMN_LABELS", "Severity_A;Severity_B;Severity_C").split(";") if l.strip()]
     st.session_state.custom_bug_column = {
-        "enabled": False,
+        "enabled": len(_default_bug_col_labels) > 0,
         "name": os.getenv("BUGS_CUSTOM_COLUMN_NAME", "Severity"),
-        "labels": [l.strip() for l in os.getenv("BUGS_CUSTOM_COLUMN_LABELS", "Severity_A;Severity_B;Severity_C").split(";") if l.strip()]
+        "labels": _default_bug_col_labels
     }
 
 # ---------------------------------------------------------
@@ -1063,7 +1064,7 @@ def fetch_epic_completion(server, token, epic_keys, epic_link_field, auth_type="
 
 
 from utils.release_helpers import upload_pdf_to_confluence
-from utils.sprint_review_helpers import build_sprint_review_pdf as _build_sprint_review_pdf
+from utils.sprint_review_helpers import build_sprint_review_pdf as _build_sprint_review_pdf, resolve_custom_bug_column, add_custom_bug_display_column
 
 def build_sprint_review_pdf(overview_df, outlook_df):
     return _build_sprint_review_pdf(overview_df, outlook_df, config=st.session_state)
@@ -1812,7 +1813,9 @@ elif st.session_state.active_tab == "✍️ Workbook":
         
         col_bug1, col_bug2 = st.columns([1, 2])
         with col_bug1:
-            bug_col_name = st.text_input("Custom Column Name:", value=st.session_state.custom_bug_column.get("name", "Severity"))
+            if "sr_bug_col_name" not in st.session_state:
+                st.session_state["sr_bug_col_name"] = st.session_state.custom_bug_column.get("name", "Severity")
+            bug_col_name = st.text_input("Custom Column Name:", key="sr_bug_col_name")
             if bug_col_name != st.session_state.custom_bug_column.get("name"):
                 st.session_state.custom_bug_column["name"] = bug_col_name
                 
@@ -1898,11 +1901,22 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 if "Labels" in display_df.columns and filter_label.strip() != "":
                     display_df = display_df[display_df["Labels"].str.contains(filter_label.strip(), case=False, na=False)]
  
+                _sev_enabled, _sev_name, _sev_labels = resolve_custom_bug_column({"custom_bug_column": st.session_state.custom_bug_column})
+                editor_df = display_df
+                col_cfg_ov_view = col_cfg_ov
+                if _sev_enabled and str(st.session_state.custom_bug_column.get("name") or "").strip():
+                    editor_df = add_custom_bug_display_column(display_df, _sev_name, _sev_labels)
+                    if _sev_name in editor_df.columns and _sev_name not in display_df.columns:
+                        col_cfg_ov_view = dict(col_cfg_ov)
+                        col_cfg_ov_view[_sev_name] = st.column_config.TextColumn(
+                            _sev_name, disabled=True, width="small", help="Derived from Labels (read-only)"
+                        )
+
                 st.data_editor(
-                    display_df,
+                    editor_df,
                     num_rows="dynamic",
                     use_container_width=True,
-                    column_config=col_cfg_ov,
+                    column_config=col_cfg_ov_view,
                     key="editor_ov_refined",
                     on_change=sync_editor_changes,
                     args=("overview_df", "editor_ov_refined", list(display_df.index))

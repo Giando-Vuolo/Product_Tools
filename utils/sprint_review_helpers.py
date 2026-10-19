@@ -23,6 +23,99 @@ from utils.pdf_helpers import (
     extract_numeric_version
 )
 
+
+def resolve_custom_bug_column(config):
+    """Return (enabled, name, labels) for the custom bug column. Enabled whenever labels are non-empty."""
+    cfg = (config or {}).get("custom_bug_column") or {}
+    labels = [str(l).strip() for l in (cfg.get("labels") or []) if str(l).strip()]
+    name = str(cfg.get("name") or "").strip() or "Custom"
+    return (len(labels) > 0, name, labels)
+
+
+def get_overview_custom_bug_value(item_type, labels, target_labels):
+    """Display value for the Overview custom column: matching label for Bugs, '' otherwise."""
+    if str(item_type).strip().lower() != "bug":
+        return ""
+    if not target_labels:
+        return ""
+    if labels is None or (not isinstance(labels, (list, tuple, set)) and pd.isna(labels)):
+        return ""
+    if isinstance(labels, (list, tuple, set)):
+        labels = " ".join(str(l) for l in labels)
+    val = get_custom_label(labels, target_labels)
+    return "" if val == "-" else val
+
+
+def add_custom_bug_display_column(df, name, labels):
+    """Return a copy of df with a derived column between Type and Labels (display only).
+    Returns an unchanged copy on blank name, empty labels, name collision or missing Type/Labels."""
+    out = df.copy()
+    name = str(name or "").strip()
+    if not name or not labels or name in out.columns or "Type" not in out.columns:
+        return out
+    values = [
+        get_overview_custom_bug_value(t, l, labels)
+        for t, l in zip(out["Type"], out["Labels"] if "Labels" in out.columns else [""] * len(out))
+    ]
+    out.insert(list(out.columns).index("Type") + 1, name, values)
+    return out
+
+
+def build_bugs_table_data(bugs_df, custom_col, styles):
+    """Build (rows, col_widths) for the Bugs / Planned Bugs PDF tables.
+    custom_col: None or (name, labels). styles: header, header_center, body, body_bold, body_center."""
+    has_custom_col = custom_col is not None
+    header_row = [
+        Paragraph("Epic", styles["header"]),
+        Paragraph("Key", styles["header"]),
+        Paragraph("Summary", styles["header"]),
+        Paragraph("Status", styles["header_center"]),
+        Paragraph("Fix Version", styles["header"]),
+        Paragraph("Team", styles["header"]),
+    ]
+    if has_custom_col:
+        header_row.insert(5, Paragraph(custom_col[0], styles["header"]))
+    data = [header_row]
+    sorted_bugs = sort_items_by_label_priority(bugs_df, ["Epic", "Key"])
+    last_epic = None
+    for _, row in sorted_bugs.iterrows():
+        epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
+        if epic_val in ["", "No Epic", "nan"]:
+            epic_val = "-"
+        orig_fv = str(row['Fix Version']).strip() if pd.notna(row['Fix Version']) else ""
+        fv_val = extract_numeric_version(row['Fix Version'])
+        if not fv_val:
+            if "not release relevant" in orig_fv.lower() or orig_fv.upper() == "N.R.R.":
+                fv_val = "N.R.R."
+            else:
+                fv_val = "-"
+        display_epic = epic_val
+        if display_epic == last_epic:
+            if display_epic == "-":
+                epic_cell = Paragraph("-", styles["body"])
+            else:
+                epic_cell = get_arrow_drawing(colors.HexColor("#64748B"))
+        else:
+            last_epic = display_epic
+            epic_cell = Paragraph(display_epic, styles["body"])
+        row_data = [
+            epic_cell,
+            get_jira_link_paragraph(row['Key'], styles["body_bold"]),
+            Paragraph(str(row['Summary']), styles["body"]),
+            Paragraph(format_status_with_emoji(row['Status']), styles["body_center"]),
+            Paragraph(fv_val, styles["body"]),
+            Paragraph(get_team_label(row.get('Labels', '')), styles["body"]),
+        ]
+        if has_custom_col:
+            row_data.insert(5, Paragraph(get_custom_label(row.get('Labels', ''), custom_col[1]), styles["body"]))
+        data.append(row_data)
+    if has_custom_col:
+        col_widths = [130, 75, 205, 50, 59, 70, 95]
+    else:
+        col_widths = [130, 75, 275, 50, 59, 95]
+    return data, col_widths
+
+
 def build_sprint_review_pdf(overview_df, outlook_df, config):
     pdf_buffer = io.BytesIO()
     
@@ -321,69 +414,16 @@ def build_sprint_review_pdf(overview_df, outlook_df, config):
                 bugs_flowables.extend(prefix_flowables)
                 prefix_flowables = []
             bugs_flowables.append(Paragraph("Bugs", sub_section_title_style))
-            custom_bug_col = config.get("custom_bug_column", {})
-            has_custom_col = custom_bug_col.get("enabled", False)
-            custom_col_name = custom_bug_col.get("name", "Custom")
-            custom_col_labels = custom_bug_col.get("labels", [])
-
-            header_row = [
-                Paragraph("Epic", cell_header_style),
-                Paragraph("Key", cell_header_style),
-                Paragraph("Summary", cell_header_style),
-                Paragraph("Status", cell_header_center_style),
-                Paragraph("Fix Version", cell_header_style),
-                Paragraph("Team", cell_header_style)
-            ]
-            if has_custom_col:
-                header_row.insert(5, Paragraph(custom_col_name, cell_header_style))
-                
-            bug_data = [header_row]
-            
-            sorted_bugs = sort_items_by_label_priority(bugs_ov, ["Epic", "Key"])
-            
-            last_epic = None
-            for _, row in sorted_bugs.iterrows():
-                epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
-                if epic_val in ["", "No Epic", "nan"]:
-                    epic_val = "-"
-                orig_fv = str(row['Fix Version']).strip() if pd.notna(row['Fix Version']) else ""
-                fv_val = extract_numeric_version(row['Fix Version'])
-                if not fv_val:
-                    if "not release relevant" in orig_fv.lower() or orig_fv.upper() == "N.R.R.":
-                        fv_val = "N.R.R."
-                    else:
-                        fv_val = "-"
-                    
-                display_epic = epic_val
-                if display_epic == last_epic:
-                    if display_epic == "-":
-                        epic_cell = Paragraph("-", cell_body_style)
-                    else:
-                        epic_cell = get_arrow_drawing(colors.HexColor("#64748B"))
-                else:
-                    last_epic = display_epic
-                    epic_cell = Paragraph(display_epic, cell_body_style)
-                    
-                row_data = [
-                    epic_cell,
-                    get_jira_link_paragraph(row['Key'], cell_body_bold_style),
-                    Paragraph(str(row['Summary']), cell_body_style),
-                    Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                    Paragraph(fv_val, cell_body_style),
-                    Paragraph(get_team_label(row.get('Labels', '')), cell_body_style)
-                ]
-                
-                if has_custom_col:
-                    custom_label_val = get_custom_label(row.get('Labels', ''), custom_col_labels)
-                    row_data.insert(5, Paragraph(custom_label_val, cell_body_style))
-                    
-                bug_data.append(row_data)
-                
-            if has_custom_col:
-                col_widths = [130, 75, 205, 50, 59, 70, 95]
-            else:
-                col_widths = [130, 75, 275, 50, 59, 95]
-                
+            has_custom_col, custom_col_name, custom_col_labels = resolve_custom_bug_column(config)
+            custom_col = (custom_col_name, custom_col_labels) if has_custom_col else None
+            bug_data, col_widths = build_bugs_table_data(
+                bugs_ov, custom_col,
+                {
+                    "header": cell_header_style, "header_center": cell_header_center_style,
+                    "body": cell_body_style, "body_bold": cell_body_bold_style,
+                    "body_center": cell_body_center_style,
+                }
+            )
             bugs_table = Table(
                 bug_data,
                 colWidths=col_widths
@@ -548,69 +588,16 @@ def build_sprint_review_pdf(overview_df, outlook_df, config):
                 bugs_outlook_flowables.extend(prefix_flowables)
                 prefix_flowables = []
             bugs_outlook_flowables.append(Paragraph("Planned Bugs", sub_section_title_style))
-            custom_bug_col = config.get("custom_bug_column", {})
-            has_custom_col = custom_bug_col.get("enabled", False)
-            custom_col_name = custom_bug_col.get("name", "Custom")
-            custom_col_labels = custom_bug_col.get("labels", [])
-
-            header_row = [
-                Paragraph("Epic", cell_header_style),
-                Paragraph("Key", cell_header_style),
-                Paragraph("Summary", cell_header_style),
-                Paragraph("Status", cell_header_center_style),
-                Paragraph("Fix Version", cell_header_style),
-                Paragraph("Team", cell_header_style)
-            ]
-            if has_custom_col:
-                header_row.insert(5, Paragraph(custom_col_name, cell_header_style))
-                
-            bug_data_outlook = [header_row]
-            
-            sorted_outlook_bugs = sort_items_by_label_priority(bugs_ot, ["Epic", "Key"])
-            
-            last_epic = None
-            for _, row in sorted_outlook_bugs.iterrows():
-                epic_val = str(row['Epic']).strip() if pd.notna(row['Epic']) else "-"
-                if epic_val in ["", "No Epic", "nan"]:
-                    epic_val = "-"
-                orig_fv = str(row['Fix Version']).strip() if pd.notna(row['Fix Version']) else ""
-                fv_val = extract_numeric_version(row['Fix Version'])
-                if not fv_val:
-                    if "not release relevant" in orig_fv.lower() or orig_fv.upper() == "N.R.R.":
-                        fv_val = "N.R.R."
-                    else:
-                        fv_val = "-"
-                    
-                display_epic = epic_val
-                if display_epic == last_epic:
-                    if display_epic == "-":
-                        epic_cell = Paragraph("-", cell_body_style)
-                    else:
-                        epic_cell = get_arrow_drawing(colors.HexColor("#64748B"))
-                else:
-                    last_epic = display_epic
-                    epic_cell = Paragraph(display_epic, cell_body_style)
-                    
-                row_data = [
-                    epic_cell,
-                    get_jira_link_paragraph(row['Key'], cell_body_bold_style),
-                    Paragraph(str(row['Summary']), cell_body_style),
-                    Paragraph(format_status_with_emoji(row['Status']), cell_body_center_style),
-                    Paragraph(fv_val, cell_body_style),
-                    Paragraph(get_team_label(row.get('Labels', '')), cell_body_style)
-                ]
-                
-                if has_custom_col:
-                    custom_label_val = get_custom_label(row.get('Labels', ''), custom_col_labels)
-                    row_data.insert(5, Paragraph(custom_label_val, cell_body_style))
-                    
-                bug_data_outlook.append(row_data)
-                
-            if has_custom_col:
-                col_widths = [130, 75, 205, 50, 59, 70, 95]
-            else:
-                col_widths = [130, 75, 275, 50, 59, 95]
-                
+            has_custom_col, custom_col_name, custom_col_labels = resolve_custom_bug_column(config)
+            custom_col = (custom_col_name, custom_col_labels) if has_custom_col else None
+            bug_data_outlook, col_widths = build_bugs_table_data(
+                bugs_ot, custom_col,
+                {
+                    "header": cell_header_style, "header_center": cell_header_center_style,
+                    "body": cell_body_style, "body_bold": cell_body_bold_style,
+                    "body_center": cell_body_center_style,
+                }
+            )
             bugs_outlook_table = Table(
                 bug_data_outlook,
                 colWidths=col_widths
