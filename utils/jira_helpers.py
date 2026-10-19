@@ -667,3 +667,50 @@ def search_jira_issues(server, token, auth_type, email, jql):
     except Exception as e:
         import traceback
         return {"error": f"Exception during Jira search: {e}\n{traceback.format_exc()}"}
+
+
+def fetch_release_issues_with_comments(server, token, auth_type, email, jql, page_size=50):
+    """Fetch all issues for a JQL (paginated) including description, reporter and all comments."""
+    if not server or not token:
+        return {"error": "Jira server or token not configured"}
+    try:
+        headers, auth = get_jira_auth_headers(token, auth_type, email)
+        base = server.rstrip("/")
+        issues = []
+        start = 0
+        while True:
+            resp = requests.get(
+                f"{base}/rest/api/2/search", headers=headers, auth=auth, timeout=30,
+                params={"jql": jql, "startAt": start, "maxResults": page_size,
+                        "fields": "summary,description,reporter,comment,status,issuetype"},
+            )
+            if resp.status_code != 200:
+                return {"error": f"Jira API returned {resp.status_code}: {resp.text}"}
+            data = resp.json()
+            batch = data.get("issues", [])
+            issues.extend(batch)
+            start += len(batch)
+            if not batch or start >= data.get("total", 0):
+                break
+        for issue in issues:
+            comment = (issue.get("fields") or {}).get("comment") or {}
+            comments = comment.get("comments", [])
+            if comment.get("total", len(comments)) > len(comments):
+                all_c, c_start = [], 0
+                while True:
+                    r = requests.get(
+                        f"{base}/rest/api/2/issue/{issue['key']}/comment", headers=headers, auth=auth,
+                        timeout=30, params={"startAt": c_start, "maxResults": 100},
+                    )
+                    if r.status_code != 200:
+                        return {"error": f"Jira API returned {r.status_code} reading comments of {issue['key']}: {r.text}"}
+                    cd = r.json()
+                    part = cd.get("comments", [])
+                    all_c.extend(part)
+                    c_start += len(part)
+                    if not part or c_start >= cd.get("total", 0):
+                        break
+                issue["fields"]["comment"] = {"comments": all_c, "total": len(all_c)}
+        return {"issues": issues}
+    except Exception as e:
+        return {"error": f"Exception during Jira search: {e}"}
