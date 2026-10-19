@@ -26,6 +26,35 @@ def _read_json(response, stage):
     return payload
 
 
+def check_vanguard_connection(project_id, client_id, client_secret, timeout=8):
+    """Returns (ok, message): authenticates and reads one findings page of the project."""
+    if not all(v.strip() for v in (project_id, client_id, client_secret)):
+        return False, "Project ID, client ID or client secret empty"
+    try:
+        project_id = str(UUID(project_id.strip()))
+    except ValueError:
+        return False, "Project ID must be a UUID"
+    try:
+        auth = _read_json(requests.post(
+            "https://auth.api.your-company.com/oauth2/token",
+            data={"grant_type": "client_credentials", "client_id": client_id.strip(), "client_secret": client_secret.strip()},
+            timeout=timeout, allow_redirects=False,
+        ), "authentication")
+        token = auth.get("access_token")
+        if not isinstance(token, str) or not token.strip():
+            return False, "Authentication returned no access token"
+        _read_json(requests.get(
+            f"https://api.your-company.com/projects/{project_id}/findings",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            params={"state": "open", "preview": "false", "page_size": 1}, timeout=timeout, allow_redirects=False,
+        ), "findings query")
+    except ValueError as e:
+        return False, str(e)
+    except requests.RequestException:
+        return False, "Vanguard could not be reached"
+    return True, "Connected to project"
+
+
 def fetch_platform_findings():
     """Count current open findings, excluding previews, across every page.
 

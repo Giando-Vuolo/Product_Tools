@@ -4,6 +4,9 @@ import requests
 from dotenv import load_dotenv
 from utils.tunnel import start_tunnel, get_tunnel_url, get_tunnel_error, set_tunnel_url
 from utils.ai_helpers import get_ollama_models
+from utils.sonar_helpers import check_sonar_connection
+from utils.sbom_helpers import check_sbom_connection
+from utils.vanguard_helpers import check_vanguard_connection
 
 # Load environment variables
 load_dotenv(override=True)
@@ -108,6 +111,36 @@ if "vanguard_client_id" not in st.session_state:
 if "vanguard_client_secret" not in st.session_state:
     st.session_state.vanguard_client_secret = os.getenv("VANGUARD_CLIENT_SECRET", "")
 
+QUALITY_INTEGRATIONS = (
+    ("sonar", "SonarQube", check_sonar_connection),
+    ("sbom", "SBOM", check_sbom_connection),
+    ("vanguard", "Vanguard", check_vanguard_connection),
+)
+
+def check_quality_integrations(args_by_key, skip_unconfigured=False):
+    """Tests SonarQube, SBOM and Vanguard, stores each status in session state and returns (label, status, msg)."""
+    results = []
+    for key, label, check in QUALITY_INTEGRATIONS:
+        args = args_by_key[key]
+        if not all(a and str(a).strip() for a in args):
+            status, msg = ("Not checked", "") if skip_unconfigured else ("Failed", "Configuration incomplete")
+        else:
+            ok, msg = check(*args)
+            status = "Success" if ok else "Failed"
+        st.session_state[f"{key}_connection_status"] = status
+        st.session_state[f"{key}_connection_msg"] = msg
+        results.append((label, status, msg))
+    return results
+
+def quality_integration_args():
+    return {
+        "sonar": (st.session_state.sonar_server, st.session_state.sonar_token, st.session_state.sonar_component),
+        "sbom": (st.session_state.sbom_server, st.session_state.sbom_api_key, st.session_state.sbom_api_secret,
+                 st.session_state.sbom_namespace_id, st.session_state.sbom_app_id),
+        "vanguard": (st.session_state.vanguard_project_id, st.session_state.vanguard_client_id,
+                     st.session_state.vanguard_client_secret),
+    }
+
 # Perform automatic connection checks on session initialization
 if "jira_connection_status" not in st.session_state:
     st.session_state.jira_connection_status = "Not checked"
@@ -202,6 +235,9 @@ if "jira_connection_status" not in st.session_state:
     except Exception as e:
         st.session_state.api_connection_status = "Failed"
         st.session_state.api_connection_msg = "Offline"
+
+    # Test SonarQube, SBOM and Vanguard (only those fully configured)
+    check_quality_integrations(quality_integration_args(), skip_unconfigured=True)
 
 # 1. Define the page objects first so they are globally accessible
 planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner", icon="🎯")
@@ -454,7 +490,7 @@ def show_home():
 
     with tab_integrations:
         st.subheader("🔌 Centralized Integrations")
-        st.write("Configure connection configurations for Jira and Confluence servers below.")
+        st.write("Configure connection configurations for Jira, Confluence, Ollama, SonarQube, SBOM and Vanguard below.")
 
         # Display current status in nice columns
         stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
@@ -494,6 +530,17 @@ def show_home():
                 st.error(f"🔴 **Local API**: {a_msg}")
             else:
                 st.warning(f"🟡 **Local API**: {a_status}")
+
+        for col, (key, label, _) in zip(st.columns(4), QUALITY_INTEGRATIONS):
+            with col:
+                q_status = st.session_state.get(f"{key}_connection_status", "Not checked")
+                q_msg = st.session_state.get(f"{key}_connection_msg", "")
+                if q_status == "Success":
+                    st.success(f"🟢 **{label}**: {q_msg}")
+                elif q_status == "Failed":
+                    st.error(f"🔴 **{label}**: {q_msg}")
+                else:
+                    st.warning(f"🟡 **{label}**: {q_status}")
 
         st.markdown("---")
 
@@ -711,6 +758,17 @@ def show_home():
                     st.session_state.api_connection_status = "Failed"
                     st.session_state.api_connection_msg = "Offline"
                     st.error("❌ **Local API Connection Failed**: Could not connect to localhost:8000.")
+
+            # 5-7. Test SonarQube, SBOM and Vanguard Connections
+            with st.spinner("Testing SonarQube, SBOM and Vanguard Connections..."):
+                quality_results = check_quality_integrations(quality_integration_args())
+            for label, q_status, q_msg in quality_results:
+                if q_status == "Success":
+                    st.success(f"✅ **{label} Connection Successful!** {q_msg}.")
+                elif q_msg == "Configuration incomplete":
+                    st.warning(f"⚠️ **{label} not tested**: configuration is incomplete.")
+                else:
+                    st.error(f"❌ **{label} Connection Failed**: {q_msg}")
 # 3. Define the page listing for navigation
 home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
 

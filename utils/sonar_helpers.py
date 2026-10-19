@@ -37,6 +37,22 @@ def fetch_sonar_kpis(as_of=None):
     return latest_values(resp.json())
 
 
+def check_sonar_connection(server, token, component, timeout=8):
+    """Returns (ok, message): validates server, token and component in one call."""
+    if not (server and token and component):
+        return False, "Server, token or component empty"
+    try:
+        resp = requests.get(f"{server.rstrip('/')}/api/components/show", params={"component": component},
+                            headers={"Authorization": f"Bearer {token.strip()}"}, timeout=timeout)
+    except requests.RequestException as e:
+        return False, f"Connection Failed ({e})"
+    if resp.status_code == 200:
+        return True, f"Component `{resp.json().get('component', {}).get('name', component)}` found"
+    if resp.status_code == 404:
+        return False, f"Component `{component}` not found"
+    return False, f"Auth Failed (HTTP {resp.status_code})"
+
+
 def latest_values(payload):
     values = {}
     for measure in payload.get("measures", []):
