@@ -3,16 +3,21 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 
-from utils.confluence_helpers import get_confluence_page, update_confluence_page
+from utils.confluence_helpers import get_confluence_page, list_child_pages, update_confluence_page
 from utils.jira_helpers import fetch_release_issues_with_comments
 from utils.release_plan_helpers import (
-    DEFAULT_FIX_VERSION_PREFIX,
     build_preview,
+    build_fix_version,
     build_release_jql,
+    build_target_title,
     extract_actions,
+    check_target_guard,
+    fix_version_display,
+    is_missing_fix_version_error,
+    load_release_plan_config,
     missing_config,
-    parse_page_id,
     publish,
+    select_target_page,
     validate_version,
 )
 
@@ -36,33 +41,63 @@ if missing:
     st.error("Missing configuration (set in .env): " + ", ".join(missing))
     st.stop()
 
+try:
+    cfg = load_release_plan_config(os.environ)
+except ValueError as e:
+    st.error(str(e))
+    st.stop()
+
 
 def _get_page(page_id):
     return get_confluence_page(CONF_SERVER, CONF_TOKEN, JIRA_AUTH_METHOD, JIRA_EMAIL, page_id)
 
 
 version_in = st.text_input("Release version (X.Y.Z)", value="", placeholder="e.g. 35.0.0", key="rp_version")
-target_in = st.text_input("Target Release Plan page (ID or URL)", value="", key="rp_target")
-with st.expander("Advanced"):
-    prefix = st.text_input("fixVersion prefix", value=DEFAULT_FIX_VERSION_PREFIX, key="rp_prefix")
+st.text_input("fixVersion prefix", value=fix_version_display(version_in, cfg.label), disabled=True)
+st.caption("Once you finish typing, click outside the field (or press Enter) to update the fixVersion.")
 
+
+
+def _show_target(title, page_id, url):
+    link = f" - [open page]({url})" if url else ""
+    st.write(f"Target page: **{title or '?'}** (ID {page_id}){link}")
+
+
+just_generated = False
 if st.button("Generate preview", key="rp_preview_btn"):
+    just_generated = True
     st.session_state.pop("rp_preview", None)
     try:
         version = validate_version(version_in)
-        page_id = parse_page_id(target_in)
+        children = list_child_pages(CONF_SERVER, CONF_TOKEN, JIRA_AUTH_METHOD, JIRA_EMAIL, cfg.parent_id)
+        if children.get("error"):
+            raise ValueError(children["error"])
+        title = build_target_title(cfg.title_template, version)
+        target = select_target_page(children["results"], title, cfg.parent_id)
     except ValueError as e:
         st.error(str(e))
         st.stop()
+    page_id = target["id"]
     page = _get_page(page_id)
-    jql = build_release_jql(version, prefix)
+    # RF13: guard and show the target BEFORE any Jira call.
+    guard = check_target_guard(page, version, cfg.label, parent_id=cfg.parent_id)
+    _show_target(guard.title or target.get("title", ""), page_id, target.get("url", ""))
+    if not guard.ok:
+        for err in guard.errors:
+            st.error(err)
+        st.stop()
+    jql = build_release_jql(version, cfg.label)
     res = fetch_release_issues_with_comments(JIRA_SERVER, JIRA_TOKEN, JIRA_AUTH_METHOD, JIRA_EMAIL, jql)
     if res.get("error"):
-        st.error(res["error"])
+        if is_missing_fix_version_error(res["error"]):
+            st.error(f"Version {build_fix_version(version, cfg.label)} does not exist in Jira. Nothing to extract.")
+        else:
+            st.error(res["error"])
         st.stop()
-    preview = build_preview(page, res["issues"], version, prefix, JIRA_SERVER)
+    preview = build_preview(page, res["issues"], version, cfg.label, JIRA_SERVER, cfg.parent_id)
     st.session_state["rp_preview"] = {
-        "page_id": page_id, "version": version, "prefix": prefix,
+        "page_id": page_id, "version": version, "label": cfg.label, "parent_id": cfg.parent_id,
+        "page_url": target.get("url", ""),
         "page_version": page.get("version"), "preview": preview,
         "actions": extract_actions(res["issues"]), "issue_count": len(res["issues"]),
     }
@@ -72,7 +107,8 @@ if state:
     preview = state["preview"]
     guard = preview["guard"]
     st.subheader("Preview")
-    st.write(f"Target page: **{guard.title or '?'}** (ID {guard.page_id})")
+    if not just_generated:
+        _show_target(guard.title, guard.page_id, state.get("page_url", ""))
     if not guard.ok:
         for err in guard.errors:
             st.error(err)
@@ -98,8 +134,8 @@ if state:
                 get_page=lambda: _get_page(state["page_id"]),
                 update_page=lambda pid, title, ver, storage: update_confluence_page(
                     CONF_SERVER, CONF_TOKEN, JIRA_AUTH_METHOD, JIRA_EMAIL, pid, title, ver, storage),
-                actions=state["actions"], version=state["version"], prefix=state["prefix"],
-                jira_server=JIRA_SERVER,
+                actions=state["actions"], version=state["version"], label=state["label"],
+                jira_server=JIRA_SERVER, parent_id=state["parent_id"],
             )
             if result["ok"]:
                 st.success(f"Published: {result['added']} new action(s) added, {result['skipped']} skipped.")

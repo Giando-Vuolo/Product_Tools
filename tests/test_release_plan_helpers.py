@@ -4,11 +4,12 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from utils import release_plan_helpers as rp
-from utils.confluence_helpers import get_confluence_page, update_confluence_page
+from utils.confluence_helpers import get_confluence_page, list_child_pages, update_confluence_page
 from utils.jira_helpers import fetch_release_issues_with_comments
 
 FIX = Path(__file__).parent / "fixtures" / "release_plan"
 JIRA = "https://jira.example.com/jira"
+PARENT = "7177194568"
 
 
 def load(name):
@@ -68,7 +69,7 @@ class JqlAndInputTests(OfflineTestCase):
     def test_jql_ac7(self):
         self.assertEqual(rp.build_release_jql("35.0.0"),
                          'project = RECALLTWO AND issuetype in (Bug, Improvement, Story, Task) AND fixVersion = "DIGITAL:HUB 35.0.0"')
-        self.assertTrue(rp.build_release_jql("1.2.3", "P ").endswith('fixVersion = "P 1.2.3"'))
+        self.assertTrue(rp.build_release_jql("1.2.3", "P").endswith('fixVersion = "P 1.2.3"'))
 
     def test_version_ac8(self):
         self.assertEqual(rp.validate_version(" 35.0.0 "), "35.0.0")
@@ -77,16 +78,9 @@ class JqlAndInputTests(OfflineTestCase):
                 rp.validate_version(bad)
             self.assertIn("X.Y.Z", str(cm.exception))
 
-    def test_parse_page_id_ac10(self):
-        self.assertEqual(rp.parse_page_id("123"), "123")
-        self.assertEqual(rp.parse_page_id("https://c/x/viewpage.action?pageId=456"), "456")
-        self.assertEqual(rp.parse_page_id("https://c/spaces/RECALLTWO/pages/789/Title"), "789")
-        with self.assertRaises(ValueError):
-            rp.parse_page_id("garbage")
-
     def test_missing_config_ac37(self):
         self.assertEqual(rp.missing_config({"JIRA_SERVER": "x"}),
-                         ["JIRA_API_TOKEN", "CONFLUENCE_SERVER", "CONFLUENCE_API_TOKEN"])
+                         ["JIRA_API_TOKEN", "CONFLUENCE_SERVER", "CONFLUENCE_API_TOKEN", "RELEASE_PLAN_PARENT_PAGE"])
         self.assertEqual(rp.missing_config(dict.fromkeys(rp.REQUIRED_ENV, "v")), [])
 
 
@@ -146,8 +140,8 @@ class NetworkHelperTests(OfflineTestCase):
 
 
 class GuardTests(OfflineTestCase):
-    def guard(self, name, version="35.0.0", prefix=rp.DEFAULT_FIX_VERSION_PREFIX):
-        return rp.check_target_guard(load(name), version, prefix)
+    def guard(self, name, version="35.0.0", label=rp.DEFAULT_FIX_VERSION_LABEL):
+        return rp.check_target_guard(load(name), version, label, parent_id=PARENT)
 
     def test_valid_targets_ac15(self):
         self.assertTrue(self.guard("confluence_page_34.json", "34.1.0").ok)
@@ -167,7 +161,7 @@ class GuardTests(OfflineTestCase):
             g = self.guard(name)
             self.assertFalse(g.ok, name)
             self.assertTrue(any(text in e for e in g.errors), (name, g.errors))
-        g = rp.check_target_guard({"id": "1", "error": "Page 1 not found"}, "35.0.0")
+        g = rp.check_target_guard({"id": "1", "error": "Page 1 not found"}, "35.0.0", parent_id=PARENT)
         self.assertFalse(g.ok)
 
     def test_version_mismatch_ac12(self):
@@ -178,27 +172,139 @@ class GuardTests(OfflineTestCase):
         self.assertFalse(g.ok)
         self.assertIn("not found", g.errors[0])
 
-    def test_prefix(self):
-        self.assertFalse(self.guard("confluence_page_35.json", prefix="OTHER ").ok)
+    def test_label(self):
+        self.assertFalse(self.guard("confluence_page_35.json", label="OTHER").ok)
 
     def test_template_always_blocked_ac13(self):
         page = load("confluence_page_template.json")  # JQL matches 35.0.0 and parent is valid
-        g = rp.check_target_guard(page, "35.0.0")
+        g = rp.check_target_guard(page, "35.0.0", parent_id=PARENT)
         self.assertFalse(g.ok)
         self.assertTrue(any("Template" in e for e in g.errors))
 
     def test_no_update_when_guard_fails_ac14_ac17(self):
         update = Mock()
-        res = rp.publish(lambda: load("confluence_page_template.json"), update, [], "35.0.0", rp.DEFAULT_FIX_VERSION_PREFIX, JIRA)
+        res = rp.publish(lambda: load("confluence_page_template.json"), update, [], "35.0.0", rp.DEFAULT_FIX_VERSION_LABEL, JIRA, PARENT)
         self.assertFalse(res["ok"])
         update.assert_not_called()
         # preview never writes either (it has no write path)
-        pv = rp.build_preview(load("confluence_page_other_space.json"), [], "35.0.0", rp.DEFAULT_FIX_VERSION_PREFIX, JIRA)
+        pv = rp.build_preview(load("confluence_page_other_space.json"), [], "35.0.0", rp.DEFAULT_FIX_VERSION_LABEL, JIRA, PARENT)
         self.assertIsNone(pv["plan"])
 
 
 def act(key, text, author="Alice"):
     return rp.PostAction(key, text, author, "comment:1")
+
+class ConfigTests(OfflineTestCase):
+    def test_defaults_ac1_ac5(self):
+        for env in ({"RELEASE_PLAN_PARENT_PAGE": "123"},
+                    {"RELEASE_PLAN_PARENT_PAGE": "123", "RELEASE_FIXVERSION_LABEL": " ", "RELEASE_PLAN_TITLE_TEMPLATE": ""}):
+            cfg = rp.load_release_plan_config(env)
+            self.assertEqual((cfg.label, cfg.parent_id, cfg.title_template), ("DIGITAL:HUB", "123", "Release Plan {version}"))
+
+    def test_overrides_ac2_ac6(self):
+        cfg = rp.load_release_plan_config({"RELEASE_PLAN_PARENT_PAGE": "9", "RELEASE_FIXVERSION_LABEL": "ACME:X",
+                                           "RELEASE_PLAN_TITLE_TEMPLATE": "RP {version}"})
+        self.assertEqual(rp.build_fix_version("1.2.3", cfg.label), "ACME:X 1.2.3")
+        self.assertEqual(rp.build_target_title(cfg.title_template, "1.2.3"), "RP 1.2.3")
+
+    def test_parent_required_ac3(self):
+        for env in ({}, {"RELEASE_PLAN_PARENT_PAGE": "  "}):
+            with self.assertRaises(ValueError) as cm:
+                rp.load_release_plan_config(env)
+            self.assertIn("RELEASE_PLAN_PARENT_PAGE", str(cm.exception))
+        with self.assertRaises(ValueError):
+            rp.load_release_plan_config({"RELEASE_PLAN_PARENT_PAGE": "<PARENT_PAGE_ID>"})
+        self.assertIn("RELEASE_PLAN_PARENT_PAGE", rp.missing_config({}))
+
+    def test_template_needs_placeholder(self):
+        with self.assertRaises(ValueError):
+            rp.load_release_plan_config({"RELEASE_PLAN_PARENT_PAGE": "1", "RELEASE_PLAN_TITLE_TEMPLATE": "Plan"})
+
+    def test_env_example_ac7(self):
+        text = (Path(__file__).parent.parent / ".env.example").read_text(encoding="utf-8")
+        self.assertIn("RELEASE PLAN POST-ACTIONS", text)
+        self.assertIn("RELEASE_FIXVERSION_LABEL=DIGITAL:HUB", text)
+        self.assertIn("RELEASE_PLAN_TITLE_TEMPLATE=Release Plan {version}", text)
+        self.assertIn("RELEASE_PLAN_PARENT_PAGE=<PARENT_PAGE_ID>", text)
+        self.assertNotIn("7177194568", text)
+
+
+class DisplayTests(OfflineTestCase):
+    def test_display_ac10_ac11(self):
+        self.assertEqual(rp.fix_version_display("35.0.0", "DIGITAL:HUB"), "DIGITAL:HUB 35.0.0")
+        self.assertEqual(rp.fix_version_display(" 35.0.0 ", "DIGITAL:HUB"), "DIGITAL:HUB 35.0.0")
+        for bad in ("", "35.", "35.0", "v35.0.0", "35.0.0-rc1"):
+            self.assertEqual(rp.fix_version_display(bad, "DIGITAL:HUB"), "")
+
+
+class SelectTargetTests(OfflineTestCase):
+    def setUp(self):
+        super().setUp()
+        self.children = [{"id": c["id"], "title": c["title"], "url": ""}
+                         for c in load("confluence_children_parent.json")["results"]]
+
+    def pick(self, version, children=None):
+        title = rp.build_target_title(rp.DEFAULT_TITLE_TEMPLATE, version)
+        return rp.select_target_page(self.children if children is None else children, title, PARENT)
+
+    def test_exact_match_ac13(self):
+        self.assertEqual(self.pick("35.0.0")["id"], "4")
+
+    def test_no_substring_ac14(self):
+        self.assertEqual(self.pick("3.0.0")["id"], "8")
+        for v in ("2.0.0", "35.0", "5.0.0.1", "Database"):
+            with self.assertRaises(ValueError):
+                self.pick(v)
+        with self.assertRaises(ValueError):
+            self.pick("3.0.0", [c for c in self.children if c["id"] != "8"])
+
+    def test_not_found_message_ac17(self):
+        with self.assertRaises(ValueError) as cm:
+            self.pick("40.0.0")
+        self.assertEqual(str(cm.exception), f"Release Plan 40.0.0 not found under parent page {PARENT}.")
+
+    def test_multiple_ac18(self):
+        dup = self.children + [{"id": "99", "title": "Release Plan 35.0.0", "url": ""}]
+        with self.assertRaises(ValueError) as cm:
+            self.pick("35.0.0", dup)
+        msg = str(cm.exception)
+        self.assertIn("'Release Plan 35.0.0' (ID 4)", msg)
+        self.assertIn("'Release Plan 35.0.0' (ID 99)", msg)
+
+    def test_guard_mismatch_blocks_ac20(self):
+        update = Mock()
+        res = rp.publish(lambda: load("confluence_page_35.json"), update, [act("K-1", "x")], "36.0.0",
+                         "DIGITAL:HUB", JIRA, PARENT)
+        self.assertFalse(res["ok"])
+        self.assertIn("mismatch", res["error"])
+        update.assert_not_called()
+
+
+class ListChildPagesTests(OfflineTestCase):
+    def test_pagination_ac16(self):
+        p1 = {"results": [{"id": "1", "title": "A", "_links": {"webui": "/a"}}, {"id": "2", "title": "B"}],
+              "_links": {"next": "/rest/api/content/5/child/page?start=2"}}
+        p2 = {"results": [{"id": "3", "title": "C"}], "_links": {}}
+        with patch("utils.confluence_helpers.requests.get", side_effect=[response(p1), response(p2)]) as get:
+            res = list_child_pages("https://c/confluence/", "tok", "x", "", "5", page_size=2)
+        self.assertEqual([r["id"] for r in res["results"]], ["1", "2", "3"])
+        self.assertEqual(res["results"][0]["url"], "https://c/confluence/a")
+        self.assertEqual([c.kwargs["params"]["start"] for c in get.call_args_list], [0, 2])
+        self.assertEqual(get.call_args_list[0].args[0], "https://c/confluence/rest/api/content/5/child/page")
+
+    def test_error_and_no_call(self):
+        with patch("utils.confluence_helpers.requests.get", return_value=response({}, 500)):
+            self.assertIn("500", list_child_pages("https://c", "tok", "x", "", "5")["error"])
+        with patch("utils.confluence_helpers.requests.get", return_value=response({}, 404)):
+            self.assertIn("not found", list_child_pages("https://c", "tok", "x", "", "5")["error"])
+        with patch("utils.confluence_helpers.requests.get") as g:
+            self.assertIn("error", list_child_pages("", "", "x", "", "5"))
+        g.assert_not_called()
+
+    def test_fixture_shape(self):
+        with patch("utils.confluence_helpers.requests.get", return_value=response(load("confluence_children_parent.json"))):
+            res = list_child_pages("https://c", "tok", "x", "", PARENT)
+        self.assertEqual(len(res["results"]), 9)
 
 
 class MergeTests(OfflineTestCase):
@@ -248,7 +354,7 @@ class MergeTests(OfflineTestCase):
             rp.plan_merge(load("confluence_page_no_section.json")["storage"], [act("K-1", "x")], JIRA)
         update = Mock()
         res = rp.publish(lambda: load("confluence_page_no_section.json"), update, [act("K-1", "x")],
-                         "35.0.0", rp.DEFAULT_FIX_VERSION_PREFIX, JIRA)
+                         "35.0.0", rp.DEFAULT_FIX_VERSION_LABEL, JIRA, PARENT)
         self.assertFalse(res["ok"])
         update.assert_not_called()
 
@@ -318,7 +424,7 @@ class PublishTests(OfflineTestCase):
     def test_publish_writes_version_plus_one_ac19(self):
         page = load("confluence_page_35.json")
         update = Mock(return_value={"ok": True})
-        res = rp.publish(lambda: page, update, [act("K-1", "One")], "35.0.0", rp.DEFAULT_FIX_VERSION_PREFIX, JIRA)
+        res = rp.publish(lambda: page, update, [act("K-1", "One")], "35.0.0", rp.DEFAULT_FIX_VERSION_LABEL, JIRA, PARENT)
         self.assertEqual((res["ok"], res["added"]), (True, 1))
         pid, title, ver, storage = update.call_args.args
         self.assertEqual((pid, title, ver), ("8307795718", "Release Plan 35.0.0", 43))
@@ -327,19 +433,19 @@ class PublishTests(OfflineTestCase):
     def test_publish_error_not_success_ac19(self):
         update = Mock(return_value={"error": "HTTP 409: conflict"})
         res = rp.publish(lambda: load("confluence_page_35.json"), update, [act("K-1", "One")], "35.0.0",
-                         rp.DEFAULT_FIX_VERSION_PREFIX, JIRA)
+                         rp.DEFAULT_FIX_VERSION_LABEL, JIRA, PARENT)
         self.assertFalse(res["ok"])
         self.assertIn("409", res["error"])
 
     def test_publish_no_new_is_noop_ac18(self):
         update = Mock()
         res = rp.publish(lambda: load("confluence_page_35.json"), update, [], "35.0.0",
-                         rp.DEFAULT_FIX_VERSION_PREFIX, JIRA)
+                         rp.DEFAULT_FIX_VERSION_LABEL, JIRA, PARENT)
         self.assertEqual((res["ok"], res["added"]), (True, 0))
         update.assert_not_called()
 
     def test_preview_does_not_write_ac16(self):
-        pv = rp.build_preview(load("confluence_page_35.json"), [], "35.0.0", rp.DEFAULT_FIX_VERSION_PREFIX, JIRA)
+        pv = rp.build_preview(load("confluence_page_35.json"), [], "35.0.0", rp.DEFAULT_FIX_VERSION_LABEL, JIRA, PARENT)
         self.assertTrue(pv["guard"].ok)
         self.assertEqual(pv["plan"].new_actions, [])
 
