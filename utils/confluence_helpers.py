@@ -122,6 +122,39 @@ def get_confluence_page(server, token, auth_type, email, page_id):
         return {"error": f"Exception while reading Confluence page: {e}"}
 
 
+def list_child_pages(server, token, auth_type, email, parent_id, page_size=50, max_pages=50):
+    """List DIRECT child pages of parent_id, following pagination. Never raises.
+
+    Returns {"results": [{"id", "title", "url"}]} or {"error": str}.
+    """
+    if not server or not token:
+        return {"error": "Confluence server or token not configured"}
+    try:
+        base_url, headers, auth = _confluence_base_and_auth(server, token, auth_type, email)
+        results = []
+        start = 0
+        for _ in range(max_pages):
+            resp = requests.get(f"{base_url}/rest/api/content/{parent_id}/child/page", headers=headers,
+                                auth=auth, timeout=15, params={"start": start, "limit": page_size})
+            if resp.status_code == 404:
+                return {"error": f"Parent page {parent_id} not found"}
+            if resp.status_code != 200:
+                return {"error": f"Confluence API returned {resp.status_code}: {resp.text}"}
+            data = resp.json()
+            batch = data.get("results") or []
+            links = data.get("_links") or {}
+            for c in batch:
+                webui = (c.get("_links") or {}).get("webui", "")
+                results.append({"id": str(c.get("id", "")), "title": c.get("title", ""),
+                                "url": f"{base_url}{webui}" if webui else ""})
+            if not batch or "next" not in links:
+                break
+            start += len(batch)
+        return {"results": results}
+    except Exception as e:
+        return {"error": f"Exception while listing child pages: {e}"}
+
+
 def update_confluence_page(server, token, auth_type, email, page_id, title, new_version, storage):
     """PUT a page with version=new_version. Never raises."""
     if not server or not token:

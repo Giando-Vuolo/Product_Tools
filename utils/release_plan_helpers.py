@@ -10,13 +10,16 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional
 
-DEFAULT_FIX_VERSION_PREFIX = "DIGITAL:HUB "
+DEFAULT_FIX_VERSION_LABEL = "DIGITAL:HUB"
+DEFAULT_TITLE_TEMPLATE = "Release Plan {version}"
+ENV_LABEL = "RELEASE_FIXVERSION_LABEL"
+ENV_PARENT = "RELEASE_PLAN_PARENT_PAGE"
+ENV_TITLE = "RELEASE_PLAN_TITLE_TEMPLATE"
 JIRA_PROJECT = "RECALLTWO"
 ALLOWED_SPACE_KEY = "RECALLTWO"
-ALLOWED_PARENT_ID = "7177194568"
 FORBIDDEN_PAGE_IDS = frozenset({"8307791929"})  # template page
 ISSUE_TYPES = ("Bug", "Improvement", "Story", "Task")
-REQUIRED_ENV = ("JIRA_SERVER", "JIRA_API_TOKEN", "CONFLUENCE_SERVER", "CONFLUENCE_API_TOKEN")
+REQUIRED_ENV = ("JIRA_SERVER", "JIRA_API_TOKEN", "CONFLUENCE_SERVER", "CONFLUENCE_API_TOKEN", ENV_PARENT)
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 TAG_RE = re.compile(r"^\s*(?:[*#-]+\s+)?post-action:\s*(.*?)\s*$", re.IGNORECASE)
@@ -36,6 +39,13 @@ class ExistingTask:
     status: str
     issue_key: Optional[str]
     text: str
+
+
+@dataclass(frozen=True)
+class ReleasePlanConfig:
+    label: str
+    parent_id: str
+    title_template: str
 
 
 @dataclass
@@ -67,25 +77,60 @@ def validate_version(version: str) -> str:
     return v
 
 
-def build_fix_version(version: str, prefix: str = DEFAULT_FIX_VERSION_PREFIX) -> str:
-    return f"{prefix}{version}"
+def load_release_plan_config(env: Mapping) -> ReleasePlanConfig:
+    def get(name):
+        return str(env.get(name, "") or "").strip()
+
+    label = get(ENV_LABEL) or DEFAULT_FIX_VERSION_LABEL
+    template = get(ENV_TITLE) or DEFAULT_TITLE_TEMPLATE
+    parent = get(ENV_PARENT)
+    if not parent:
+        raise ValueError(f"Missing configuration (set in .env): {ENV_PARENT}")
+    if not re.fullmatch(r"\d+", parent):
+        raise ValueError(f"{ENV_PARENT} must be a numeric page ID (ID only, not a URL).")
+    if "{version}" not in template:
+        raise ValueError(f"{ENV_TITLE} must contain the {{version}} placeholder.")
+    return ReleasePlanConfig(label, parent, template)
 
 
-def build_release_jql(version: str, prefix: str = DEFAULT_FIX_VERSION_PREFIX) -> str:
+def build_fix_version(version: str, label: str = DEFAULT_FIX_VERSION_LABEL) -> str:
+    # Label is stored without a trailing space; the separator is added here at format time.
+    return f"{label.strip()} {version}"
+
+
+def build_release_jql(version: str, label: str = DEFAULT_FIX_VERSION_LABEL) -> str:
     return (
         f"project = {JIRA_PROJECT} AND issuetype in ({', '.join(ISSUE_TYPES)}) "
-        f'AND fixVersion = "{build_fix_version(version, prefix)}"'
+        f'AND fixVersion = "{build_fix_version(version, label)}"'
     )
 
 
-def parse_page_id(target: str) -> str:
-    t = (target or "").strip()
-    if re.fullmatch(r"\d+", t):
-        return t
-    m = re.search(r"[?&]pageId=(\d+)", t) or re.search(r"/pages/(\d+)(?:/|$|\?|#)", t)
-    if m:
-        return m.group(1)
-    raise ValueError("Could not find a page ID. Enter a numeric page ID or a Confluence page URL.")
+def fix_version_display(raw_version: str, label: str = DEFAULT_FIX_VERSION_LABEL) -> str:
+    try:
+        return build_fix_version(validate_version(raw_version), label)
+    except ValueError:
+        return ""
+
+
+def build_target_title(template: str, version: str) -> str:
+    return template.replace("{version}", version)
+
+
+def select_target_page(children: list, title: str, parent_id: str) -> dict:
+    matches = [c for c in (children or []) if c.get("title") == title]
+    if not matches:
+        raise ValueError(f"{title} not found under parent page {parent_id}.")
+    if len(matches) > 1:
+        listing = "; ".join(f"'{c.get('title')}' (ID {c.get('id')})" for c in matches)
+        raise ValueError(
+            f"Multiple pages match '{title}' under parent page {parent_id}: {listing}. Nothing was written."
+        )
+    return matches[0]
+
+
+def is_missing_fix_version_error(message: str) -> bool:
+    msg = message or ""
+    return "400" in msg and "does not exist for the field 'fixVersion'" in msg
 
 
 # --------------------------------------------------------------------- parsing
@@ -250,7 +295,10 @@ def extract_release_list_fix_versions(storage: str) -> list:
 
 
 # ------------------------------------------------------------------------ guard
-def check_target_guard(page: dict, version: str, prefix: str = DEFAULT_FIX_VERSION_PREFIX) -> GuardResult:
+def check_target_guard(
+    page: dict, version: str, label: str = DEFAULT_FIX_VERSION_LABEL, *, parent_id: str
+) -> GuardResult:
+    parent_id = str(parent_id)
     page = page or {}
     pid = str(page.get("id", "") or "")
     if page.get("error"):
@@ -263,14 +311,14 @@ def check_target_guard(page: dict, version: str, prefix: str = DEFAULT_FIX_VERSI
     if space != ALLOWED_SPACE_KEY:
         errors.append(f"Page is in space {space}, expected {ALLOWED_SPACE_KEY}.")
     ancestors = [str(a) for a in (page.get("ancestor_ids") or [])]
-    if pid == ALLOWED_PARENT_ID:
+    if pid == parent_id:
         errors.append("Target is the parent page itself.")
-    elif str(page.get("parent_id") or "") != ALLOWED_PARENT_ID:
-        if ALLOWED_PARENT_ID in ancestors:
-            errors.append(f"Page is a grandchild (not a direct child) of {ALLOWED_PARENT_ID}.")
+    elif str(page.get("parent_id") or "") != parent_id:
+        if parent_id in ancestors:
+            errors.append(f"Page is a grandchild (not a direct child) of {parent_id}.")
         else:
-            errors.append(f"Page is not under {ALLOWED_PARENT_ID}.")
-    expected = build_fix_version(version, prefix)
+            errors.append(f"Page is not under {parent_id}.")
+    expected = build_fix_version(version, label)
     found = extract_release_list_fix_versions(page.get("storage", "") or "")
     found_str = None
     if not found:
@@ -350,9 +398,9 @@ def plan_merge(storage: str, actions: list, jira_server: str) -> MergePlan:
 
 
 # ------------------------------------------------------- preview / publish flow
-def build_preview(page: dict, issues: list, version: str, prefix: str, jira_server: str) -> dict:
+def build_preview(page: dict, issues: list, version: str, label: str, jira_server: str, parent_id: str) -> dict:
     """Never writes. Returns {"guard", "plan", "error"}."""
-    guard = check_target_guard(page, version, prefix)
+    guard = check_target_guard(page, version, label, parent_id=parent_id)
     if not guard.ok:
         return {"guard": guard, "plan": None, "error": None}
     try:
@@ -367,15 +415,16 @@ def publish(
     update_page: Callable[[str, str, int, str], dict],
     actions: list,
     version: str,
-    prefix: str,
+    label: str,
     jira_server: str,
+    parent_id: str,
 ) -> dict:
     """Re-fetch, re-guard, re-plan, then (only if needed) write once.
 
     update_page(page_id, title, new_version, storage) -> {"ok": True} | {"error": str}
     """
     page = get_page()
-    guard = check_target_guard(page, version, prefix)
+    guard = check_target_guard(page, version, label, parent_id=parent_id)
     if not guard.ok:
         return {"ok": False, "added": 0, "skipped": 0, "error": " ".join(guard.errors)}
     try:
