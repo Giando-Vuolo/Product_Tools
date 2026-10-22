@@ -246,13 +246,13 @@ release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", 
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
 ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="AI Issue Creator", icon="🤖")
 ai_agent_page = st.Page("tools/6_AI_Agent.py", title="AI Agent", icon="💬")
-release_plan_page = st.Page("tools/7_Release_Plan.py", title="Release Plan Post-actions", icon="🚀")
-# Release Plan readiness sub-pages (temporary registration, stage 2)
-rr_approval_page = st.Page("tools/release_plan/2_Approval.py", title="2 · Approval", url_path="release-plan-approval")
-rr_doc_page = st.Page("tools/release_plan/3_Documentation_Table.py", title="3 · Documentation table", url_path="release-plan-documentation-table")
-rr_critical_page = st.Page("tools/release_plan/4_Critical_Changes.py", title="4 · Critical changes", url_path="release-plan-critical-changes")
-rr_pre_page = st.Page("tools/release_plan/5_PRE_Testing.py", title="5 · PRE testing", url_path="release-plan-pre-testing")
-rr_unassigned_page = st.Page("tools/release_plan/6_Unassigned.py", title="6 · Unassigned", url_path="release-plan-unassigned")
+from utils.navigation import RELEASE_PLAN_PAGES
+_rp_pages = {
+    n: (st.Page(path, title=title, url_path=url) if url else st.Page(path, title=title))
+    for n, path, title, url in RELEASE_PLAN_PAGES
+}
+rr_overview_page = _rp_pages[0]
+release_plan_nav_pages = [_rp_pages[n] for n in sorted(_rp_pages)]
 
 # 2. Define the Home Page rendering function
 def show_home():
@@ -494,6 +494,18 @@ def show_home():
 
         with r2c3:
             pass # AI Agent card removed temporarily while under development
+
+        r3c1, r3c2, r3c3 = st.columns(3)
+
+        with r3c1:
+            st.markdown("""
+                <div class="hub-card">
+                    <span class="hub-badge">NEW ✨</span>
+                    <h3>✅ Release Readiness</h3>
+                    <p>Check a release before go-live: scope, approvals, documentation table, critical changes, PRE testing and unassigned issues, with copy-ready notifications. Read-only.</p>
+                </div>
+            """, unsafe_allow_html=True)
+            st.page_link(rr_overview_page, label="Open Release Overview", icon="✅")
 
     with tab_integrations:
         st.subheader("🔌 Centralized Integrations")
@@ -781,8 +793,8 @@ home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
 
 # 4. Setup and run navigation
 pg = st.navigation({
-    "": [home_page, planner_page, sprint_review_page, release_notes_page, sprint_kpis_page, ai_creator_page, ai_agent_page, release_plan_page],
-    "Release Plan": [rr_approval_page, rr_doc_page, rr_critical_page, rr_pre_page, rr_unassigned_page],
+    "": [home_page, planner_page, sprint_review_page, release_notes_page, sprint_kpis_page, ai_creator_page, ai_agent_page],
+    "Release Plan": release_plan_nav_pages,
 })
 st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
 

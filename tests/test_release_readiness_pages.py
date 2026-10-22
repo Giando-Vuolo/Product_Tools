@@ -43,7 +43,7 @@ class PagesCase(unittest.TestCase):
 
         def fake_jira(server, token, auth, email, jql, page_size=50, fields=None):
             self.jqls.append((jql, fields))
-            return issues
+            return issues(jql) if callable(issues) else issues
 
         def fake_children(*a, **k):
             self.conf_calls += 1

@@ -15,6 +15,9 @@ from utils import release_checks as rc
 from utils import release_plan_helpers as rp
 
 
+NOT_RELEVANT_WINDOW_DAYS = 90
+
+
 @dataclass
 class Context:
     prefix: str
@@ -119,9 +122,14 @@ def fetch_issues(ctx: Context, fields: str = jira_helpers.RELEASE_READINESS_FIEL
 
 
 def fetch_not_relevant(ctx: Context, fields: str = jira_helpers.RELEASE_READINESS_FIELDS):
-    """Read-only: issues carrying the 'Not release relevant' fixVersion."""
+    """Read-only: issues carrying the 'Not release relevant' fixVersion.
+
+    That fixVersion is shared by every release, so the query is bounded to issues updated in the
+    last NOT_RELEVANT_WINDOW_DAYS days (paginated GET by the helper) to keep volume sane.
+    """
     jql = (f'project = {rp.JIRA_PROJECT} AND issuetype in ({", ".join(rp.ISSUE_TYPES)}) '
-           f'AND fixVersion = "{rc.NOT_RELEVANT_FIX_VERSION}"')
+           f'AND fixVersion = "{rc.NOT_RELEVANT_FIX_VERSION}" '
+           f'AND updated >= -{NOT_RELEVANT_WINDOW_DAYS}d')
     res = jira_helpers.fetch_release_issues_with_comments(
         ctx.server, ctx.token, ctx.auth, ctx.email, jql, fields=fields)
     if res.get("error"):
@@ -194,3 +202,59 @@ def render_critical(rows: list, checked_at: str = "", others: Optional[list] = N
                     {"Issue": i.key, "Summary": i.summary, "Status": i.status,
                      "Assignee": i.assignee or "Unassigned"} for i in others
                 ]), hide_index=True, width='stretch')
+
+
+def refresh_all(ctx: Context, with_not_relevant: bool = True) -> None:
+    """Own Refresh for the aggregate pages (0, 1, 8): in-scope issues + freeze (+ not-relevant issues)."""
+    key = f"{ctx.prefix}_data"
+    if not st.button("Refresh", key=f"{ctx.prefix}_refresh", disabled=not ctx.valid):
+        return
+    st.session_state.pop(key, None)
+    st.session_state.pop(f"{ctx.prefix}_freeze_manual", None)
+    data = {}
+    data["freeze"], data["freeze_note"] = _read_freeze(ctx)
+    issues, err = fetch_issues(ctx)
+    if err:
+        st.error(err)
+        return
+    data["scope_issues"] = list(issues)
+    data["not_relevant_issues"] = []
+    if with_not_relevant:
+        extra, err = fetch_not_relevant(ctx)
+        if err:
+            st.warning(f"Could not read 'Not release relevant' issues: {err}")
+        else:
+            seen = {i.key for i in issues}
+            data["not_relevant_issues"] = [i for i in extra if i.key not in seen]
+    data["issues"] = data["scope_issues"] + data["not_relevant_issues"]
+    data["checked_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    st.session_state[key] = data
+
+
+def render_overview(data: dict, freeze) -> None:
+    import pandas as pd
+    results = rc.run_all(data["issues"], freeze, date.today())
+    summ = rc.summarize(results)
+    icon = {"GREEN": "🟢", "AMBER": "🟠", "RED": "🔴"}[summ["semaphore"]]
+    st.caption(f"Checked at {data['checked_at']}")
+    st.subheader(f"{icon} Release readiness: {summ['semaphore']}")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("ERROR", summ["counts"][rc.ERROR])
+    c2.metric("WARN", summ["counts"][rc.WARN])
+    c3.metric("INFO", summ["counts"][rc.INFO])
+    st.markdown("#### Critical changes")
+    render_critical(results["Critical changes"])
+    st.markdown("#### Per owner")
+    if summ["per_owner"]:
+        st.dataframe(pd.DataFrame([
+            {"Owner": o, "ERROR": c[rc.ERROR], "WARN": c[rc.WARN], "INFO": c[rc.INFO]}
+            for o, c in sorted(summ["per_owner"].items())
+        ]), hide_index=True, width='stretch')
+    else:
+        st.success("No findings.")
+    st.markdown("#### Findings per rule")
+    for rule, items in results.items():
+        if rule == "Critical changes":
+            continue
+        with st.expander(f"{rule} ({len(items)})", expanded=False):
+            render_findings(items)
