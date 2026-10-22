@@ -10,7 +10,7 @@ ctx = rr.load_context(P)
 rr.refresh_all(ctx)
 data = rr.get_data(ctx)
 if data:
-    freeze = data.get("freeze")
+    freeze = rr.freeze_date_input(P, data)
     results = rc.run_all(data["issues"], freeze, rr.date.today())
     texts = rc.notification_texts(results)
     st.caption(f"Checked at {data['checked_at']}")

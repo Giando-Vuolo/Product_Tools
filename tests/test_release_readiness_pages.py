@@ -25,7 +25,7 @@ ENV = {
 SANDBOX_ENV = dict(ENV, RELEASE_PLAN_SANDBOX_MAP="999.0.0:35.0.0")
 PAGE_FILES = {
     "rr2": "2_Approval.py", "rr3": "3_Documentation_Table.py",
-    "rr4": "4_Critical_Changes.py", "rr5": "5_PRE_Testing.py", "rr6": "6_Unassigned.py",
+    "rr4": "4_Critical_Changes.py", "rr5": "5_PRE_Testing.py", "rr6": "6_Unassigned.py", "rr8": "8_Notifications.py",
 }
 
 
@@ -106,7 +106,7 @@ class RenderTests(PagesCase):
         for prefix in PAGE_FILES:
             with self.subTest(prefix):
                 at = self.run_page(prefix, "35.0.0")
-                self.assertEqual(len(self.jqls), 1)
+                self.assertEqual(len(self.jqls), 2 if prefix == "rr8" else 1)
                 self.assertTrue(any(c.value.startswith("Checked at ") for c in at.caption))
                 self.assertIn(f"{prefix}_data", at.session_state)
                 self.assert_no_writes()
@@ -180,6 +180,26 @@ class FreezeDateTests(PagesCase):
         self.assertEqual(row["Severity"], "ERROR")
         self.assertIn("needs freeze exception", row["Reason"])
         self.assertEqual(self.jqls.__len__(), 1)  # no refetch on date change
+        self.assert_no_writes()
+
+    def test_page8_manual_date_input_and_past_date_gives_error_text(self):
+        from datetime import date, timedelta
+        at = self.run_page("rr8", "35.0.0")
+        self.assertEqual(len(at.date_input), 1)
+        self.assertEqual(at.date_input[0].key, "rr8_freeze_manual")
+        before = "\n".join(c.value for c in at.code)
+        self.assertNotIn("[ERROR] ", before.split("RP-2")[1].split("\n")[0] if "RP-2" in before else "")
+        at.date_input[0].set_value(date.today() - timedelta(days=30)).run()
+        text = "\n".join(c.value for c in at.code)
+        self.assertRegex(text, r"RP-2.*\[ERROR\].*needs freeze exception")
+        self.assertEqual(len(self.jqls), 2)  # scope + not-relevant, no refetch on date change
+        self.assert_no_writes()
+
+    def test_page8_no_manual_input_when_page_has_freeze_date(self):
+        page = load("release_plan/confluence_page_999_v22.json")
+        at = self.run_page("rr8", "999.0.0", env=SANDBOX_ENV, page=page)
+        self.assertEqual(len(at.date_input), 0)
+        self.assertTrue(any(c.value.startswith("Freeze date (from the Release Plan page)") for c in at.caption))
         self.assert_no_writes()
 
 
