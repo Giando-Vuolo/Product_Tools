@@ -250,6 +250,7 @@ release_plan_page = st.Page("tools/7_Release_Plan.py", title="Release Plan Post-
 # Release Plan readiness sub-pages (temporary registration, stage 2)
 rr_approval_page = st.Page("tools/release_plan/2_Approval.py", title="2 · Approval", url_path="release-plan-approval")
 rr_doc_page = st.Page("tools/release_plan/3_Documentation_Table.py", title="3 · Documentation table", url_path="release-plan-documentation-table")
+rr_critical_page = st.Page("tools/release_plan/4_Critical_Changes.py", title="4 · Critical changes", url_path="release-plan-critical-changes")
 rr_pre_page = st.Page("tools/release_plan/5_PRE_Testing.py", title="5 · PRE testing", url_path="release-plan-pre-testing")
 rr_unassigned_page = st.Page("tools/release_plan/6_Unassigned.py", title="6 · Unassigned", url_path="release-plan-unassigned")
 
@@ -781,7 +782,7 @@ home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
 # 4. Setup and run navigation
 pg = st.navigation({
     "": [home_page, planner_page, sprint_review_page, release_notes_page, sprint_kpis_page, ai_creator_page, ai_agent_page, release_plan_page],
-    "Release Plan": [rr_approval_page, rr_doc_page, rr_pre_page, rr_unassigned_page],
+    "Release Plan": [rr_approval_page, rr_doc_page, rr_critical_page, rr_pre_page, rr_unassigned_page],
 })
 st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
 

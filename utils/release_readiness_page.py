@@ -174,14 +174,23 @@ def render_findings(findings: list, checked_at: str = "", empty_msg: str = "No f
     ]), hide_index=True, width='stretch')
 
 
-def render_critical(rows: list, checked_at: str = "") -> None:
+def render_critical(rows: list, checked_at: str = "", others: Optional[list] = None) -> None:
     if checked_at:
         st.caption(f"Checked at {checked_at}")
+    import pandas as pd
     if not rows:
         st.success("No critical changes.")
-        return
-    import pandas as pd
-    st.dataframe(pd.DataFrame([
-        {"Issue": r.issue_key, "Summary": r.summary, "Assignee": r.assignee or "Unassigned",
-         "Reasons": "; ".join(r.reasons)} for r in rows
-    ]), hide_index=True, width='stretch')
+    else:
+        st.dataframe(pd.DataFrame([
+            {"Issue": r.issue_key, "Summary": r.summary, "Assignee": r.assignee or "Unassigned",
+             "Reasons": "; ".join(r.reasons)} for r in rows
+        ]), hide_index=True, width='stretch')
+    if others is not None:
+        with st.expander("Other in-scope issues", expanded=False):
+            if not others:
+                st.write("No other in-scope issues.")
+            else:
+                st.dataframe(pd.DataFrame([
+                    {"Issue": i.key, "Summary": i.summary, "Status": i.status,
+                     "Assignee": i.assignee or "Unassigned"} for i in others
+                ]), hide_index=True, width='stretch')

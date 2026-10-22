@@ -25,7 +25,7 @@ ENV = {
 SANDBOX_ENV = dict(ENV, RELEASE_PLAN_SANDBOX_MAP="999.0.0:35.0.0")
 PAGE_FILES = {
     "rr2": "2_Approval.py", "rr3": "3_Documentation_Table.py",
-    "rr5": "5_PRE_Testing.py", "rr6": "6_Unassigned.py",
+    "rr4": "4_Critical_Changes.py", "rr5": "5_PRE_Testing.py", "rr6": "6_Unassigned.py",
 }
 
 
@@ -34,10 +34,10 @@ def load(path):
 
 
 class PagesCase(unittest.TestCase):
-    def run_page(self, prefix, version="", click=True, env=ENV, page=None, title=None):
+    def run_page(self, prefix, version="", click=True, env=ENV, page=None, title=None, issues=None):
         self.jqls = []
         self.conf_calls = 0
-        issues = load("release_readiness/issues.json")
+        issues = issues if issues is not None else load("release_readiness/issues.json")
         page = page if page is not None else load("release_plan/confluence_page_35.json")
         title = title or f"Release Plan {version}"
 
@@ -180,6 +180,41 @@ class FreezeDateTests(PagesCase):
         self.assertEqual(row["Severity"], "ERROR")
         self.assertIn("needs freeze exception", row["Reason"])
         self.assertEqual(self.jqls.__len__(), 1)  # no refetch on date change
+        self.assert_no_writes()
+
+
+class CriticalPageTests(PagesCase):
+    def test_critical_table_first_and_non_critical_excluded(self):
+        at = self.run_page("rr4", "35.0.0")
+        first = at.dataframe[0].value
+        self.assertEqual(list(first.columns), ["Issue", "Summary", "Assignee", "Reasons"])
+        self.assertIn("RP-2", list(first["Issue"]))
+        self.assertNotIn("RP-1", list(first["Issue"]))
+        self.assertEqual(len(at.expander), 1)
+        self.assertEqual(at.expander[0].label, "Other in-scope issues")
+        self.assertFalse(at.expander[0].proto.expanded)
+        self.assertIn("RP-1", list(at.dataframe[1].value["Issue"]))
+        self.assertTrue(any(c.value.startswith("Checked at ") for c in at.caption))
+        self.assertEqual(len(self.jqls), 1)
+        self.assert_no_writes()
+
+    def test_multi_reason_row(self):
+        issues = load("release_readiness/issues.json")
+        f = issues["issues"][0]["fields"]
+        t = f["customfield_25263"]
+        t = t.replace("|Critical modification|No|", "|Critical modification|Yes|")
+        t = t.replace("|Downtime required|No|", "|Downtime required|Yes|")
+        t = t.replace("|Tested in PRE|Yes|", "|Tested in PRE|No|")
+        t = t.replace("|Load test completed|No|", "|Load test completed|Yes|")
+        f["customfield_25263"] = t
+        at = self.run_page("rr4", "35.0.0", issues=issues)
+        df = at.dataframe[0].value
+        row = df[df["Issue"] == "RP-1"].iloc[0]
+        self.assertEqual(len(row["Reasons"].split("; ")), 3)
+        self.assertIn("Critical modification = Yes", row["Reasons"])
+        self.assertIn("Downtime required = Yes", row["Reasons"])
+        self.assertIn("Tested in PRE = No", row["Reasons"])
+        self.assertNotIn("RP-1", list(at.dataframe[1].value["Issue"]))
         self.assert_no_writes()
 
 
