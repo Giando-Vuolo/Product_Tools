@@ -282,6 +282,14 @@ default_conf_space = os.getenv("CONFLUENCE_SPACE", "DS")
 default_conf_page = os.getenv("CONFLUENCE_PAGE", "Release Notes")
 
 default_project_name = os.getenv("PROJECT_NAME", "PO Tools Enterprise")
+def resolve_quarterly_epic_project_key():
+    """Prefer Jira project keys from dedicated env vars over the display name in PROJECT_NAME."""
+    for env_name in ["JIRA_PROJECT_KEY", "AI_ISSUE_PROJECT_KEY", "PROJECT_KEY", "PROJECT_NAME"]:
+        value = os.getenv(env_name, "").strip()
+        if value:
+            return value
+    return "MYPROJECT"
+
 default_primary_color = os.getenv("PRIMARY_COLOR", "#3B82F6")
 
 default_filename_sr = os.getenv("DEFAULT_FILENAME_SPRINT_REVIEW", "Sprint_Review_Report")
@@ -345,6 +353,8 @@ if 'outlook_df' not in st.session_state:
 
 if 'project_name' not in st.session_state:
     st.session_state.project_name = default_project_name
+if 'quarterly_epic_project_key' not in st.session_state:
+    st.session_state.quarterly_epic_project_key = resolve_quarterly_epic_project_key()
 if 'filename_sr' not in st.session_state:
     st.session_state.filename_sr = default_filename_sr
 if 'filename_rn' not in st.session_state:
@@ -1266,11 +1276,19 @@ if st.session_state.active_tab == "🔌 Ingestion":
     with st.container(border=True):
         col_proj, col_committed, col_quarter, col_title = st.columns([1, 1, 1, 2])
         with col_proj:
+            default_project_key = (
+                st.session_state.get("quarterly_epic_project_key")
+                or st.session_state.get("project_name")
+                or os.getenv("PROJECT_NAME", "MYPROJECT").strip()
+                or "MYPROJECT"
+            )
             project_key = st.text_input(
                 "Project",
-                value="MYPROJECT",
+                value=default_project_key,
                 placeholder="e.g. MYPROJECT"
             )
+            if project_key.strip() and project_key.strip() != st.session_state.get("quarterly_epic_project_key", ""):
+                st.session_state.quarterly_epic_project_key = project_key.strip()
         with col_committed:
             committed_epic_label = st.text_input(
                 "Committed Epic label",
@@ -2061,7 +2079,7 @@ elif st.session_state.active_tab == "✍️ Workbook":
                 has_selected_ot_visible = bool(display_df_ot["Select"].any()) if display_df_ot is not None and "Select" in display_df_ot.columns else False
                 toggle_icon_ot = "☑️" if has_selected_ot_visible else "⬜"
                 
-                bot_col_sel, bot_col1, bot_col2, bot_col3 = st.columns([1.0, 2.5, 2.5, 6.0])
+                bot_col_sel, bot_col1, bot_col2, bot_col3, bot_col4 = st.columns([1.0, 2.5, 2.5, 2.5, 3.5])
                 with bot_col_sel:
                     if st.button(toggle_icon_ot, key="btn_toggle_sel_ot", use_container_width=True, help="Select/Deselect All"):
                         if has_selected_ot_visible:
@@ -2080,144 +2098,7 @@ elif st.session_state.active_tab == "✍️ Workbook":
                         st.toast("Deleted selected rows!", icon="🗑️")
                         st.rerun()
                 with bot_col2:
-                    if st.button("Clear", key="btn_clear_ot", use_container_width=True):
-                        st.session_state.outlook_df = None
-                        st.rerun()
-
-                # Duplicate in: dropdown menu
-                dup_dest_ot = st.selectbox(
-                    "Duplicate in:",
-                    options=["Select destination...", "Overview"],
-                    key="dup_dest_ot",
-                    disabled=not has_selected_ot,
-                    on_change=handle_dup_dest_ot
-                )
-                dup_dest_ot_action = st.session_state.get("dup_dest_ot_action", "Select destination...")
-                if dup_dest_ot_action == "Overview":
-                    selected_rows = get_selected_rows("outlook_df", "editor_ot_refined", list(display_df_ot.index) if display_df_ot is not None else [])
-                    selected_rows["Outlook"] = ""
-                    selected_rows["Demo"] = False
-                    cols_order = ["Select", "Key", "Summary", "Epic", "Status", "Fix Version", "Labels", "Outlook", "Sprint Review", "Release Notes", "Assignee", "Demo", "Type"]
-                    cols_order = [c for c in cols_order if c in selected_rows.columns]
-                    selected_rows = selected_rows[cols_order]
-                    selected_rows["Select"] = False
-                    
-                    if st.session_state.overview_df is None:
-                        st.session_state.overview_df = selected_rows
-                    else:
-                        st.session_state.overview_df = pd.concat([st.session_state.overview_df, selected_rows], ignore_index=True)
-                        
-                    st.session_state.outlook_df["Select"] = False
-                    st.toast("Duplicated selected rows to Overview!", icon="🚀")
-                    st.session_state.dup_dest_ot_action = "Select destination..."
-                    st.rerun()
-        # Custom Table Dataset Workspace
-        for ext_idx, ext_tab in enumerate(work_subtabs_ext):
-            with ext_tab:
-                table_data = st.session_state.custom_tables[ext_idx]
-                title_val = table_data["title"]
-                display_title = title_val if title_val.strip() != "" else f"Custom Table {ext_idx + 1}"
-                
-                st.markdown(f"#### 📊 Custom Table: {display_title}")
-                
-                # Title, Position inputs
-                edit_col_title, edit_col_pos = st.columns([3, 2])
-                with edit_col_title:
-                    new_title = st.text_input("Rename Table Title:", value=title_val, key=f"rename_ext_{ext_idx}")
-                    if new_title != title_val:
-                        st.session_state.custom_tables[ext_idx]["title"] = new_title
-                        st.rerun()
-                with edit_col_pos:
-                    new_pos = st.selectbox("Position in Report:", options=["Before Demo Table", "After Demo Table"], index=0 if table_data["position"] == "Before Demo Table" else 1, key=f"pos_ext_{ext_idx}")
-                    if new_pos != table_data["position"]:
-                        st.session_state.custom_tables[ext_idx]["position"] = new_pos
-                        st.rerun()
-                
-                df_ext = table_data["df"]
-                if 'Select' not in df_ext.columns:
-                    df_ext.insert(0, 'Select', False)
-                
-                # Hidden columns multiselect
-                cols_available = [col for col in df_ext.columns if col != "Select"]
-                if "hidden_cols" not in table_data:
-                    st.session_state.custom_tables[ext_idx]["hidden_cols"] = []
-                
-                selected_show_cols = st.multiselect(
-                    "Select Columns to Display in PDF & Workbook:",
-                    options=cols_available,
-                    default=[c for c in cols_available if c not in table_data.get("hidden_cols", [])],
-                    key=f"cols_select_{ext_idx}"
-                )
-                hidden_cols = [c for c in cols_available if c not in selected_show_cols]
-                st.session_state.custom_tables[ext_idx]["hidden_cols"] = hidden_cols
-                
-                col_cfg_ext = {
-                    "Select": st.column_config.CheckboxColumn("Select 🗑️", default=False, width="small"),
-                }
-                if "Status" in df_ext.columns:
-                    ext_statuses = sorted(list(set(df_ext["Status"].dropna().unique()).union({"To Do", "In Progress", "Done", "Blocked", "Open", "Closed"})))
-                    col_cfg_ext["Status"] = st.column_config.SelectboxColumn("Status 🚥", options=ext_statuses, width="small")
-                
-                # Apply hidden columns configuration
-                for hc in hidden_cols:
-                    col_cfg_ext[hc] = None
-                
-                # Sorting & Filtering controls
-                sc_col1, sc_col2, sc_col3 = st.columns([4.0, 4.0, 4.0])
-                with sc_col1:
-                    ext_cols = ["🔍 Sort by..."] + [col for col in df_ext.columns if col != "Select"]
-                    sort_col = st.selectbox("Sort by:", ext_cols, key=f"sort_ext_{ext_idx}_col", label_visibility="collapsed", on_change=trigger_sort_ext, args=(ext_idx,))
-                with sc_col2:
-                    sort_dir = st.selectbox("Order:", ["Ascending", "Descending"], key=f"sort_ext_{ext_idx}_dir", label_visibility="collapsed", on_change=trigger_sort_ext, args=(ext_idx,))
-                with sc_col3:
-                    filter_label_ext = st.text_input("Filter by Label:", key=f"filter_ext_{ext_idx}_label", placeholder="🔍 Filter by label...", label_visibility="collapsed")
-  
-                # Apply filter to display
-                display_df_ext = df_ext
-                if table_data.get("sort_by_team") and st.session_state.get("sprint_review_label_order", []):
-                    display_df_ext = sort_items_by_label_priority(display_df_ext, ["Key"])
-                    st.caption("Previewing the Sprint Review team order. This view does not change the saved workbook order.")
-                if filter_label_ext.strip() != "" and "Labels" in display_df_ext.columns:
-                    display_df_ext = display_df_ext[display_df_ext["Labels"].str.contains(filter_label_ext.strip(), case=False, na=False)]
- 
-                has_selected_ext = check_any_selected_custom(ext_idx, f"editor_ext_{ext_idx}_refined", list(display_df_ext.index))
- 
-                st.data_editor(
-                    display_df_ext,
-                    num_rows="dynamic",
-                    use_container_width=True,
-                    column_config=col_cfg_ext,
-                    key=f"editor_ext_{ext_idx}_refined",
-                    on_change=sync_custom_table_changes,
-                    args=(ext_idx, f"editor_ext_{ext_idx}_refined", list(display_df_ext.index))
-                )
-                
-                # Bottom action controls
-                has_selected_ext_visible = bool(display_df_ext["Select"].any()) if "Select" in display_df_ext.columns else False
-                toggle_icon_ext = "☑️" if has_selected_ext_visible else "⬜"
-                
-                bot_col_sel, bot_col1, bot_col2, bot_col3, bot_col4 = st.columns([1.0, 2.5, 2.5, 2.5, 3.5])
-                with bot_col_sel:
-                    if st.button(toggle_icon_ext, key=f"btn_toggle_sel_ext_{ext_idx}", use_container_width=True, help="Select/Deselect All"):
-                        if has_selected_ext_visible:
-                            st.session_state.custom_tables[ext_idx]["df"].loc[display_df_ext.index, "Select"] = False
-                        else:
-                            st.session_state.custom_tables[ext_idx]["df"].loc[display_df_ext.index, "Select"] = True
-                        st.rerun()
-                with bot_col1:
-                    if st.button("Delete", key=f"btn_del_ext_{ext_idx}", use_container_width=True, disabled=not has_selected_ext):
-                        selected_rows = get_selected_rows_custom(ext_idx, f"editor_ext_{ext_idx}_refined", list(display_df_ext.index))
-                        if "Key" in df_ext.columns:
-                            selected_keys = selected_rows["Key"].tolist()
-                            st.session_state.custom_tables[ext_idx]["df"] = df_ext[
-                                ~df_ext["Key"].isin(selected_keys)
-                            ].reset_index(drop=True)
-                        else:
-                            st.session_state.custom_tables[ext_idx]["df"] = df_ext.drop(index=selected_rows.index).reset_index(drop=True)
-                        st.toast("Deleted selected rows!", icon="🗑️")
-                        st.rerun()
-                with bot_col2:
-                    if st.button("Add Outlook", key=f"btn_dup_ext_{ext_idx}_to_ot", use_container_width=True, disabled=not has_selected_ext):
+                    if st.button("Add Outlook", key="btn_dup_ext_{ext_idx}_to_ot", use_container_width=True, disabled=not has_selected_ot):
                         selected_rows = get_selected_rows_custom(ext_idx, f"editor_ext_{ext_idx}_refined", list(display_df_ext.index))
                         cols_to_keep = ["Key", "Summary", "Epic", "Status", "Fix Version", "Labels", "Sprint Review", "Release Notes", "Assignee", "Type"]
                         for col in cols_to_keep:
@@ -2231,15 +2112,17 @@ elif st.session_state.active_tab == "✍️ Workbook":
                         selected_rows = selected_rows[cols_to_keep]
                         selected_rows.insert(0, "Select", False)
                         
-                        if st.session_state.outlook_df is None:
-                            st.session_state.outlook_df = selected_rows
+                        if st.session_state.overview_df is None:
+                            st.session_state.overview_df = selected_rows
                         else:
-                            st.session_state.outlook_df = pd.concat([st.session_state.outlook_df, selected_rows], ignore_index=True)
-                            
-                        st.session_state.custom_tables[ext_idx]["df"]["Select"] = False
+                            st.session_state.overview_df = pd.concat([st.session_state.overview_df, selected_rows], ignore_index=True)
+
+                        st.session_state.outlook_df["Select"] = False
+                        st.toast("Duplicated selected rows to Overview!", icon="🚀")
+                        st.session_state.dup_dest_ot_action = "Select destination..."
                         st.rerun()
                 with bot_col3:
-                    if st.button("Clear Data", key=f"btn_clear_ext_{ext_idx}", use_container_width=True):
+                    if st.button("Clear Data", key="btn_clear_ext_{ext_idx}", use_container_width=True):
                         st.session_state.custom_tables[ext_idx]["df"] = pd.DataFrame(columns=df_ext.columns)
                         st.toast("Custom table dataset cleared!", icon="🧹")
                         st.rerun()
