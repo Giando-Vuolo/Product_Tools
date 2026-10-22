@@ -1,0 +1,12 @@
+{
+  "id": "7570725597",
+  "title": "Release Plan 999.0.0",
+  "space_key": "RECALLTWO",
+  "version": 22,
+  "parent_id": "7177194568",
+  "ancestor_ids": [
+    "1",
+    "7177194568"
+  ],
+  "storage": "<h2 data-nh-numbering=\"1\">1. Participants</h2><table><tbody><tr><th>Date</th><td><time datetime=\"2026-10-27\"/></td></tr><tr><th>Freeze date</th><td><time datetime=\"2026-10-23\"/></td></tr></tbody></table><h2 data-nh-numbering=\"2\">2. 📌 Release Information</h2><p>Architecture review: pending</p><p>Release readiness: not checked yet</p><h3>2.1 Included changes</h3><h4>2.1.1 Release List</h4><ac:structured-macro ac:name=\"jira\" ac:schema-version=\"1\" ac:macro-id=\"m1\"><ac:parameter ac:name=\"jqlQuery\">project = RECALLTWO AND issuetype in (Bug, Improvement, Story, Task) AND fixVersion = &quot;DIGITAL:HUB 35.0.0&quot;</ac:parameter></ac:structured-macro><h4>2.1.2 Critical changes</h4><p>Pending</p><h2>3. Deployment Plan</h2><h3>3.1 Pre-deploy validation plan</h3><p>x</p><h3>3.2 Execution window</h3><p>x</p><h3>3.3 🛠️ Post-actions</h3><ul><li style=\"list-style-type: none;\"><ac:task-list><ac:task><ac:task-id>9</ac:task-id><ac:task-status>incomplete</ac:task-status><ac:task-body>Existing task</ac:task-body></ac:task></ac:task-list></li></ul><h3>3.4 Post-deploy validation plan</h3><p>x</p><h3>3.5 Rollback plan</h3><p>x</p><h2>4. Post-deployment support</h2><p>s</p><h2>5. Communication</h2><p>c</p><h2>6. Tracking and metrics</h2><p>t</p><h2>7. Additional notes</h2><p>n</p>"
+}

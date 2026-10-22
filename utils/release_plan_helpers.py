@@ -5,7 +5,9 @@ The merge into Confluence storage format is an offset-based string splice so
 that all untouched content stays byte-for-byte identical.
 """
 import html
+import os
 import re
+import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional
@@ -18,6 +20,8 @@ ENV_TITLE = "RELEASE_PLAN_TITLE_TEMPLATE"
 JIRA_PROJECT = "RECALLTWO"
 ALLOWED_SPACE_KEY = "RECALLTWO"
 FORBIDDEN_PAGE_IDS = frozenset({"8307791929"})  # template page
+ENV_SANDBOX = "RELEASE_PLAN_SANDBOX_MAP"
+SANDBOX_WRITE_PAGE_ID = "7570725597"  # "Release Plan 999.0.0": the only page writable in sandbox
 ISSUE_TYPES = ("Bug", "Improvement", "Story", "Task")
 REQUIRED_ENV = ("JIRA_SERVER", "JIRA_API_TOKEN", "CONFLUENCE_SERVER", "CONFLUENCE_API_TOKEN", ENV_PARENT)
 
@@ -46,6 +50,15 @@ class ReleasePlanConfig:
     label: str
     parent_id: str
     title_template: str
+
+
+@dataclass(frozen=True)
+class SandboxConfig:
+    """Typed version -> source version whose Jira issues are read (read-only)."""
+    mapping: tuple = ()  # tuple of (typed_version, source_version)
+
+    def source_for(self, version: str) -> Optional[str]:
+        return dict(self.mapping).get((version or "").strip())
 
 
 @dataclass
@@ -91,6 +104,50 @@ def load_release_plan_config(env: Mapping) -> ReleasePlanConfig:
     if "{version}" not in template:
         raise ValueError(f"{ENV_TITLE} must contain the {{version}} placeholder.")
     return ReleasePlanConfig(label, parent, template)
+
+
+def load_sandbox_config(env: Mapping) -> SandboxConfig:
+    """Parse RELEASE_PLAN_SANDBOX_MAP="999.0.0:35.0.0[,a:b]". Empty/unset = no sandbox."""
+    raw = str(env.get(ENV_SANDBOX, "") or "").strip()
+    pairs = []
+    for item in (raw.split(",") if raw else []):
+        item = item.strip()
+        if not item:
+            continue
+        typed, sep, source = item.partition(":")
+        if not sep:
+            raise ValueError(f"{ENV_SANDBOX} entries must look like 999.0.0:35.0.0.")
+        try:
+            pairs.append((validate_version(typed), validate_version(source)))
+        except ValueError:
+            raise ValueError(f"{ENV_SANDBOX} entries must look like 999.0.0:35.0.0.")
+    return SandboxConfig(tuple(pairs))
+
+
+def resolve_source_version(version: str, config: SandboxConfig) -> tuple:
+    """Return (jira_source_version, is_sandbox)."""
+    v = (version or "").strip()
+    source = config.source_for(v) if config else None
+    if source:
+        return source, True
+    return v, False
+
+
+def check_write_allowed(page_id, *, is_sandbox: bool, target: str = "confluence") -> None:
+    """Raise PermissionError unless a write to `target` ("confluence"|"jira") is allowed."""
+    pid = str(page_id or "")
+    if target == "jira":
+        if is_sandbox:
+            raise PermissionError("Jira writes are blocked in sandbox mode.")
+        return
+    if target != "confluence":
+        raise PermissionError(f"Unknown write target '{target}'.")
+    if pid in FORBIDDEN_PAGE_IDS:
+        raise PermissionError(f"Template page {pid} can never be written.")
+    if is_sandbox and pid != SANDBOX_WRITE_PAGE_ID:
+        raise PermissionError(
+            f"Sandbox mode: only page {SANDBOX_WRITE_PAGE_ID} can be written, not {pid or '?'}."
+        )
 
 
 def build_fix_version(version: str, label: str = DEFAULT_FIX_VERSION_LABEL) -> str:
@@ -208,12 +265,26 @@ def _plain(fragment: str) -> str:
     return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", fragment)).split())
 
 
+def _normalise_heading(text: str) -> str:
+    """Casefolded heading title without leading emoji/symbols and numbering ("3.3 \u2699\ufe0f Post-actions")."""
+    t = text or ""
+    prev = None
+    while prev != t:
+        prev = t
+        t = re.sub(r"^[\d.]+(?=\s|$)\s*", "", t.lstrip())
+        i = 0
+        while i < len(t) and not t[i].isalnum() and unicodedata.category(t[i])[0] in ("S", "M", "C", "P", "Z"):
+            i += 1
+        t = t[i:]
+    return " ".join(t.split()).casefold()
+
+
 def find_post_actions_section(storage: str) -> tuple:
     """Return (heading_start, heading_end, section_end)."""
     headings = list(re.finditer(r"<h([1-6])\b[^>]*>(.*?)</h\1>", storage, re.S))
     matches = []
     for i, m in enumerate(headings):
-        title = re.sub(r"^[\d.]+\s*", "", _plain(m.group(2))).casefold()
+        title = _normalise_heading(_plain(m.group(2)))
         if title in ("post-actions", "post actions"):
             matches.append(i)
     if not matches:
@@ -296,7 +367,8 @@ def extract_release_list_fix_versions(storage: str) -> list:
 
 # ------------------------------------------------------------------------ guard
 def check_target_guard(
-    page: dict, version: str, label: str = DEFAULT_FIX_VERSION_LABEL, *, parent_id: str
+    page: dict, version: str, label: str = DEFAULT_FIX_VERSION_LABEL, *, parent_id: str,
+    accepted_versions=(),
 ) -> GuardResult:
     parent_id = str(parent_id)
     page = page or {}
@@ -325,7 +397,8 @@ def check_target_guard(
         errors.append(f"Release List Jira macro/JQL not found; expected fixVersion '{expected}'.")
     else:
         found_str = ", ".join(found)
-        if expected not in [f.strip() for f in found]:
+        accepted = {expected} | {build_fix_version(v, label) for v in (accepted_versions or ())}
+        if not accepted & {f.strip() for f in found}:
             errors.append(f"fixVersion mismatch: expected '{expected}', found '{found_str}'.")
     return GuardResult(not errors, errors, pid, title, found_str)
 
@@ -418,13 +491,20 @@ def publish(
     label: str,
     jira_server: str,
     parent_id: str,
+    is_sandbox: Optional[bool] = None,
 ) -> dict:
     """Re-fetch, re-guard, re-plan, then (only if needed) write once.
 
     update_page(page_id, title, new_version, storage) -> {"ok": True} | {"error": str}
     """
+    source = None
+    if is_sandbox is None:  # auto-sandbox: typed version is a key of the env map
+        source, is_sandbox = resolve_source_version(version, load_sandbox_config(os.environ))
+    elif is_sandbox:
+        source, _ = resolve_source_version(version, load_sandbox_config(os.environ))
+    accepted = (source,) if source and source != version else ()
     page = get_page()
-    guard = check_target_guard(page, version, label, parent_id=parent_id)
+    guard = check_target_guard(page, version, label, parent_id=parent_id, accepted_versions=accepted)
     if not guard.ok:
         return {"ok": False, "added": 0, "skipped": 0, "error": " ".join(guard.errors)}
     try:
@@ -433,6 +513,10 @@ def publish(
         return {"ok": False, "added": 0, "skipped": 0, "error": str(e)}
     if not plan.new_actions:
         return {"ok": True, "added": 0, "skipped": len(plan.skipped), "error": None}
+    try:
+        check_write_allowed(guard.page_id, is_sandbox=bool(is_sandbox), target="confluence")
+    except PermissionError as e:
+        return {"ok": False, "added": 0, "skipped": len(plan.skipped), "error": str(e)}
     res = update_page(guard.page_id, page.get("title", ""), int(page.get("version", 0)) + 1, plan.new_storage)
     if not res or res.get("error") or not res.get("ok"):
         return {"ok": False, "added": 0, "skipped": len(plan.skipped),

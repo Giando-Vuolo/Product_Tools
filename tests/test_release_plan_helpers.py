@@ -455,5 +455,47 @@ class PublishTests(OfflineTestCase):
         self.assertIn("Version must be", str(cm.exception))
 
 
+class HeadingMatcherTests(OfflineTestCase):
+    """AC28: Post-actions at h2, numbered h2, and h3 with emoji + numbering."""
+
+    def _section(self, storage):
+        h0, h1, end = rp.find_post_actions_section(storage)
+        return storage[h0:h1]
+
+    def test_normalise_heading(self):
+        for raw in ("Post-actions", "5. Post-actions", "3.3 \u2699\ufe0f Post-actions",
+                    "3.3 \U0001F6E0\ufe0f Post-actions", "\U0001F6E0\ufe0f 3.3 Post actions"):
+            self.assertIn(rp._normalise_heading(raw), ("post-actions", "post actions"))
+
+    def test_h2_old_page_34_and_35(self):
+        for name in ("confluence_page_34.json", "confluence_page_35.json"):
+            self.assertIn("Post-actions", self._section(load(name)["storage"]))
+
+    def test_h3_with_emoji_999_v22(self):
+        storage = load("confluence_page_999_v22.json")["storage"]
+        h0, h1, end = rp.find_post_actions_section(storage)
+        self.assertTrue(storage[h0:h1].startswith("<h3>3.3"))
+        self.assertTrue(storage[end:].startswith("<h3>3.4"))
+
+    def test_h3_section_ends_at_next_h3(self):
+        storage = load("confluence_page_999_v22.json")["storage"]
+        plan = rp.plan_merge(storage, [act("K-1", "One")], JIRA)
+        self.assertEqual(len(plan.new_actions), 1)
+        self.assertIn("K-1", plan.new_storage)
+
+
+class SandboxGuardTests(OfflineTestCase):
+    def test_accepted_versions_default_unchanged(self):
+        page = load("confluence_page_35.json")
+        self.assertTrue(rp.check_target_guard(page, "35.0.0", parent_id=PARENT).ok)
+        self.assertFalse(rp.check_target_guard(page, "36.0.0", parent_id=PARENT).ok)
+
+    def test_accepted_versions_999_v22(self):
+        page = load("confluence_page_999_v22.json")
+        self.assertFalse(rp.check_target_guard(page, "999.0.0", parent_id=PARENT).ok)
+        g = rp.check_target_guard(page, "999.0.0", parent_id=PARENT, accepted_versions=("35.0.0",))
+        self.assertTrue(g.ok, g.errors)
+
+
 if __name__ == "__main__":
     unittest.main()
