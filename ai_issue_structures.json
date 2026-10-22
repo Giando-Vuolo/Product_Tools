@@ -1,0 +1,61 @@
+{
+  "default_preset_by_type": {
+    "User Story": "Standard Agile (BDD / Gherkin)",
+    "Story": "Standard Agile (BDD / Gherkin)",
+    "Epic": "Commercial & Demo-Ready (PO Focus)",
+    "Bug": "Bug & Root-Cause Report",
+    "Technical Task": "Deep Technical Spec",
+    "Task": "Lightweight Checklist",
+    "Improvement": "Standard Agile (BDD / Gherkin)",
+    "Risk": "Security / Quality Remediation"
+  },
+  "presets": {
+    "Standard Agile (BDD / Gherkin)": [
+      "User Story (As a / I want / So that)",
+      "Business Context & Value",
+      "Acceptance Criteria (Given / When / Then)",
+      "Out of Scope",
+      "Definition of Done"
+    ],
+    "Commercial & Demo-Ready (PO Focus)": [
+      "Commercial Feature Summary",
+      "Target Persona & Business Impact",
+      "Key Capabilities (In Scope)",
+      "Live Demo Flow & Acceptance Criteria",
+      "Success Metrics / KPIs"
+    ],
+    "Deep Technical Spec": [
+      "Technical Context & Objective",
+      "Architecture & Implementation Details",
+      "API / Data Model Changes",
+      "Non-Functional Requirements (Performance / Security)",
+      "Test & Verification Plan"
+    ],
+    "Bug & Root-Cause Report": [
+      "Issue Description & Impact",
+      "Steps to Reproduce",
+      "Expected vs. Actual Behavior",
+      "Environment & Logs / Screenshots",
+      "Root Cause & Proposed Fix"
+    ],
+    "Security / Quality Remediation": [
+      "Finding / Vulnerability Overview",
+      "Affected Components & Severity",
+      "Remediation Steps & Dependency Updates",
+      "Verification & Regression Checklist"
+    ],
+    "Lightweight Checklist": [
+      "Objective (1-2 Sentences)",
+      "Implementation Checklist",
+      "Acceptance Criteria"
+    ]
+  },
+  "extra_sections": [
+    "UI / UX Design Notes",
+    "Dependencies & Risks",
+    "Rollout & Rollback Plan",
+    "QA Test Cases",
+    "Analytics & Tracking"
+  ]
+}
+
