@@ -5,6 +5,7 @@ import time
 import os
 import sys
 import shutil
+import socket
 
 # Global reference to the tunnel process and URL
 _tunnel_process = None
@@ -17,9 +18,31 @@ def get_tunnel_url():
     global _tunnel_url
     return _tunnel_url
 
+def is_tunnel_running():
+    """Return True only when the local tunnel process is still alive."""
+    global _tunnel_process
+    if _tunnel_process is None:
+        return False
+    try:
+        return _tunnel_process.poll() is None
+    except Exception:
+        return False
+
+
 def set_tunnel_url(url):
-    """Sets the active tunnel URL manually (e.g. from sniffer headers)."""
+    """Sets the active tunnel URL manually (e.g. from sniffer headers).
+
+    This must only be trusted when the local tunnel process is actually still running.
+    If the tunnel process has died or never started, a stale trycloudflare host must
+    not be treated as a healthy tunnel URL.
+    """
     global _tunnel_url
+    if not url:
+        _tunnel_url = None
+        return
+    if not is_tunnel_running():
+        _tunnel_url = None
+        return
     _tunnel_url = url
 
 
@@ -28,13 +51,38 @@ def get_tunnel_error():
     global _tunnel_error
     return _tunnel_error
 
+
+def _local_service_is_reachable(port):
+    """True when the app target (e.g. localhost:8501) is listening."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=2):
+            return True
+    except Exception:
+        return False
+
+
+def _local_http_is_reachable(port):
+    """True when the local origin responds over HTTP."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return resp.status in (200, 301, 302, 403, 404)
+    except Exception:
+        return False
+
+
 def start_tunnel(port=8501):
     """Starts the Cloudflare tunnel in a background thread if it isn't already running."""
     global _tunnel_process, _tunnel_url, _tunnel_thread, _tunnel_error
 
-    if _tunnel_process is not None:
+    if _tunnel_process is not None and is_tunnel_running():
         # Tunnel is already running or attempting to run
         return _tunnel_url
+
+    if not _local_service_is_reachable(port):
+        _tunnel_error = f"La aplicación local no está escuchando en http://localhost:{port}. Inicia la app antes de crear el túnel."
+        return None
 
     def run():
         global _tunnel_process, _tunnel_url, _tunnel_error
@@ -61,10 +109,10 @@ def start_tunnel(port=8501):
         # SSL certificates.  The Python module remains a fallback for environments
         # where the executable has not been installed.
         if cloudflared_binary:
-            cmd = [cloudflared_binary, "tunnel", "--url", f"http://localhost:{port}"]
+            cmd = [cloudflared_binary, "tunnel", "--no-autoupdate", "--url", f"http://localhost:{port}"]
         else:
-            cmd = [sys.executable, "-m", "pycloudflared", "tunnel", "--url", f"http://localhost:{port}"]
-        
+            cmd = [sys.executable, "-m", "pycloudflared", "tunnel", "--no-autoupdate", "--url", f"http://localhost:{port}"]
+
         try:
             _tunnel_error = None
             _tunnel_process = subprocess.Popen(
@@ -78,22 +126,29 @@ def start_tunnel(port=8501):
             url_pattern = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
             
             for line in _tunnel_process.stdout:
-                # Capture rate limit or proxy/handshake errors from stdout/stderr stream
+                lower_line = line.lower()
                 if "429" in line or "1015" in line or "Too Many Requests" in line:
                     _tunnel_error = "Rate limit reached (429 Too Many Requests). Please wait a few minutes or change your IP (VPN)."
                 elif "failed to unmarshal" in line:
                     _tunnel_error = "Rate limit reached. Try again in a few minutes or connect via VPN."
-                elif "no such host" in line or "i/o timeout" in line or "dial udp" in line:
-                    _tunnel_error = "Bloqueo DNS detectado: VPN o red corporativa bloqueando la conexión. Por favor, apaga la VPN o cambia de red."
-                elif "x509: certificate signed by unknown authority" in line or "handshake failure" in line:
-                    _tunnel_error = "Intercepción SSL detectada: VPN o red corporativa bloqueando la conexión. Por favor, apaga la VPN."
-                
+                elif "x509: certificate signed by unknown authority" in line or "handshake failure" in line or "certificate verify failed" in lower_line:
+                    _tunnel_error = "Intercepción SSL detectada: una VPN o un proxy corporativo está alterando el certificado TLS. Desactiva la VPN o cambia de red."
+                elif "failed to connect to the local service" in lower_line or "connection refused" in lower_line:
+                    _tunnel_error = f"La aplicación local no está escuchando en http://localhost:{port}. Verifica que Streamlit esté arrancado y que el puerto sea correcto."
+                elif "no such host" in lower_line or "i/o timeout" in lower_line or "dial udp" in lower_line or "lookup" in lower_line:
+                    _tunnel_error = "Cloudflare no pudo resolver o conectar con el servicio. Comprueba tu conexión a internet y vuelve a intentarlo."
+
                 match = url_pattern.search(line)
                 if match:
                     _tunnel_url = match.group(0)
                     _tunnel_error = None
-                    print(f"[TUNNEL] Cloudflare Tunnel successfully started: {_tunnel_url}")
-                    
+                    if not _local_http_is_reachable(port):
+                        _tunnel_error = f"El túnel se creó, pero la app local en http://localhost:{port} no responde. Inicia Streamlit y comprueba que el puerto esté abierto."
+                        _tunnel_url = None
+                        print(f"[TUNNEL] Generated URL found, but localhost:{port} is not responding.")
+                    else:
+                        print(f"[TUNNEL] Cloudflare Tunnel successfully started: {_tunnel_url}")
+
             _tunnel_process.wait()
             if _tunnel_process.returncode != 0 and not _tunnel_error:
                 _tunnel_error = f"Tunnel exited with code {_tunnel_process.returncode}."
@@ -101,19 +156,20 @@ def start_tunnel(port=8501):
             _tunnel_error = str(e)
             print(f"[TUNNEL] Error running Cloudflare Tunnel: {e}")
         finally:
-            _tunnel_process = None
-            _tunnel_url = None
+            if _tunnel_process is not None and _tunnel_process.poll() is not None:
+                _tunnel_url = None
+                _tunnel_process = None
 
     _tunnel_thread = threading.Thread(target=run, daemon=True)
     _tunnel_thread.start()
 
-    # Wait up to 10 seconds for the URL to be generated
     for _ in range(20):
         if _tunnel_url or _tunnel_error:
             break
         time.sleep(0.5)
 
     return _tunnel_url
+
 
 def stop_tunnel():
     """Stops the active Cloudflare tunnel if running."""

@@ -10,7 +10,7 @@ __pycache__/
 *.pyd
 .pytest_cache/
 
-# OS specific files
+# OS and IDE specific files
 .DS_Store
 .DS_Store?
 ._*
@@ -18,6 +18,7 @@ __pycache__/
 .Trashes
 ehthumbs.db
 Thumbs.db
+.idea/
 
 # Environment variables and local credentials
 .env
