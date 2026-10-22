@@ -650,7 +650,11 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
     with st.container(border=True):
         col_project, col_committed, col_quarter = st.columns(3)
         with col_project:
-            progress_project = st.text_input("Project", value="MYPROJECT", key="qp_progress_project")
+            progress_project = st.text_input(
+                "Project",
+                value=os.getenv("PROJECT_NAME", "MYPROJECT"),
+                key="qp_progress_project"
+            )
         with col_committed:
             progress_committed_label = st.text_input(
                 "Committed Epic label", value=os.getenv("COMMITTED_LABEL", "Project_committed"), key="qp_progress_committed"
@@ -680,7 +684,7 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
                         "Quarterly Planner",
                         st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)"),
                         st.session_state.get("jira_email", ""),
-                        project_key=progress_project.strip() or "MYPROJECT",
+                        project_key=progress_project.strip() or os.getenv("PROJECT_NAME", "MYPROJECT"),
                     )
                 if result is None:
                     st.error("The quarterly Epic progress could not be loaded. Check the Jira connection and labels.")
@@ -1159,7 +1163,7 @@ def show_timeline_gantt_tab():
                         r_dict = row.to_dict()
                         r_dict['Y_Axis_Label'] = epic_id
                         r_dict['Display_Label'] = epic_y_label
-                        r_dict['Is_Cluster_Header'] = False
+                        r_dict['Is_Cluster_header'] = False
                         r_dict['Y_Index'] = epic_counter
                         plotting_rows.append(r_dict)
                         y_axis_order.append(epic_id)
@@ -1179,7 +1183,7 @@ def show_timeline_gantt_tab():
                     category_orders={
                         "Gantt_Status": ["To Do", "In Progress", "Done", "Blocked", "Milestone", "Cluster Header"]
                     },
-                    custom_data=["Key", "Epic Name", "Status", "Quarter", "Sprint_Visual", "Cluster", "Start Date", "Due Date", "Is_Cluster_Header", "Size"]
+                    custom_data=["Key", "Epic Name", "Status", "Quarter", "Sprint_Visual", "Cluster", "Start Date", "Due Date", "Is_Cluster_header", "Size"]
                 )
                 
                 # Configure Y-axis: hide native ticks and use left-aligned annotations
