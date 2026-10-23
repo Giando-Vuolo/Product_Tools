@@ -1,3 +1,5 @@
+import truststore
+truststore.inject_into_ssl()  # verify TLS with the OS trust store (corporate proxies such as Zscaler)
 import streamlit as st
 import os
 import requests

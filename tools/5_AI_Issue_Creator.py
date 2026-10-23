@@ -1,5 +1,5 @@
 import streamlit as st
-from utils.ai_helpers import get_ollama_models, generate_issue_with_ollama, extract_text_from_pdf
+from utils.ai_helpers import get_ollama_models, generate_issue_with_ollama, extract_text_from_pdf, load_issue_structures
 from utils.jira_helpers import fetch_jira_projects, fetch_jira_issue_types, create_jira_issue, attach_files_to_jira_issue
 import os
 import json
@@ -44,7 +44,6 @@ if not jira_connected:
     jira_sprint = ""
     jira_assignee = ""
     jira_labels = ""
-    selected_type = "User Story"
 else:
     col_btn, col_proj = st.columns([1, 2])
     with col_btn:
@@ -82,10 +81,8 @@ else:
         else:
             selected_proj_key = st.text_input("Jira Project Key *", value=os.getenv("AI_ISSUE_PROJECT_KEY", ""), placeholder="e.g. REC", help="Type manually or fetch projects using the button.")
             
-    issue_types = ["User Story", "Task", "Bug", "Epic", "Improvement", "Risk", "Technical Task"]
-    selected_type = st.selectbox("Desired Format (AI Generation)", issue_types)
-    jira_issue_type = st.text_input("Jira Issue Type *", value=selected_type if selected_type != "User Story" else "Story", help="The exact Issue Type name as it appears in Jira.")
-        
+    jira_issue_type = st.text_input("Jira Issue Type *", value=os.getenv("AI_ISSUE_TARGET_TYPE", "Story"), help="The exact Issue Type name as it appears in Jira (e.g., Story, Task, Bug, Epic).")
+
     st.markdown("##### Optional Fields")
     
     col_parent, col_linked = st.columns(2)
@@ -131,7 +128,67 @@ if st.session_state.get("ollama_models"):
 else:
     st.error("🔴 Ollama Not Running or no models available. Please configure it in the Home Hub -> Integrations tab.")
     selected_model = None
-    
+
+# Load structures from ai_issue_structures.json with fallback
+issue_structures = load_issue_structures()
+structures_warning = getattr(issue_structures, "warning", None)
+if structures_warning:
+    st.warning(structures_warning)
+
+default_preset_by_type = issue_structures.get("default_preset_by_type", {})
+presets = issue_structures.get("presets", {})
+extra_sections = issue_structures.get("extra_sections", [])
+
+# Build ALL_SECTIONS as a deduplicated list combining all sections across presets (preserving order) + extra_sections
+all_sections = []
+seen_sections = set()
+for p_sections in presets.values():
+    for s in p_sections:
+        if s not in seen_sections:
+            seen_sections.add(s)
+            all_sections.append(s)
+for s in extra_sections:
+    if s not in seen_sections:
+        seen_sections.add(s)
+        all_sections.append(s)
+
+issue_types = ["User Story", "Task", "Bug", "Epic", "Improvement", "Risk", "Technical Task"]
+
+col_fmt, col_preset = st.columns(2)
+with col_fmt:
+    selected_type = st.selectbox("Desired Format (AI Generation)", issue_types)
+
+with col_preset:
+    preset_names = list(presets.keys())
+    preset_options = preset_names + ["Custom (Freeform Instructions)"]
+    rec_preset = default_preset_by_type.get(selected_type, preset_names[0] if preset_names else "Custom (Freeform Instructions)")
+    rec_index = preset_options.index(rec_preset) if rec_preset in preset_options else 0
+    selected_preset = st.selectbox(
+        "Issue Structure Template",
+        preset_options,
+        index=rec_index,
+        key=f"preset_select_{selected_type}"
+    )
+
+if selected_preset != "Custom (Freeform Instructions)":
+    default_preset_sections = [s for s in presets.get(selected_preset, []) if s in all_sections]
+    selected_sections = st.multiselect(
+        "Included Sections (Add, remove, or reorder headings for the AI)",
+        options=all_sections,
+        default=default_preset_sections,
+        key=f"sections_multiselect_{selected_preset}"
+    )
+    custom_structure_notes = st.text_input(
+        "Additional Formatting Notes (Optional)",
+        placeholder="e.g. Write in Spanish, or include a Markdown table for API endpoints"
+    )
+else:
+    selected_sections = []
+    custom_structure_notes = st.text_area(
+        "Custom Structure Instructions *",
+        placeholder="Describe the exact sections, tables, or format you want the AI to follow..."
+    )
+
 st.markdown("<br>", unsafe_allow_html=True)
 
 issue_summary = st.text_input("Issue Summary (Title) *", placeholder="e.g. Add Google Login to the portal")
@@ -153,14 +210,21 @@ if st.button("✨ Generate Description with AI", use_container_width=True):
         st.error("Please ensure Ollama is running and select a model first.")
     elif not issue_idea or not issue_summary:
         st.warning("Please provide both a Summary and an Idea (or upload a PDF).")
+    elif selected_preset == "Custom (Freeform Instructions)" and not custom_structure_notes.strip():
+        st.warning("Please provide custom structure instructions.")
+    elif selected_preset != "Custom (Freeform Instructions)" and not selected_sections:
+        st.warning("Please select at least one section for the issue structure.")
     else:
         with st.spinner("Generating issue description..."):
             combined_input = f"Title: {issue_summary}\nDetails: {issue_idea}"
             result = generate_issue_with_ollama(
-                selected_model, 
-                selected_type, 
-                combined_input, 
-                st.session_state.ollama_url
+                model=selected_model,
+                issue_type=selected_type,
+                prompt_input=combined_input,
+                ollama_url=st.session_state.ollama_url,
+                sections=selected_sections,
+                custom_instructions=custom_structure_notes,
+                preset_name=selected_preset
             )
             if result.startswith("Error") or result.startswith("Exception"):
                 st.error(result)

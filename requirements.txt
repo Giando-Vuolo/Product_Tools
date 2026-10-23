@@ -3,6 +3,7 @@ pandas
 plotly
 python-dotenv
 requests
+truststore
 Pillow
 reportlab
 pycloudflared

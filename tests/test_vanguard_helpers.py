@@ -25,7 +25,7 @@ def finding(identifier):
 
 class VanguardTest(unittest.TestCase):
     def setUp(self):
-        self.env = patch.dict(os.environ, CONFIG)
+        self.env = patch.dict(os.environ, {**CONFIG, "VANGUARD_AUTH_URL": "", "VANGUARD_API_URL": ""})
         self.post = patch("utils.vanguard_helpers.requests.post", return_value=response({"access_token": "test-token"}))
         self.get = patch("utils.vanguard_helpers.requests.get")
         self.env.start()
@@ -53,6 +53,14 @@ class VanguardTest(unittest.TestCase):
             self.assertFalse(call.kwargs["allow_redirects"])
         self.assertNotIn("last_key", self.read.call_args_list[0].kwargs["params"])
         self.assertEqual(self.read.call_args_list[1].kwargs["params"]["last_key"], "page2")
+
+    def test_endpoints_come_from_configuration(self):
+        urls = {"VANGUARD_AUTH_URL": "https://auth.example.test/oauth2/token", "VANGUARD_API_URL": "https://api.example.test/"}
+        self.read.return_value = response({"findings": []})
+        with patch.dict(os.environ, urls):
+            fetch_platform_findings()
+        self.assertEqual(self.auth.call_args.args, ("https://auth.example.test/oauth2/token",))
+        self.assertEqual(self.read.call_args.args, (f"https://api.example.test/projects/{PROJECT}/findings",))
 
     def test_empty_list_is_zero(self):
         self.read.return_value = response({"findings": []})

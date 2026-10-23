@@ -282,6 +282,14 @@ default_conf_space = os.getenv("CONFLUENCE_SPACE", "DS")
 default_conf_page = os.getenv("CONFLUENCE_PAGE", "Release Notes")
 
 default_project_name = os.getenv("PROJECT_NAME", "PO Tools Enterprise")
+def resolve_quarterly_epic_project_key():
+    """Prefer Jira project keys from dedicated env vars over the display name in PROJECT_NAME."""
+    for env_name in ["JIRA_PROJECT_KEY", "AI_ISSUE_PROJECT_KEY", "PROJECT_KEY", "PROJECT_NAME"]:
+        value = os.getenv(env_name, "").strip()
+        if value:
+            return value
+    return "MYPROJECT"
+
 default_primary_color = os.getenv("PRIMARY_COLOR", "#3B82F6")
 
 default_filename_sr = os.getenv("DEFAULT_FILENAME_SPRINT_REVIEW", "Sprint_Review_Report")
@@ -345,6 +353,8 @@ if 'outlook_df' not in st.session_state:
 
 if 'project_name' not in st.session_state:
     st.session_state.project_name = default_project_name
+if 'quarterly_epic_project_key' not in st.session_state:
+    st.session_state.quarterly_epic_project_key = resolve_quarterly_epic_project_key()
 if 'filename_sr' not in st.session_state:
     st.session_state.filename_sr = default_filename_sr
 if 'filename_rn' not in st.session_state:
@@ -1266,11 +1276,19 @@ if st.session_state.active_tab == "🔌 Ingestion":
     with st.container(border=True):
         col_proj, col_committed, col_quarter, col_title = st.columns([1, 1, 1, 2])
         with col_proj:
+            default_project_key = (
+                st.session_state.get("quarterly_epic_project_key")
+                or st.session_state.get("project_name")
+                or os.getenv("PROJECT_NAME", "MYPROJECT").strip()
+                or "MYPROJECT"
+            )
             project_key = st.text_input(
                 "Project",
-                value="MYPROJECT",
+                value=default_project_key,
                 placeholder="e.g. MYPROJECT"
             )
+            if project_key.strip() and project_key.strip() != st.session_state.get("quarterly_epic_project_key", ""):
+                st.session_state.quarterly_epic_project_key = project_key.strip()
         with col_committed:
             committed_epic_label = st.text_input(
                 "Committed Epic label",
