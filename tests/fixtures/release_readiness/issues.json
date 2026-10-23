@@ -1,0 +1,166 @@
+{
+ "issues": [
+  {
+   "key": "RP-1",
+   "fields": {
+    "summary": "S RP-1",
+    "issuetype": {
+     "name": "Story"
+    },
+    "status": {
+     "name": "Closed"
+    },
+    "assignee": {
+     "displayName": "Ann"
+    },
+    "fixVersions": [
+     {
+      "name": "DIGITAL:HUB 35.0.0"
+     }
+    ],
+    "customfield_14202": [
+     {
+      "value": "Ready to release"
+     }
+    ],
+    "customfield_25263": "||Field||Information||\n|Tested in PRE|Yes|\n|E2E Coverage|No|\n|Tested with PROD data volume|No|\n|Test results added in Jira|No|\n|Critical modification|No|\n|Load test completed|No|\n|Testing with interfaces completed|No|\n|Feature flag implemented|No|\n|Downtime required|No|\n|Libraries and Service Details|No|\n|Config Server Modifications|No|\n|Schema Changes|N/A|\n|Data Regularization Details|N/A|\n|Special Deployment Steps|N/A|\n|Production Monitoring (How to monitor success in PROD)|Dashboard|\n|Rollback Method|Revert|",
+    "comment": {
+     "comments": [],
+     "total": 0
+    }
+   }
+  },
+  {
+   "key": "RP-2",
+   "fields": {
+    "summary": "S RP-2",
+    "issuetype": {
+     "name": "Story"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "assignee": {
+     "displayName": "Ann"
+    },
+    "fixVersions": [
+     {
+      "name": "DIGITAL:HUB 35.0.0"
+     }
+    ],
+    "customfield_14202": null,
+    "customfield_25263": "||Field||Information||\n|Tested in PRE|No|\n|E2E Coverage|No|\n|Tested with PROD data volume|No|\n|Test results added in Jira|No|\n|Critical modification|No|\n|Load test completed|No|\n|Testing with interfaces completed|No|\n|Feature flag implemented|No|\n|Downtime required|No|\n|Libraries and Service Details|No|\n|Config Server Modifications|No|\n|Schema Changes|N/A|\n|Data Regularization Details|N/A|\n|Special Deployment Steps|N/A|\n|Production Monitoring (How to monitor success in PROD)|Dashboard|\n|Rollback Method|Revert|",
+    "comment": {
+     "comments": [],
+     "total": 0
+    }
+   }
+  },
+  {
+   "key": "RP-3",
+   "fields": {
+    "summary": "S RP-3",
+    "issuetype": {
+     "name": "Sub-task"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "assignee": {
+     "displayName": "Ann"
+    },
+    "fixVersions": [
+     {
+      "name": "DIGITAL:HUB 35.0.0"
+     }
+    ],
+    "customfield_14202": null,
+    "customfield_25263": null,
+    "comment": {
+     "comments": [],
+     "total": 0
+    }
+   }
+  },
+  {
+   "key": "RP-4",
+   "fields": {
+    "summary": "S RP-4",
+    "issuetype": {
+     "name": "Story"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "assignee": {
+     "displayName": "Ann"
+    },
+    "fixVersions": [
+     {
+      "name": "DIGI:HUB Not release relevant"
+     }
+    ],
+    "customfield_14202": [
+     {
+      "value": "Ready to release"
+     }
+    ],
+    "customfield_25263": null,
+    "comment": {
+     "comments": [],
+     "total": 0
+    }
+   }
+  },
+  {
+   "key": "RP-5",
+   "fields": {
+    "summary": "S RP-5",
+    "issuetype": {
+     "name": "Story"
+    },
+    "status": {
+     "name": "Closed"
+    },
+    "assignee": null,
+    "fixVersions": [
+     {
+      "name": "DIGITAL:HUB 35.0.0"
+     }
+    ],
+    "customfield_14202": null,
+    "customfield_25263": null,
+    "comment": {
+     "comments": [],
+     "total": 0
+    }
+   }
+  },
+  {
+   "key": "RP-6",
+   "fields": {
+    "summary": "S RP-6",
+    "issuetype": {
+     "name": "Story"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "assignee": {
+     "displayName": "Ann"
+    },
+    "fixVersions": [
+     {
+      "name": "DIGITAL:HUB 35.0.0"
+     }
+    ],
+    "customfield_14202": null,
+    "customfield_25263": "||Field||Information||\n|Tested in PRE|Lorem ipsum|",
+    "comment": {
+     "comments": [],
+     "total": 0
+    }
+   }
+  }
+ ]
+}

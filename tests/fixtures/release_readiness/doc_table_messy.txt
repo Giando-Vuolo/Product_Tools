@@ -1,0 +1,8 @@
+||Field||Information||
+|Tested in PRE|{color:#ff0000}No{color} - flaky env|
+|E2E Coverage|  Yes  |
+|Rollback Method|{code}
+revert
+release
+{code}|
+|Production Monitoring (How to monitor success in PROD)|Grafana|

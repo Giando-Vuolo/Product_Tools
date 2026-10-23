@@ -669,8 +669,17 @@ def search_jira_issues(server, token, auth_type, email, jql):
         return {"error": f"Exception during Jira search: {e}\n{traceback.format_exc()}"}
 
 
-def fetch_release_issues_with_comments(server, token, auth_type, email, jql, page_size=50):
-    """Fetch all issues for a JQL (paginated) including description, reporter and all comments."""
+RELEASE_READINESS_FIELDS = (
+    "summary,description,reporter,comment,status,issuetype,assignee,fixVersions,"
+    "customfield_14202,customfield_25263"
+)
+
+
+def fetch_release_issues_with_comments(server, token, auth_type, email, jql, page_size=50, fields=None):
+    """Fetch all issues for a JQL (paginated) including description, reporter and all comments.
+
+    `fields` (optional, comma-separated string) overrides the requested fields; GET only.
+    """
     if not server or not token:
         return {"error": "Jira server or token not configured"}
     try:
@@ -682,7 +691,7 @@ def fetch_release_issues_with_comments(server, token, auth_type, email, jql, pag
             resp = requests.get(
                 f"{base}/rest/api/2/search", headers=headers, auth=auth, timeout=30,
                 params={"jql": jql, "startAt": start, "maxResults": page_size,
-                        "fields": "summary,description,reporter,comment,status,issuetype"},
+                        "fields": fields or "summary,description,reporter,comment,status,issuetype"},
             )
             if resp.status_code != 200:
                 return {"error": f"Jira API returned {resp.status_code}: {resp.text}"}
