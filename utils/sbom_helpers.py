@@ -28,9 +28,13 @@ def check_sbom_connection(server, api_key, api_secret, namespace_id, app_id, tim
     if not all((server, api_key, api_secret, namespace_id, app_id)):
         return False, "Server, credentials, namespace or app ID empty"
     try:
-        resp = requests.get(f"{server.rstrip('/')}/ns/{namespace_id}/apps", auth=(api_key, api_secret), timeout=timeout)
+        resp = requests.get(f"{server.rstrip('/')}/ns/{namespace_id}/apps", auth=(api_key, api_secret), timeout=timeout,
+                            allow_redirects=False)
     except requests.RequestException as e:
         return False, f"Connection Failed ({e})"
+    # The web UI host redirects to the SSO login instead of accepting the API key
+    if resp.is_redirect or "json" not in resp.headers.get("content-type", ""):
+        return False, "Server is not the SBOM API (use the API host, not the ui. web URL)"
     if resp.status_code != 200:
         return False, f"Auth Failed (HTTP {resp.status_code})"
     try:
