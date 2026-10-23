@@ -1,3 +1,5 @@
+import truststore
+truststore.inject_into_ssl()  # verify TLS with the OS trust store (corporate proxies such as Zscaler)
 from fastapi import FastAPI, Depends, HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel

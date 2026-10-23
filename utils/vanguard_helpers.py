@@ -7,6 +7,15 @@ import requests
 VANGUARD_KPI = "Security findings, platform"
 
 
+def _auth_url():
+    return os.getenv("VANGUARD_AUTH_URL", "").strip() or "https://auth.api.your-company.com/oauth2/token"
+
+
+def _findings_url(project_id):
+    base = os.getenv("VANGUARD_API_URL", "").strip().rstrip("/") or "https://api.your-company.com"
+    return f"{base}/projects/{project_id}/findings"
+
+
 def vanguard_configured():
     return all(os.getenv(key, "").strip() for key in (
         "VANGUARD_PROJECT_ID", "VANGUARD_CLIENT_ID", "VANGUARD_CLIENT_SECRET"
@@ -36,7 +45,7 @@ def check_vanguard_connection(project_id, client_id, client_secret, timeout=8):
         return False, "Project ID must be a UUID"
     try:
         auth = _read_json(requests.post(
-            "https://auth.api.your-company.com/oauth2/token",
+            _auth_url(),
             data={"grant_type": "client_credentials", "client_id": client_id.strip(), "client_secret": client_secret.strip()},
             timeout=timeout, allow_redirects=False,
         ), "authentication")
@@ -44,7 +53,7 @@ def check_vanguard_connection(project_id, client_id, client_secret, timeout=8):
         if not isinstance(token, str) or not token.strip():
             return False, "Authentication returned no access token"
         _read_json(requests.get(
-            f"https://api.your-company.com/projects/{project_id}/findings",
+            _findings_url(project_id),
             headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
             params={"state": "open", "preview": "false", "page_size": 1}, timeout=timeout, allow_redirects=False,
         ), "findings query")
@@ -58,7 +67,7 @@ def check_vanguard_connection(project_id, client_id, client_secret, timeout=8):
 def fetch_platform_findings():
     """Count current open findings, excluding previews, across every page.
 
-    Only authenticates and reads findings from fixed One.Cloud endpoints. There
+    Only authenticates and reads findings from the configured One.Cloud endpoints. There
     is no historical reconstruction: this is the value at calculation time.
     """
     if not vanguard_configured():
@@ -70,7 +79,7 @@ def fetch_platform_findings():
 
     try:
         auth = _read_json(requests.post(
-            "https://auth.api.your-company.com/oauth2/token",
+            _auth_url(),
             data={
                 "grant_type": "client_credentials",
                 "client_id": os.environ["VANGUARD_CLIENT_ID"].strip(),
@@ -89,7 +98,7 @@ def fetch_platform_findings():
         # A safety ceiling fails explicitly rather than returning a partial KPI.
         for _ in range(1000):
             payload = _read_json(requests.get(
-                f"https://api.your-company.com/projects/{project_id}/findings",
+                _findings_url(project_id),
                 headers=headers, params=dict(params), timeout=30, allow_redirects=False,
             ), "findings query")
             findings = payload.get("findings")
