@@ -1,11 +1,17 @@
 import os
+import re
 
 import streamlit as st
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 
 from utils.confluence_helpers import get_confluence_page, list_child_pages, update_confluence_page
 from utils.jira_helpers import fetch_release_issues_with_comments
 from utils.release_plan_helpers import (
+    DEFAULT_FIX_VERSION_LABEL,
+    DEFAULT_TITLE_TEMPLATE,
+    ENV_LABEL,
+    ENV_PARENT,
+    ENV_TITLE,
     build_preview,
     build_fix_version,
     build_release_jql,
@@ -35,6 +41,44 @@ st.caption(
     "Extracts `POST-ACTION: <text>` lines from the Jira descriptions and comments of a release and "
     "adds them, unchecked, to the Post-actions section of a Release Plan page. Existing content is never overwritten."
 )
+
+def _save_setting(env_name, widget_key):
+    # Saves only the field the user edited, so another open session never overwrites it with stale values
+    value = st.session_state[widget_key].strip()
+    if env_name == ENV_PARENT:
+        # Accept a pasted Confluence page URL and keep only its numeric page ID
+        match = re.search(r"/pages/(\d+)|[?&]pageId=(\d+)", value)
+        if match:
+            value = match.group(1) or match.group(2)
+            st.session_state[widget_key] = value
+    if env_name == ENV_TITLE and "{version}" not in value:
+        st.session_state[widget_key] = os.getenv(ENV_TITLE, DEFAULT_TITLE_TEMPLATE)
+        st.toast("Title template not saved: it must contain {version}, e.g. Release Plan {version}. "
+                 "Type the release number in 'Release version' below.", icon="⚠️")
+        return
+    set_key(".env", env_name, value, quote_mode="never")
+    os.environ[env_name] = value
+    st.toast("Release Plan settings saved ✅")
+
+
+SETTINGS = (
+    (ENV_PARENT, "rp_setting_parent", "Release Plan Parent Page ID:", "",
+     "Confluence page whose direct children are the Release Plan pages: its numeric ID, or paste the page URL and the ID is extracted."),
+    (ENV_LABEL, "rp_setting_label", "fixVersion Label:", DEFAULT_FIX_VERSION_LABEL,
+     'Jira fixVersion prefix, searched as "<label> <version>".'),
+    (ENV_TITLE, "rp_setting_title", "Release Plan Title Template:", DEFAULT_TITLE_TEMPLATE,
+     "Title of the Release Plan pages, with {version} where the release number goes (e.g. Release Plan {version}). Type the release itself in 'Release version' below."),
+)
+try:
+    load_release_plan_config(os.environ)
+    settings_ok = True
+except ValueError:
+    settings_ok = False
+with st.expander("⚙️ Settings", expanded=not settings_ok):
+    for col, (env_name, widget_key, label, default, help_text) in zip(st.columns(3), SETTINGS):
+        with col:
+            st.text_input(label, value=os.getenv(env_name, default), key=widget_key, help=help_text,
+                          on_change=_save_setting, args=(env_name, widget_key))
 
 missing = missing_config(os.environ)
 if missing:
