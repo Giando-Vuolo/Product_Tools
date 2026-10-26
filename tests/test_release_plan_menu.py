@@ -19,8 +19,8 @@ NEW_FILES = {"rr0": "0_Overview.py", "rr1": "1_Scope.py", "rr8": "8_Notification
 
 class NavOrderTests(unittest.TestCase):
     def test_order_0_to_8_and_page7_path(self):
-        self.assertEqual([p[0] for p in RELEASE_PLAN_PAGES], list(range(9)))
-        self.assertEqual([p[2][0] for p in RELEASE_PLAN_PAGES], list("012345678"))
+        self.assertEqual([p[0] for p in RELEASE_PLAN_PAGES], list(range(10)))
+        self.assertEqual([p[2][0] for p in RELEASE_PLAN_PAGES], list("0123456789"))
         self.assertEqual(RELEASE_PLAN_PAGES[7][1], "tools/7_Release_Plan.py")
         self.assertEqual(RELEASE_PLAN_PAGES[7][2], "7 · Post-actions")
         self.assertIsNone(RELEASE_PLAN_PAGES[7][3])  # url_path unchanged (default)

@@ -204,6 +204,35 @@ def render_critical(rows: list, checked_at: str = "", others: Optional[list] = N
                 ]), hide_index=True, width='stretch')
 
 
+def render_by_owner(data: dict, freeze, release: str) -> None:
+    import pandas as pd
+    results = rc.run_all(data["issues"], freeze, date.today())
+    st.caption(f"Checked at {data['checked_at']}")
+    show_info = st.checkbox("Show INFO", value=False, key="rr9_show_info")
+    groups = rc.group_by_owner(results, data["issues"], include_info=show_info)
+    if not groups:
+        st.success("No issues to review for this release.")
+        return
+    choice = st.selectbox("Owner", ["All"] + rc.owner_names(groups), key="rr9_owner")
+    shown = groups if choice == "All" else [g for g in groups if g.owner == choice]
+    for g in shown:
+        st.subheader(g.owner)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Issues", len(g.issues))
+        c2.metric("ERROR", g.counts[rc.ERROR], help="Issues whose highest severity is ERROR")
+        c3.metric("WARN", g.counts[rc.WARN], help="Issues whose highest severity is WARN")
+        c4.metric("INFO", g.counts[rc.INFO], help="Issues whose highest severity is INFO")
+        st.caption("Counts are per issue, by its highest severity.")
+        st.dataframe(pd.DataFrame([
+            {"Issue": i.key, "Summary": i.summary, "Status": i.status, "Severity": i.max_severity,
+             "What is missing": "; ".join(f"{r}: {x}" for r, x in i.problems)} for i in g.issues
+        ]), hide_index=True, width='stretch')
+        st.code(rc.owner_message(g, release), language="text")
+    if choice == "All":
+        st.markdown("#### Summary")
+        st.code(rc.owners_summary(groups, release), language="text")
+
+
 def refresh_all(ctx: Context, with_not_relevant: bool = True) -> None:
     """Own Refresh for the aggregate pages (0, 1, 8): in-scope issues + freeze (+ not-relevant issues)."""
     key = f"{ctx.prefix}_data"
