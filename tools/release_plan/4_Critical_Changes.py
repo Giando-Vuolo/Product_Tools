@@ -12,3 +12,6 @@ if data:
     critical_keys = {r.issue_key for r in critical}
     others = [i for i in rc.select_in_scope(data["issues"]) if i.key not in critical_keys]
     rr.render_critical(critical, data["checked_at"], others)
+    from utils import release_publish as rpub
+    rr.render_publish_panel(ctx, "critical", rpub.render_critical_table(critical, ctx.server),
+                            "Publish to Confluence")

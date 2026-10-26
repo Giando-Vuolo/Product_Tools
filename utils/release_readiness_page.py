@@ -287,3 +287,84 @@ def render_overview(data: dict, freeze) -> None:
             continue
         with st.expander(f"{rule} ({len(items)})", expanded=False):
             render_findings(items)
+
+
+# ----------------------------------------------------------------- publish (sandbox only)
+def resolve_publish_page(ctx: Context):
+    """Read-only GETs to find the typed version's Release Plan page. Returns (page|None, error)."""
+    from utils import release_publish as rpub
+    try:
+        children = confluence_helpers.list_child_pages(
+            ctx.conf_server, ctx.conf_token, ctx.auth, ctx.email, ctx.cfg.parent_id)
+        if children.get("error"):
+            return None, children["error"]
+        title = rp.build_target_title(ctx.cfg.title_template, ctx.version)
+        target = rp.select_target_page(children["results"], title, ctx.cfg.parent_id)
+        rpub.assert_publish_allowed(target["id"])  # before reading the page itself
+        page = confluence_helpers.get_confluence_page(
+            ctx.conf_server, ctx.conf_token, ctx.auth, ctx.email, target["id"])
+        if page.get("error"):
+            return None, page["error"]
+        page = dict(page)
+        page.setdefault("id", target["id"])
+        return page, ""
+    except (ValueError, rpub.PublishRefused) as e:
+        return None, str(e)
+
+
+def render_publish_panel(ctx: Context, kind: str, new_fragment: str, button_label: str) -> None:
+    """Preview + confirm publish of one fragment. Sandbox page only; nothing runs on load."""
+    from utils import release_publish as rpub
+    st.markdown("---")
+    if not ctx.sandbox:
+        st.button(button_label, key=f"{ctx.prefix}_pub_disabled_{kind}", disabled=True)
+        st.caption(f"Publishing is only enabled for the sandbox release (page {rp.SANDBOX_WRITE_PAGE_ID}).")
+        return
+    skey = f"{ctx.prefix}_pub_{kind}"
+    if st.button("Preview", key=f"{skey}_preview"):
+        st.session_state.pop(skey, None)
+        page, err = resolve_publish_page(ctx)
+        if err:
+            st.error(err)
+        else:
+            try:
+                plan = rpub.plan_splice(page, kind, new_fragment, version=ctx.version,
+                                        source_version=ctx.source_version, label=ctx.cfg.label,
+                                        parent_id=ctx.cfg.parent_id)
+                st.session_state[skey] = {"page_id": plan.page_id, "base_version": plan.base_version,
+                                          "plan": plan}
+            except rpub.PublishRefused as e:
+                st.error(str(e))
+    state = st.session_state.get(skey)
+    if not state:
+        st.button(button_label, key=f"{skey}_confirm", disabled=True)
+        return
+    plan = state["plan"]
+    st.write(f"Target: {plan.title} (ID {plan.page_id}, version {state['base_version']})")
+    st.caption("Current fragment")
+    st.code(plan.old_fragment, language="html")
+    st.caption("New fragment")
+    st.code(plan.new_fragment, language="html")
+    if not plan.changed:
+        st.info("Page already up to date.")
+    if not st.button(button_label, key=f"{skey}_confirm", disabled=not plan.changed):
+        return
+    try:
+        res = rpub.publish_splice(
+            page_id=state["page_id"], kind=kind, new_fragment=plan.new_fragment,
+            expected_version=state["base_version"],
+            get_page=lambda pid: confluence_helpers.get_confluence_page(
+                ctx.conf_server, ctx.conf_token, ctx.auth, ctx.email, pid),
+            update_page=lambda pid, title, ver, storage: confluence_helpers.update_confluence_page(
+                ctx.conf_server, ctx.conf_token, ctx.auth, ctx.email, pid, title, ver, storage),
+            version=ctx.version, source_version=ctx.source_version, label=ctx.cfg.label,
+            parent_id=ctx.cfg.parent_id, backup_dir=rpub.BACKUP_DIR)
+    except rpub.PublishRefused as e:
+        st.error(str(e))
+        return
+    backup = f" Backup: {res['backup']}" if res.get("backup") else ""
+    if res["ok"]:
+        st.success(f"Published ({res['status']})." + backup)
+        st.session_state.pop(skey, None)
+    else:
+        st.error(f"{res['error']}{backup}")
