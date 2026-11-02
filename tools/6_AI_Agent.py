@@ -140,7 +140,7 @@ def dispatch_tool_call(func_name: str, func_args: dict) -> str:
 # ==========================================
 
 if not st.session_state.ollama_models:
-    st.error("🔴 Ollama Not Running or no models available. Please configure it in the Home Hub -> Integrations tab.")
+    st.error("🔴 Ollama Not Running or no models available. Please configure it on the Configuration page.")
 else:
     col_model, _ = st.columns([1, 2])
     with col_model:

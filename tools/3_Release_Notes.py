@@ -686,38 +686,6 @@ if st.session_state.active_tab_rn == "🔌 Ingestion":
             st.warning(fb.get("text"))
         del st.session_state.ingestion_feedback
     
-    # Credentials block
-
-    # Centralized Integration Status
-    jira_status = st.session_state.get("jira_connection_status")
-    jira_msg = st.session_state.get("jira_connection_msg", "Not checked yet")
-    conf_status = st.session_state.get("conf_connection_status")
-    conf_msg = st.session_state.get("conf_connection_msg", "Not checked yet")
-
-    col_stat1, col_stat2 = st.columns([1, 1])
-    with col_stat1:
-        if not st.session_state.jira_server:
-            st.warning("⚠️ **Jira**: Not configured.")
-        elif jira_status == "Success":
-            st.success(f"🟢 **Jira Connected**: `{st.session_state.jira_server}` ({jira_msg})")
-        elif jira_status == "Failed":
-            st.error(f"🔴 **Jira Connection Failed**: `{st.session_state.jira_server}` ({jira_msg})")
-        else:
-            st.info(f"🟡 **Jira Configured**: `{st.session_state.jira_server}` (Status: {jira_msg})")
-            
-    with col_stat2:
-        if not st.session_state.conf_server:
-            st.warning("⚠️ **Confluence**: Not configured.")
-        elif conf_status == "Success":
-            st.success(f"🟢 **Confluence Connected**: `{st.session_state.conf_server}` ({conf_msg})")
-        elif conf_status == "Failed":
-            st.error(f"🔴 **Confluence Connection Failed**: `{st.session_state.conf_server}` ({conf_msg})")
-        else:
-            st.info(f"🟡 **Confluence Configured**: `{st.session_state.conf_server}` (Status: {conf_msg})")
-            
-    st.caption("Credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
-
-
     st.subheader("📝 Prepare Release Note")
     st.write("Paste the Jira version link to load the release metadata, resolved issues, and known residual anomalies.")
     jira_version_link_base = os.getenv("JIRA_VERSION_LINK_BASE", "https://your-company.atlassian.net/jira/projects/MYPROJECT/versions/")

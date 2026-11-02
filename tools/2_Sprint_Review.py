@@ -889,20 +889,6 @@ if st.session_state.active_tab == "🔌 Ingestion":
             st.warning(fb.get("text"))
         del st.session_state.ingestion_feedback
     
-    # Credentials block
-
-    jira_status = st.session_state.get("jira_connection_status")
-    jira_msg = st.session_state.get("jira_connection_msg", "Not checked yet")
-    if not st.session_state.jira_server:
-        st.warning("⚠️ **Jira Connection**: Not configured. Go to **Home Hub** -> **Centralized Integrations** tab.")
-    elif jira_status == "Success":
-        st.success(f"🟢 **Jira Connected**: `{st.session_state.jira_server}` ({jira_msg})")
-    elif jira_status == "Failed":
-        st.error(f"🔴 **Jira Connection Failed**: `{st.session_state.jira_server}` ({jira_msg}). Fix it on the **Home Hub**.")
-    else:
-        st.info(f"🟡 **Jira Configured**: `{st.session_state.jira_server}` (Status: {jira_msg}). Go to **Home Hub** to test connection.")
-    st.caption("Credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
-
     st.divider()
 
     # Issue Type Selection Checkboxes
@@ -2398,18 +2384,9 @@ elif st.session_state.active_tab == "💾 Exporter":
             </div>
             """, unsafe_allow_html=True)
             
-            conf_status = st.session_state.get("conf_connection_status")
-            conf_msg = st.session_state.get("conf_connection_msg", "Not checked yet")
             if not st.session_state.conf_server:
-                st.warning("⚠️ **Confluence Connection**: Not configured. Go to **Home Hub** -> **Centralized Integrations** tab.")
-            elif conf_status == "Success":
-                st.success(f"🟢 **Confluence Connected**: `{st.session_state.conf_server}` ({conf_msg})")
-            elif conf_status == "Failed":
-                st.error(f"🔴 **Confluence Connection Failed**: `{st.session_state.conf_server}` ({conf_msg}). Fix it on the **Home Hub**.")
-            else:
-                st.info(f"🟡 **Confluence Configured**: `{st.session_state.conf_server}` (Status: {conf_msg}). Go to **Home Hub** to test connection.")
-            st.caption("Credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
-                
+                st.warning("⚠️ **Confluence** is not configured. Set it up on the **Configuration** page.")
+
             col_space, col_page = st.columns([1, 2])
             with col_space:
                 conf_space_input = st.text_input(

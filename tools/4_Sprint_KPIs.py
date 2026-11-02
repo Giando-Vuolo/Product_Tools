@@ -502,7 +502,7 @@ def render_dashboard():
     conf_token = st.session_state.get("conf_token", default_conf_token)
     
     if not conf_server or not conf_token:
-        st.warning("⚠️ **Confluence Connection**: Not configured. Please set CONFLUENCE_SERVER and CONFLUENCE_API_TOKEN in your `.env` file or Home Hub.")
+        st.warning("⚠️ **Confluence Connection**: Not configured. Please set CONFLUENCE_SERVER and CONFLUENCE_API_TOKEN in your `.env` file or on the Configuration page.")
     else:
         col_s, col_p = st.columns(2)
         with col_s:
@@ -585,7 +585,7 @@ st.markdown("Extract and calculate key performance indicators for a specific Jir
 
 # Ensure we have credentials
 if not st.session_state.get("jira_server") or not st.session_state.get("jira_token"):
-    st.warning("⚠️ Please configure your Jira credentials in the Home Hub first.")
+    st.warning("⚠️ Please configure your Jira credentials on the Configuration page first.")
     st.stop()
 
 col_s, col_b = st.columns([3, 1])

@@ -1,6 +1,7 @@
 import truststore
 truststore.inject_into_ssl()  # verify TLS with the OS trust store (corporate proxies such as Zscaler)
 import streamlit as st
+import html
 import os
 import requests
 from dotenv import load_dotenv
@@ -11,6 +12,7 @@ from utils.sbom_helpers import check_sbom_connection
 from utils.vanguard_helpers import check_vanguard_connection
 from utils.access import is_remote_request, check_access_password
 from utils.connection_checks import check_jira_connection, check_confluence_connection
+from utils.stepper import inject_stepper_css, active_step_html, step_label
 
 # Load environment variables
 load_dotenv(override=True)
@@ -275,46 +277,15 @@ def render_release_plan_stepper(current_page):
     )
     if current is None:
         return
-    st.markdown("""
-        <style>
-            .st-key-rp_stepper { margin-bottom: 1.25rem; }
-            .st-key-rp_stepper [data-testid="stColumn"] { position: relative; }
-            .rp-step {
-                display: flex; align-items: center; gap: 0.6rem;
-                padding: 0.55rem 0.9rem; border-radius: 10px;
-                border: 1px solid #3E3E4A; background: #18181D; color: #94A3B8;
-                font-weight: 600; min-height: 2.6rem;
-            }
-            .rp-step .rp-num {
-                display: inline-flex; align-items: center; justify-content: center;
-                width: 1.6rem; height: 1.6rem; border-radius: 50%;
-                border: 2px solid currentColor; font-size: 0.85rem; flex: none;
-            }
-            .rp-step.rp-active { border-color: #60A5FA; background: rgba(96, 165, 250, 0.12); color: #FFFFFF; }
-            .rp-step.rp-active .rp-num { background: #60A5FA; border-color: #60A5FA; color: #0F172A; }
-            .st-key-rp_stepper [data-testid="stColumn"]:not(:last-child)::after {
-                content: ""; position: absolute; top: 50%; right: -1rem; width: 1rem;
-                border-top: 2px solid #3E3E4A;
-            }
-            .st-key-rp_stepper [data-testid="stPageLink"] a {
-                border: 1px solid #3E3E4A; border-radius: 10px; background: #18181D;
-                padding: 0.55rem 0.9rem; min-height: 2.6rem; margin: 0;
-            }
-            .st-key-rp_stepper [data-testid="stPageLink"] a:hover { border-color: #60A5FA; }
-        </style>
-    """, unsafe_allow_html=True)
+    inject_stepper_css("rp_stepper")
     with st.container(key="rp_stepper"):
         for i, (col, n) in enumerate(zip(st.columns(len(RELEASE_PLAN_STEPS)), RELEASE_PLAN_STEPS)):
             label = _rp_step_labels[n]
             with col:
                 if i == current:
-                    st.markdown(
-                        f'<div class="rp-step rp-active"><span class="rp-num">{i + 1}</span>{label}</div>',
-                        unsafe_allow_html=True,
-                    )
+                    st.markdown(active_step_html(i + 1, label), unsafe_allow_html=True)
                 else:
-                    marker = "✅" if i < current else f"{i + 1}️⃣"
-                    st.page_link(_rp_pages[n], label=label, icon=marker, width="stretch")
+                    st.page_link(_rp_pages[n], label=step_label(i + 1, label, done=i < current), width="stretch")
 
 # Shared Premium Dark Mode styles for the Home Hub and Configuration pages
 def _inject_hub_styles():
@@ -959,5 +930,50 @@ st.markdown("""
         }
     </style>
 """, unsafe_allow_html=True)
+# Connections each tool needs: (label, session-state prefix, session key holding its server; None = always configured)
+_JIRA = ("Jira", "jira", "jira_server")
+_CONFLUENCE = ("Confluence", "conf", "conf_server")
+_OLLAMA = ("Ollama", "ollama", None)
+PAGE_CONNECTIONS = {
+    planner_page.url_path: [_JIRA],
+    sprint_review_page.url_path: [_JIRA, _CONFLUENCE],
+    sprint_kpis_page.url_path: [_JIRA, _CONFLUENCE],
+    release_notes_page.url_path: [_JIRA, _CONFLUENCE],
+    ai_creator_page.url_path: [_JIRA, _OLLAMA],
+    ai_agent_page.url_path: [_OLLAMA],
+    **{page.url_path: [_JIRA, _CONFLUENCE] for page in release_plan_nav_pages},
+}
+
+
+def render_connection_status(current_page):
+    """Small list of the connections the current tool needs, top right under the menu."""
+    connections = PAGE_CONNECTIONS.get(current_page.url_path)
+    if not connections:
+        return
+    items = []
+    for label, prefix, server_key in connections:
+        status = st.session_state.get(f"{prefix}_connection_status", "Not checked")
+        msg = st.session_state.get(f"{prefix}_connection_msg", "")
+        if server_key and not st.session_state.get(server_key):
+            dot, detail = "⚪", "Not configured"
+        elif status == "Success":
+            dot, detail = "🟢", msg or "Connected"
+        elif status == "Failed":
+            dot, detail = "🔴", msg or "Connection failed"
+        else:
+            dot, detail = "🟡", "Not checked yet"
+        tooltip = html.escape(f"{label}: {detail}. Manage it on the Configuration page.", quote=True)
+        items.append(f'<span class="po-conn" title="{tooltip}">{dot} {label}</span>')
+    st.markdown(f"""
+        <style>
+            .po-conn-bar {{ display: flex; justify-content: flex-end; gap: 0.9rem; margin: -5rem 0 3.5rem 0;
+                            font-size: 0.78rem; color: #94A3B8; }}
+            .po-conn {{ cursor: help; white-space: nowrap; }}
+        </style>
+        <div class="po-conn-bar">{"".join(items)}</div>
+    """, unsafe_allow_html=True)
+
+
+render_connection_status(pg)
 render_release_plan_stepper(pg)
 pg.run()
