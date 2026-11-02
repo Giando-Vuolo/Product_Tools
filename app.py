@@ -246,40 +246,78 @@ sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", 
 release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
 ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="AI Issue Creator", icon="🤖")
-ai_agent_page = st.Page("tools/6_AI_Agent.py", title="AI Agent", icon="💬")
+# Reachable by URL only: hidden from the menu
+ai_agent_page = st.Page("tools/6_AI_Agent.py", title="AI Agent", icon="💬", visibility="hidden")
 from utils.navigation import RELEASE_PLAN_PAGES
-_release_plan_icon_map = {
-    0: "🔎",
-    7: "📋",
-    8: "📨",
-}
-_release_plan_titles = {
-    0: "Overview",
-    7: "Post Actions",
-    8: "Notifications",
-}
+# Release Plan is a single menu entry (the Overview); its steps are switched with the stepper.
+RELEASE_PLAN_STEPS = (0, 7, 8)
 _rp_pages = {
-    n: (
-        st.Page(
-            path,
-            title=_release_plan_titles.get(n, title.replace(f"{n} · ", "")),
-            url_path=url,
-            icon=_release_plan_icon_map.get(n, "📄"),
-        ) if url else st.Page(
-            path,
-            title=_release_plan_titles.get(n, title.replace(f"{n} · ", "")),
-            icon=_release_plan_icon_map.get(n, "📄"),
-        )
+    n: st.Page(
+        path,
+        title="Release Plan" if n == 0 else f"Release Plan · {title}",
+        icon="🎯",
+        visibility="visible" if n == 0 else "hidden",
+        **({"url_path": url} if url else {}),
     )
     for n, path, title, url in RELEASE_PLAN_PAGES
-    if n in (0, 7, 8)
+    if n in RELEASE_PLAN_STEPS
 }
+_rp_step_labels = {n: title for n, _, title, _ in RELEASE_PLAN_PAGES}
 rr_overview_page = _rp_pages[0]
-release_plan_nav_pages = [_rp_pages[n] for n in (0, 7, 8)]
+release_plan_nav_pages = [_rp_pages[n] for n in RELEASE_PLAN_STEPS]
 
-# 2. Define the Home Page rendering function
-def show_home():
 
+def render_release_plan_stepper(current_page):
+    """Horizontal stepper linking the Release Plan steps; current step highlighted."""
+    current = next(
+        (i for i, n in enumerate(RELEASE_PLAN_STEPS) if _rp_pages[n].url_path == current_page.url_path),
+        None,
+    )
+    if current is None:
+        return
+    st.markdown("""
+        <style>
+            .st-key-rp_stepper { margin-bottom: 1.25rem; }
+            .st-key-rp_stepper [data-testid="stColumn"] { position: relative; }
+            .rp-step {
+                display: flex; align-items: center; gap: 0.6rem;
+                padding: 0.55rem 0.9rem; border-radius: 10px;
+                border: 1px solid #3E3E4A; background: #18181D; color: #94A3B8;
+                font-weight: 600; min-height: 2.6rem;
+            }
+            .rp-step .rp-num {
+                display: inline-flex; align-items: center; justify-content: center;
+                width: 1.6rem; height: 1.6rem; border-radius: 50%;
+                border: 2px solid currentColor; font-size: 0.85rem; flex: none;
+            }
+            .rp-step.rp-active { border-color: #60A5FA; background: rgba(96, 165, 250, 0.12); color: #FFFFFF; }
+            .rp-step.rp-active .rp-num { background: #60A5FA; border-color: #60A5FA; color: #0F172A; }
+            .st-key-rp_stepper [data-testid="stColumn"]:not(:last-child)::after {
+                content: ""; position: absolute; top: 50%; right: -1rem; width: 1rem;
+                border-top: 2px solid #3E3E4A;
+            }
+            .st-key-rp_stepper [data-testid="stPageLink"] a {
+                border: 1px solid #3E3E4A; border-radius: 10px; background: #18181D;
+                padding: 0.55rem 0.9rem; min-height: 2.6rem; margin: 0;
+            }
+            .st-key-rp_stepper [data-testid="stPageLink"] a:hover { border-color: #60A5FA; }
+        </style>
+    """, unsafe_allow_html=True)
+    with st.container(key="rp_stepper"):
+        for i, (col, n) in enumerate(zip(st.columns(len(RELEASE_PLAN_STEPS)), RELEASE_PLAN_STEPS)):
+            label = _rp_step_labels[n]
+            with col:
+                if i == current:
+                    st.markdown(
+                        f'<div class="rp-step rp-active"><span class="rp-num">{i + 1}</span>{label}</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    marker = "✅" if i < current else f"{i + 1}️⃣"
+                    st.page_link(_rp_pages[n], label=label, icon=marker, width="stretch")
+
+# Shared Premium Dark Mode styles for the Home Hub and Configuration pages
+def _inject_hub_styles():
     # Custom CSS for Premium Dark Mode Theme matching all tools
     st.markdown("""
         <style>
@@ -302,23 +340,6 @@ def show_home():
             section[data-testid="stSidebar"] {
                 background-color: #18181D !important;
                 border-right: 1px solid #3E3E4A !important;
-            }
-            section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] {
-                gap: 0.2rem !important;
-            }
-            section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] > div,
-            section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] > a,
-            section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] > button,
-            section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] [data-testid="stSidebarNavMenu"] {
-                margin: 0 !important;
-                padding-left: 0.1rem !important;
-            }
-            section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] [data-testid="stSidebarNavMenu"] {
-                margin-left: 0.35rem !important;
-            }
-            section[data-testid="stSidebar"] [data-testid="stSidebarNavItems"] .stSidebarNavSectionHeader {
-                padding-left: 0.15rem !important;
-                margin-bottom: 0.1rem !important;
             }
 
             /* Sidebar Toggle Button */
@@ -460,343 +481,407 @@ def show_home():
         </style>
     """, unsafe_allow_html=True)
 
+
+# 2. Define the Home Page rendering function
+def show_home():
+    _inject_hub_styles()
+
     # Main Title and Welcome
     st.title("💼 Product Owner Suite Hub")
-    st.markdown("Welcome to the **Product Owner & Project Management Tools Suite**. Use the sidebar to seamlessly navigate between the different tools available in this workspace.")
+    st.markdown("Welcome to the **Product Owner & Project Management Tools Suite**. Use the top menu to seamlessly navigate between the different tools available in this workspace.")
 
     st.divider()
 
-    tab_tools, tab_integrations = st.tabs(["🛠️ Available Tools", "🔌 Centralized Integrations"])
+    st.subheader("🛠️ Available Tools")
+    r1c1, r1c2, r1c3 = st.columns(3)
 
-    with tab_tools:
-        st.subheader("🛠️ Available Tools")
-        r1c1, r1c2, r1c3 = st.columns(3)
-        
-        with r1c1:
-            st.markdown("""
-                <div class="hub-card">
-                    <span class="hub-badge">ACTIVE 🚀</span>
-                    <h3>🎯 Quarterly Planner</h3>
-                    <p>Track committed quarterly Epics from Jira, add delivery context and planned milestones, then export progress and delivery-roadmap slides.</p>
-                </div>
-            """, unsafe_allow_html=True)
-            st.page_link(planner_page, label="Open Planner", icon="🎯")
+    with r1c1:
+        st.markdown("""
+            <div class="hub-card">
+                <span class="hub-badge">ACTIVE 🚀</span>
+                <h3>🎯 Quarterly Planner</h3>
+                <p>Track committed quarterly Epics from Jira, add delivery context and planned milestones, then export progress and delivery-roadmap slides.</p>
+            </div>
+        """, unsafe_allow_html=True)
+        st.page_link(planner_page, label="Open Planner", icon="🎯")
 
-        with r1c2:
-            st.markdown("""
-                <div class="hub-card">
-                    <span class="hub-badge">ACTIVE 🚀</span>
-                    <h3>📋 Sprint Review</h3>
-                    <p>Extract Jira sprint data, edit items in a workbook, apply custom branding, and export PDF Sprint Review reports.</p>
-                </div>
-            """, unsafe_allow_html=True)
-            st.page_link(sprint_review_page, label="Open Sprint Review", icon="📋")
+    with r1c2:
+        st.markdown("""
+            <div class="hub-card">
+                <span class="hub-badge">ACTIVE 🚀</span>
+                <h3>📋 Sprint Review</h3>
+                <p>Extract Jira sprint data, edit items in a workbook, apply custom branding, and export PDF Sprint Review reports.</p>
+            </div>
+        """, unsafe_allow_html=True)
+        st.page_link(sprint_review_page, label="Open Sprint Review", icon="📋")
 
-        with r1c3:
-            st.markdown("""
-                <div class="hub-card">
-                    <span class="hub-badge">ACTIVE 🚀</span>
-                    <h3>📣 Release Notes</h3>
-                    <p>Create a Release Note from a Jira version: load release data, review the editable purpose and ticket tables, then export or publish the PDF.</p>
-                </div>
-            """, unsafe_allow_html=True)
-            st.page_link(release_notes_page, label="Open Release Notes", icon="📣")
+    with r1c3:
+        st.markdown("""
+            <div class="hub-card">
+                <span class="hub-badge">ACTIVE 🚀</span>
+                <h3>📣 Release Notes</h3>
+                <p>Create a Release Note from a Jira version: load release data, review the editable purpose and ticket tables, then export or publish the PDF.</p>
+            </div>
+        """, unsafe_allow_html=True)
+        st.page_link(release_notes_page, label="Open Release Notes", icon="📣")
 
-        r2c1, r2c2, r2c3 = st.columns(3)
+    r2c1, r2c2, r2c3 = st.columns(3)
 
-        with r2c1:
-            st.markdown("""
-                <div class="hub-card">
-                    <span class="hub-badge">ACTIVE 🚀</span>
-                    <h3>📊 Sprint KPIs</h3>
-                    <p>Calculate specific KPIs from Jira such as cycle times, committed vs achieved points, and releases.</p>
-                </div>
-            """, unsafe_allow_html=True)
-            st.page_link(sprint_kpis_page, label="Open Sprint KPIs", icon="📊")
+    with r2c1:
+        st.markdown("""
+            <div class="hub-card">
+                <span class="hub-badge">ACTIVE 🚀</span>
+                <h3>📊 Sprint KPIs</h3>
+                <p>Calculate specific KPIs from Jira such as cycle times, committed vs achieved points, and releases.</p>
+            </div>
+        """, unsafe_allow_html=True)
+        st.page_link(sprint_kpis_page, label="Open Sprint KPIs", icon="📊")
 
-        with r2c2:
-            st.markdown("""
-                <div class="hub-card">
-                    <span class="hub-badge">NEW ✨</span>
-                    <h3>🤖 AI Issue Creator</h3>
-                    <p>Draft, format and upload Jira issues effortlessly using a local Ollama AI model.</p>
-                </div>
-            """, unsafe_allow_html=True)
-            st.page_link(ai_creator_page, label="Open AI Creator", icon="🤖")
+    with r2c2:
+        st.markdown("""
+            <div class="hub-card">
+                <span class="hub-badge">NEW ✨</span>
+                <h3>🤖 AI Issue Creator</h3>
+                <p>Draft, format and upload Jira issues effortlessly using a local Ollama AI model.</p>
+            </div>
+        """, unsafe_allow_html=True)
+        st.page_link(ai_creator_page, label="Open AI Creator", icon="🤖")
 
-        with r2c3:
-            pass # AI Agent card removed temporarily while under development
+    with r2c3:
+        pass # AI Agent card removed temporarily while under development
 
-        r3c1, r3c2, r3c3 = st.columns(3)
+    r3c1, r3c2, r3c3 = st.columns(3)
 
-        with r3c1:
-            st.markdown("""
-                <div class="hub-card">
-                    <span class="hub-badge">NEW ✨</span>
-                    <h3>✅ Release Readiness</h3>
-                    <p>Check a release before go-live: scope, approvals, documentation table, critical changes, PRE testing and unassigned issues, with copy-ready notifications. Read-only.</p>
-                </div>
-            """, unsafe_allow_html=True)
-            st.page_link(rr_overview_page, label="Open Release Overview", icon="✅")
+    with r3c1:
+        st.markdown("""
+            <div class="hub-card">
+                <span class="hub-badge">NEW ✨</span>
+                <h3>✅ Release Readiness</h3>
+                <p>Check a release before go-live: scope, approvals, documentation table, critical changes, PRE testing and unassigned issues, with copy-ready notifications. Read-only.</p>
+            </div>
+        """, unsafe_allow_html=True)
+        st.page_link(rr_overview_page, label="Open Release Overview", icon="✅")
 
-    with tab_integrations:
-        st.subheader("🔌 Centralized Integrations")
-        st.write("Configure connection configurations for Jira, Confluence, Ollama, SonarQube, SBOM and Vanguard below.")
 
-        # Display current status in nice columns
-        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
-        with stat_col1:
-            j_status = st.session_state.get("jira_connection_status", "Not checked")
-            j_msg = st.session_state.get("jira_connection_msg", "")
-            if j_status == "Success":
-                st.success(f"🟢 **Jira**: {j_msg}")
-            elif j_status == "Failed":
-                st.error(f"🔴 **Jira**: {j_msg}")
+# Configuration page: centralized integrations and connection checks
+def show_configuration():
+    _inject_hub_styles()
+    st.subheader("🔌 Centralized Integrations")
+    st.write("Configure connection configurations for Jira, Confluence, Ollama, SonarQube, SBOM and Vanguard below.")
+
+    # Display current status in nice columns
+    stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+    with stat_col1:
+        j_status = st.session_state.get("jira_connection_status", "Not checked")
+        j_msg = st.session_state.get("jira_connection_msg", "")
+        if j_status == "Success":
+            st.success(f"🟢 **Jira**: {j_msg}")
+        elif j_status == "Failed":
+            st.error(f"🔴 **Jira**: {j_msg}")
+        else:
+            st.warning(f"🟡 **Jira**: {j_status}")
+    with stat_col2:
+        c_status = st.session_state.get("conf_connection_status", "Not checked")
+        c_msg = st.session_state.get("conf_connection_msg", "")
+        if c_status == "Success":
+            st.success(f"🟢 **Confluence**: {c_msg}")
+        elif c_status == "Failed":
+            st.error(f"🔴 **Confluence**: {c_msg}")
+        else:
+            st.warning(f"🟡 **Confluence**: {c_status}")
+    with stat_col3:
+        o_status = st.session_state.get("ollama_connection_status", "Not checked")
+        o_msg = st.session_state.get("ollama_connection_msg", "")
+        if o_status == "Success":
+            st.success(f"🟢 **Ollama**: {o_msg}")
+        elif o_status == "Failed":
+            st.error(f"🔴 **Ollama**: {o_msg}")
+        else:
+            st.warning(f"🟡 **Ollama**: {o_status}")
+    with stat_col4:
+        a_status = st.session_state.get("api_connection_status", "Not checked")
+        a_msg = st.session_state.get("api_connection_msg", "")
+        if a_status == "Success":
+            st.success(f"🟢 **Local API**: {a_msg}")
+        elif a_status == "Failed":
+            st.error(f"🔴 **Local API**: {a_msg}")
+        else:
+            st.warning(f"🟡 **Local API**: {a_status}")
+
+    for col, (key, label, _) in zip(st.columns(4), QUALITY_INTEGRATIONS):
+        with col:
+            q_status = st.session_state.get(f"{key}_connection_status", "Not checked")
+            q_msg = st.session_state.get(f"{key}_connection_msg", "")
+            if q_status == "Success":
+                st.success(f"🟢 **{label}**: {q_msg}")
+            elif q_status == "Failed":
+                st.error(f"🔴 **{label}**: {q_msg}")
             else:
-                st.warning(f"🟡 **Jira**: {j_status}")
-        with stat_col2:
-            c_status = st.session_state.get("conf_connection_status", "Not checked")
-            c_msg = st.session_state.get("conf_connection_msg", "")
-            if c_status == "Success":
-                st.success(f"🟢 **Confluence**: {c_msg}")
-            elif c_status == "Failed":
-                st.error(f"🔴 **Confluence**: {c_msg}")
-            else:
-                st.warning(f"🟡 **Confluence**: {c_status}")
-        with stat_col3:
-            o_status = st.session_state.get("ollama_connection_status", "Not checked")
-            o_msg = st.session_state.get("ollama_connection_msg", "")
-            if o_status == "Success":
-                st.success(f"🟢 **Ollama**: {o_msg}")
-            elif o_status == "Failed":
-                st.error(f"🔴 **Ollama**: {o_msg}")
-            else:
-                st.warning(f"🟡 **Ollama**: {o_status}")
-        with stat_col4:
-            a_status = st.session_state.get("api_connection_status", "Not checked")
-            a_msg = st.session_state.get("api_connection_msg", "")
-            if a_status == "Success":
-                st.success(f"🟢 **Local API**: {a_msg}")
-            elif a_status == "Failed":
-                st.error(f"🔴 **Local API**: {a_msg}")
-            else:
-                st.warning(f"🟡 **Local API**: {a_status}")
+                st.warning(f"🟡 **{label}**: {q_status}")
 
-        for col, (key, label, _) in zip(st.columns(4), QUALITY_INTEGRATIONS):
-            with col:
-                q_status = st.session_state.get(f"{key}_connection_status", "Not checked")
-                q_msg = st.session_state.get(f"{key}_connection_msg", "")
-                if q_status == "Success":
-                    st.success(f"🟢 **{label}**: {q_msg}")
-                elif q_status == "Failed":
-                    st.error(f"🔴 **{label}**: {q_msg}")
-                else:
-                    st.warning(f"🟡 **{label}**: {q_status}")
+    st.markdown("---")
 
-        st.markdown("---")
+    if IS_REMOTE:
+        st.info("🔒 Integration settings can only be viewed or changed from the host machine (http://localhost:8501).")
+        return
 
-        if IS_REMOTE:
-            st.info("🔒 Integration settings can only be viewed or changed from the host machine (http://localhost:8501).")
-            return
+    col_jserv, col_jtok = st.columns(2)
+    with col_jserv:
+        srv_in = st.text_input("Jira Server Base URL:", value=st.session_state.jira_server, key="central_jira_server")
+    with col_jtok:
+        tok_in = _secret_input("Jira Personal Access Token (PAT):", "jira_token", "central_jira_token")
 
-        col_jserv, col_jtok = st.columns(2)
-        with col_jserv:
-            srv_in = st.text_input("Jira Server Base URL:", value=st.session_state.jira_server, key="central_jira_server")
-        with col_jtok:
-            tok_in = _secret_input("Jira Personal Access Token (PAT):", "jira_token", "central_jira_token")
-
-        col_jauth, col_jmail = st.columns(2)
-        with col_jauth:
-            auth_options = [
-                "Personal Access Token (Bearer PAT)",
-                "Corporate Login (Username + Password)",
-                "Jira Cloud/Server Basic (Email/User + Token)"
-            ]
-            auth_in = st.selectbox(
-                "Jira Auth Method:",
-                options=auth_options,
-                index=auth_options.index(st.session_state.jira_auth_method) if st.session_state.jira_auth_method in auth_options else 0,
-                key="central_jira_auth"
-            )
-        with col_jmail:
-            mail_in = st.text_input("Jira Email/Username (Optional):", value=st.session_state.jira_email, key="central_jira_email")
-
-        st.markdown("---")
-        col_cserv, col_ctok = st.columns(2)
-        with col_cserv:
-            csrv_in = st.text_input("Confluence Server URL:", value=st.session_state.conf_server, key="central_conf_server")
-        with col_ctok:
-            ctok_in = _secret_input("Confluence Personal Access Token (PAT):", "conf_token", "central_conf_token")
-
-        st.markdown("---")
-        st.markdown("##### 🤖 Local AI (Ollama)")
-        col_ourl, _ = st.columns(2)
-        with col_ourl:
-            ourl_in = st.text_input("Ollama API URL:", value=st.session_state.ollama_url, key="central_ollama_url")
-
-        st.markdown("---")
-        st.markdown("##### 📡 Quality & Security Integrations (KPIs)")
-        
-        st.markdown("**SonarQube**")
-        sq_col1, sq_col2, sq_col3 = st.columns(3)
-        with sq_col1:
-            sonar_server_in = st.text_input("SonarQube Server:", value=st.session_state.sonar_server, key="central_sonar_server")
-        with sq_col2:
-            sonar_token_in = _secret_input("SonarQube Token:", "sonar_token", "central_sonar_token")
-        with sq_col3:
-            sonar_comp_in = st.text_input("SonarQube Component:", value=st.session_state.sonar_component, key="central_sonar_component")
-
-        st.markdown("**SBOM Inventory**")
-        sb_col1, sb_col2, sb_col3 = st.columns(3)
-        with sb_col1:
-            sbom_server_in = st.text_input("SBOM Server:", value=st.session_state.sbom_server, key="central_sbom_server")
-            sbom_namespace_in = st.text_input("SBOM Namespace ID:", value=st.session_state.sbom_namespace_id, key="central_sbom_namespace")
-        with sb_col2:
-            sbom_api_key_in = _secret_input("SBOM API Key:", "sbom_api_key", "central_sbom_api_key")
-            sbom_app_in = st.text_input("SBOM App ID:", value=st.session_state.sbom_app_id, key="central_sbom_app_id")
-        with sb_col3:
-            sbom_api_secret_in = _secret_input("SBOM API Secret:", "sbom_api_secret", "central_sbom_api_secret")
-
-        st.markdown("**Vanguard**")
-        vg_col1, vg_col2, vg_col3 = st.columns(3)
-        with vg_col1:
-            vg_project_in = st.text_input("Vanguard Project ID:", value=st.session_state.vanguard_project_id, key="central_vg_project")
-        with vg_col2:
-            vg_client_id_in = st.text_input("Vanguard Client ID:", value=st.session_state.vanguard_client_id, key="central_vg_client_id")
-        with vg_col3:
-            vg_client_secret_in = _secret_input("Vanguard Client Secret:", "vanguard_client_secret", "central_vg_secret")
-
-        settings_changed = (
-            st.session_state.jira_server != srv_in or
-            st.session_state.jira_token != tok_in or
-            st.session_state.jira_auth_method != auth_in or
-            st.session_state.jira_email != mail_in or
-            st.session_state.conf_server != csrv_in or
-            st.session_state.conf_token != ctok_in or
-            st.session_state.ollama_url != ourl_in or
-            st.session_state.sonar_server != sonar_server_in or
-            st.session_state.sonar_token != sonar_token_in or
-            st.session_state.sonar_component != sonar_comp_in or
-            st.session_state.sbom_server != sbom_server_in or
-            st.session_state.sbom_api_key != sbom_api_key_in or
-            st.session_state.sbom_api_secret != sbom_api_secret_in or
-            st.session_state.sbom_namespace_id != sbom_namespace_in or
-            st.session_state.sbom_app_id != sbom_app_in or
-            st.session_state.vanguard_project_id != vg_project_in or
-            st.session_state.vanguard_client_id != vg_client_id_in or
-            st.session_state.vanguard_client_secret != vg_client_secret_in
+    col_jauth, col_jmail = st.columns(2)
+    with col_jauth:
+        auth_options = [
+            "Personal Access Token (Bearer PAT)",
+            "Corporate Login (Username + Password)",
+            "Jira Cloud/Server Basic (Email/User + Token)"
+        ]
+        auth_in = st.selectbox(
+            "Jira Auth Method:",
+            options=auth_options,
+            index=auth_options.index(st.session_state.jira_auth_method) if st.session_state.jira_auth_method in auth_options else 0,
+            key="central_jira_auth"
         )
+    with col_jmail:
+        mail_in = st.text_input("Jira Email/Username (Optional):", value=st.session_state.jira_email, key="central_jira_email")
 
-        if settings_changed:
-            st.session_state.jira_server = srv_in
-            st.session_state.jira_token = tok_in
-            st.session_state.jira_auth_method = auth_in
-            st.session_state.jira_email = mail_in
-            st.session_state.conf_server = csrv_in
-            st.session_state.conf_token = ctok_in
-            st.session_state.ollama_url = ourl_in
-            st.session_state.sonar_server = sonar_server_in
-            st.session_state.sonar_token = sonar_token_in
-            st.session_state.sonar_component = sonar_comp_in
-            st.session_state.sbom_server = sbom_server_in
-            st.session_state.sbom_api_key = sbom_api_key_in
-            st.session_state.sbom_api_secret = sbom_api_secret_in
-            st.session_state.sbom_namespace_id = sbom_namespace_in
-            st.session_state.sbom_app_id = sbom_app_in
-            st.session_state.vanguard_project_id = vg_project_in
-            st.session_state.vanguard_client_id = vg_client_id_in
-            st.session_state.vanguard_client_secret = vg_client_secret_in
-            save_credentials_to_env()
-            st.toast("Integrations updated and saved centrally! ✅")
+    st.markdown("---")
+    col_cserv, col_ctok = st.columns(2)
+    with col_cserv:
+        csrv_in = st.text_input("Confluence Server URL:", value=st.session_state.conf_server, key="central_conf_server")
+    with col_ctok:
+        ctok_in = _secret_input("Confluence Personal Access Token (PAT):", "conf_token", "central_conf_token")
 
-        st.markdown("<br/>", unsafe_allow_html=True)
-        if st.button("🔌 Check Integration Status", use_container_width=True):
-            st.markdown("### 🔍 Connection Test Results")
-            
-            # 1. Test Jira Connection
-            if srv_in and tok_in:
-                with st.spinner("Testing Jira Connection..."):
-                    ok, msg = check_jira_connection(srv_in, tok_in, auth_in, mail_in, timeout=8)
-                st.session_state.jira_connection_status = "Success" if ok else "Failed"
-                st.session_state.jira_connection_msg = msg
-                if ok:
-                    st.success(f"✅ **Jira Connection Successful!** {msg}.")
+    st.markdown("---")
+    st.markdown("##### 🤖 Local AI (Ollama)")
+    col_ourl, _ = st.columns(2)
+    with col_ourl:
+        ourl_in = st.text_input("Ollama API URL:", value=st.session_state.ollama_url, key="central_ollama_url")
+
+    st.markdown("---")
+    st.markdown("##### 📡 Quality & Security Integrations (KPIs)")
+
+    st.markdown("**SonarQube**")
+    sq_col1, sq_col2, sq_col3 = st.columns(3)
+    with sq_col1:
+        sonar_server_in = st.text_input("SonarQube Server:", value=st.session_state.sonar_server, key="central_sonar_server")
+    with sq_col2:
+        sonar_token_in = _secret_input("SonarQube Token:", "sonar_token", "central_sonar_token")
+    with sq_col3:
+        sonar_comp_in = st.text_input("SonarQube Component:", value=st.session_state.sonar_component, key="central_sonar_component")
+
+    st.markdown("**SBOM Inventory**")
+    sb_col1, sb_col2, sb_col3 = st.columns(3)
+    with sb_col1:
+        sbom_server_in = st.text_input("SBOM Server:", value=st.session_state.sbom_server, key="central_sbom_server")
+        sbom_namespace_in = st.text_input("SBOM Namespace ID:", value=st.session_state.sbom_namespace_id, key="central_sbom_namespace")
+    with sb_col2:
+        sbom_api_key_in = _secret_input("SBOM API Key:", "sbom_api_key", "central_sbom_api_key")
+        sbom_app_in = st.text_input("SBOM App ID:", value=st.session_state.sbom_app_id, key="central_sbom_app_id")
+    with sb_col3:
+        sbom_api_secret_in = _secret_input("SBOM API Secret:", "sbom_api_secret", "central_sbom_api_secret")
+
+    st.markdown("**Vanguard**")
+    vg_col1, vg_col2, vg_col3 = st.columns(3)
+    with vg_col1:
+        vg_project_in = st.text_input("Vanguard Project ID:", value=st.session_state.vanguard_project_id, key="central_vg_project")
+    with vg_col2:
+        vg_client_id_in = st.text_input("Vanguard Client ID:", value=st.session_state.vanguard_client_id, key="central_vg_client_id")
+    with vg_col3:
+        vg_client_secret_in = _secret_input("Vanguard Client Secret:", "vanguard_client_secret", "central_vg_secret")
+
+    settings_changed = (
+        st.session_state.jira_server != srv_in or
+        st.session_state.jira_token != tok_in or
+        st.session_state.jira_auth_method != auth_in or
+        st.session_state.jira_email != mail_in or
+        st.session_state.conf_server != csrv_in or
+        st.session_state.conf_token != ctok_in or
+        st.session_state.ollama_url != ourl_in or
+        st.session_state.sonar_server != sonar_server_in or
+        st.session_state.sonar_token != sonar_token_in or
+        st.session_state.sonar_component != sonar_comp_in or
+        st.session_state.sbom_server != sbom_server_in or
+        st.session_state.sbom_api_key != sbom_api_key_in or
+        st.session_state.sbom_api_secret != sbom_api_secret_in or
+        st.session_state.sbom_namespace_id != sbom_namespace_in or
+        st.session_state.sbom_app_id != sbom_app_in or
+        st.session_state.vanguard_project_id != vg_project_in or
+        st.session_state.vanguard_client_id != vg_client_id_in or
+        st.session_state.vanguard_client_secret != vg_client_secret_in
+    )
+
+    if settings_changed:
+        st.session_state.jira_server = srv_in
+        st.session_state.jira_token = tok_in
+        st.session_state.jira_auth_method = auth_in
+        st.session_state.jira_email = mail_in
+        st.session_state.conf_server = csrv_in
+        st.session_state.conf_token = ctok_in
+        st.session_state.ollama_url = ourl_in
+        st.session_state.sonar_server = sonar_server_in
+        st.session_state.sonar_token = sonar_token_in
+        st.session_state.sonar_component = sonar_comp_in
+        st.session_state.sbom_server = sbom_server_in
+        st.session_state.sbom_api_key = sbom_api_key_in
+        st.session_state.sbom_api_secret = sbom_api_secret_in
+        st.session_state.sbom_namespace_id = sbom_namespace_in
+        st.session_state.sbom_app_id = sbom_app_in
+        st.session_state.vanguard_project_id = vg_project_in
+        st.session_state.vanguard_client_id = vg_client_id_in
+        st.session_state.vanguard_client_secret = vg_client_secret_in
+        save_credentials_to_env()
+        st.toast("Integrations updated and saved centrally! ✅")
+
+    st.markdown("<br/>", unsafe_allow_html=True)
+    if st.button("🔌 Check Integration Status", use_container_width=True):
+        st.markdown("### 🔍 Connection Test Results")
+
+        # 1. Test Jira Connection
+        if srv_in and tok_in:
+            with st.spinner("Testing Jira Connection..."):
+                ok, msg = check_jira_connection(srv_in, tok_in, auth_in, mail_in, timeout=8)
+            st.session_state.jira_connection_status = "Success" if ok else "Failed"
+            st.session_state.jira_connection_msg = msg
+            if ok:
+                st.success(f"✅ **Jira Connection Successful!** {msg}.")
+            else:
+                st.error(f"❌ **Jira Connection Failed**: {msg}. Check server URL and API token.")
+        else:
+            st.session_state.jira_connection_status = "Failed"
+            st.session_state.jira_connection_msg = "Server URL or Token empty"
+            st.warning("⚠️ **Jira not tested**: Server URL or token is empty.")
+
+        # 2. Test Confluence Connection
+        if csrv_in and ctok_in:
+            with st.spinner("Testing Confluence Connection..."):
+                ok, msg = check_confluence_connection(csrv_in, ctok_in, auth_in, mail_in, timeout=8)
+            st.session_state.conf_connection_status = "Success" if ok else "Failed"
+            st.session_state.conf_connection_msg = msg
+            if ok:
+                st.success("✅ **Confluence Connection Successful!**")
+            else:
+                st.error(f"❌ **Confluence Connection Failed**: {msg}. Check URL and token.")
+        else:
+            st.session_state.conf_connection_status = "Failed"
+            st.session_state.conf_connection_msg = "Server URL or Token empty"
+            st.warning("⚠️ **Confluence not tested**: Server URL or token is empty.")
+
+        # 3. Test Ollama Connection
+        if ourl_in:
+            with st.spinner("Testing Ollama Connection..."):
+                models = get_ollama_models(ourl_in)
+                if models:
+                    st.session_state.ollama_connection_status = "Success"
+                    st.session_state.ollama_connection_msg = f"{len(models)} models found"
+                    st.session_state.ollama_models = models
+                    st.success(f"✅ **Ollama Connection Successful!** Found {len(models)} models.")
                 else:
-                    st.error(f"❌ **Jira Connection Failed**: {msg}. Check server URL and API token.")
-            else:
-                st.session_state.jira_connection_status = "Failed"
-                st.session_state.jira_connection_msg = "Server URL or Token empty"
-                st.warning("⚠️ **Jira not tested**: Server URL or token is empty.")
+                    st.session_state.ollama_connection_status = "Failed"
+                    st.session_state.ollama_connection_msg = "No models or offline"
+                    st.session_state.ollama_models = []
+                    st.error(f"❌ **Ollama Connection Failed**: Could not fetch models from {ourl_in}.")
+        else:
+            st.session_state.ollama_connection_status = "Failed"
+            st.session_state.ollama_connection_msg = "URL empty"
+            st.warning("⚠️ **Ollama not tested**: URL is empty.")
 
-            # 2. Test Confluence Connection
-            if csrv_in and ctok_in:
-                with st.spinner("Testing Confluence Connection..."):
-                    ok, msg = check_confluence_connection(csrv_in, ctok_in, auth_in, mail_in, timeout=8)
-                st.session_state.conf_connection_status = "Success" if ok else "Failed"
-                st.session_state.conf_connection_msg = msg
-                if ok:
-                    st.success("✅ **Confluence Connection Successful!**")
+        # 4. Test Local API Connection
+        with st.spinner("Testing Local API Connection..."):
+            try:
+                api_resp = requests.get(f"{LOCAL_API_URL}/openapi.json", timeout=2)
+                if api_resp.status_code == 200:
+                    st.session_state.api_connection_status = "Success"
+                    st.session_state.api_connection_msg = "Connected"
+                    st.success("�� **Local API Connection Successful!**")
                 else:
-                    st.error(f"❌ **Confluence Connection Failed**: {msg}. Check URL and token.")
-            else:
-                st.session_state.conf_connection_status = "Failed"
-                st.session_state.conf_connection_msg = "Server URL or Token empty"
-                st.warning("⚠️ **Confluence not tested**: Server URL or token is empty.")
-
-            # 3. Test Ollama Connection
-            if ourl_in:
-                with st.spinner("Testing Ollama Connection..."):
-                    models = get_ollama_models(ourl_in)
-                    if models:
-                        st.session_state.ollama_connection_status = "Success"
-                        st.session_state.ollama_connection_msg = f"{len(models)} models found"
-                        st.session_state.ollama_models = models
-                        st.success(f"✅ **Ollama Connection Successful!** Found {len(models)} models.")
-                    else:
-                        st.session_state.ollama_connection_status = "Failed"
-                        st.session_state.ollama_connection_msg = "No models or offline"
-                        st.session_state.ollama_models = []
-                        st.error(f"❌ **Ollama Connection Failed**: Could not fetch models from {ourl_in}.")
-            else:
-                st.session_state.ollama_connection_status = "Failed"
-                st.session_state.ollama_connection_msg = "URL empty"
-                st.warning("⚠️ **Ollama not tested**: URL is empty.")
-
-            # 4. Test Local API Connection
-            with st.spinner("Testing Local API Connection..."):
-                try:
-                    api_resp = requests.get(f"{LOCAL_API_URL}/openapi.json", timeout=2)
-                    if api_resp.status_code == 200:
-                        st.session_state.api_connection_status = "Success"
-                        st.session_state.api_connection_msg = "Connected"
-                        st.success("�� **Local API Connection Successful!**")
-                    else:
-                        st.session_state.api_connection_status = "Failed"
-                        st.session_state.api_connection_msg = f"HTTP {api_resp.status_code}"
-                        st.error(f"❌ **Local API Connection Failed (HTTP {api_resp.status_code})**")
-                except Exception:
                     st.session_state.api_connection_status = "Failed"
-                    st.session_state.api_connection_msg = "Offline"
-                    st.error(f"❌ **Local API Connection Failed**: Could not connect to {LOCAL_API_URL}.")
+                    st.session_state.api_connection_msg = f"HTTP {api_resp.status_code}"
+                    st.error(f"❌ **Local API Connection Failed (HTTP {api_resp.status_code})**")
+            except Exception:
+                st.session_state.api_connection_status = "Failed"
+                st.session_state.api_connection_msg = "Offline"
+                st.error(f"❌ **Local API Connection Failed**: Could not connect to {LOCAL_API_URL}.")
 
-            # 5-7. Test SonarQube, SBOM and Vanguard Connections
-            with st.spinner("Testing SonarQube, SBOM and Vanguard Connections..."):
-                quality_results = check_quality_integrations(quality_integration_args())
-            for label, q_status, q_msg in quality_results:
-                if q_status == "Success":
-                    st.success(f"✅ **{label} Connection Successful!** {q_msg}.")
-                elif q_msg == "Configuration incomplete":
-                    st.warning(f"⚠️ **{label} not tested**: configuration is incomplete.")
-                else:
-                    st.error(f"❌ **{label} Connection Failed**: {q_msg}")
+        # 5-7. Test SonarQube, SBOM and Vanguard Connections
+        with st.spinner("Testing SonarQube, SBOM and Vanguard Connections..."):
+            quality_results = check_quality_integrations(quality_integration_args())
+        for label, q_status, q_msg in quality_results:
+            if q_status == "Success":
+                st.success(f"✅ **{label} Connection Successful!** {q_msg}.")
+            elif q_msg == "Configuration incomplete":
+                st.warning(f"⚠️ **{label} not tested**: configuration is incomplete.")
+            else:
+                st.error(f"❌ **{label} Connection Failed**: {q_msg}")
+
+# Collaboration page: Cloudflare tunnel controls (host only)
+def show_collaboration():
+    _inject_hub_styles()
+    st.title("🤝 Live Collaboration")
+    st.markdown("Share this workspace with your team in real time through a Cloudflare tunnel.")
+    st.divider()
+
+    current_url = tunnel_url
+    if IS_REMOTE:
+        # Remote collaborators can use the tools but never control the host tunnel.
+        st.info("Connected remotely through the collaboration tunnel.")
+    elif st.session_state.tunnel_enabled:
+        if not current_url:
+            current_url = start_tunnel(8501)
+
+        if current_url:
+            st.success("Tunnel Active 🟢")
+            st.code(current_url, language="text")
+            st.link_button("🌐 Open Link", current_url)
+            st.caption("Share this URL with team members to collaborate in real-time.")
+            if not os.getenv("REMOTE_ACCESS_PASSWORD"):
+                st.warning("Set REMOTE_ACCESS_PASSWORD in .env: remote visitors are blocked until a password is configured.")
+        else:
+            tunnel_err = get_tunnel_error()
+            if tunnel_err:
+                st.error("❌ Tunnel Error")
+                st.warning(tunnel_err)
+                st.caption("You can still use the app locally at http://localhost:8501")
+            else:
+                st.info("🌀 Starting tunnel...")
+                from streamlit_autorefresh import st_autorefresh
+                st_autorefresh(interval=1000, limit=10, key="tunnel_startup_refresher")
+
+        if st.button("🛑 Stop Tunnel"):
+            from utils.tunnel import stop_tunnel
+            stop_tunnel()
+            st.session_state.tunnel_enabled = False
+            st.rerun()
+    else:
+        if current_url:
+            from utils.tunnel import stop_tunnel
+            stop_tunnel()
+        st.info("Cloudflare tunnel is disabled.")
+        if st.button("🚀 Start Collaboration Tunnel", type="primary"):
+            st.session_state.tunnel_enabled = True
+            st.rerun()
+
+
 # 3. Define the page listing for navigation
 home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
+configuration_page = st.Page(show_configuration, title="Configuration", icon="⚙️", url_path="configuration")
+collaboration_page = st.Page(show_collaboration, title="Live Collaboration", icon="🤝", url_path="collaboration")
 
-# 4. Setup and run navigation
-pg = st.navigation({
-    "": [home_page, planner_page, sprint_review_page, release_notes_page, sprint_kpis_page, ai_creator_page, ai_agent_page],
-    "🎯 Release Plan": release_plan_nav_pages,
-})
+# 4. Setup and run navigation (top menu: each section is a dropdown)
+pg = st.navigation(
+    {
+        "": [home_page],
+        "🏃 Sprint": [sprint_review_page, sprint_kpis_page],
+        "🚀 Releases": [release_notes_page, *release_plan_nav_pages],
+        "📅 Quarterly Planning": [planner_page],
+        "🤖 AI": [ai_creator_page, ai_agent_page],
+        "⚙️ Configuration": [configuration_page],
+        "🤝 Collaboration": [collaboration_page],
+    },
+    position="top",
+)
 st.set_page_config(page_title="Product Owner Suite Hub", layout="wide")
 
 # Remote access gate: tunnel/proxy visitors must provide REMOTE_ACCESS_PASSWORD.
@@ -815,18 +900,6 @@ if IS_REMOTE and not st.session_state.get("remote_authenticated", False):
             st.rerun()
         st.error("Invalid password.")
     st.stop()
-
-# Hide the AI Agent from the sidebar menu globally
-st.markdown("""
-    <style>
-        [data-testid="stSidebarNavItems"] a[href$="AI_Agent"] {
-            display: none !important;
-        }
-    </style>
-""", unsafe_allow_html=True)
-
-# Display live collaboration tunnel link in the sidebar
-st.sidebar.markdown("### 🤝 Live Collaboration")
 
 # Auto-detect tunnel URL from request headers if accessed via Cloudflare
 headers = request_headers
@@ -850,43 +923,32 @@ if tunnel_url:
 if "tunnel_enabled" not in st.session_state:
     st.session_state.tunnel_enabled = False
 
-if IS_REMOTE:
-    # Remote collaborators can use the tools but never control the host tunnel.
-    st.sidebar.caption("Connected remotely through the collaboration tunnel.")
-elif st.session_state.tunnel_enabled:
-    if not tunnel_url:
-        tunnel_url = start_tunnel(8501)
-        
-    if tunnel_url:
-        st.sidebar.success("Tunnel Active 🟢")
-        st.sidebar.code(tunnel_url, language="text")
-        st.sidebar.link_button("🌐 Open Link", tunnel_url, use_container_width=True)
-        st.sidebar.caption("Share this URL with team members to collaborate in real-time.")
-        if not os.getenv("REMOTE_ACCESS_PASSWORD"):
-            st.sidebar.warning("Set REMOTE_ACCESS_PASSWORD in .env: remote visitors are blocked until a password is configured.")
-    else:
-        tunnel_err = get_tunnel_error()
-        if tunnel_err:
-            st.sidebar.error("❌ Tunnel Error")
-            st.sidebar.warning(tunnel_err)
-            st.sidebar.caption("You can still use the app locally at http://localhost:8501")
-        else:
-            st.sidebar.info("🌀 Starting tunnel...")
-            from streamlit_autorefresh import st_autorefresh
-            st_autorefresh(interval=1000, limit=10, key="tunnel_startup_refresher")
-            
-    if st.sidebar.button("🛑 Stop Tunnel", use_container_width=True):
-        from utils.tunnel import stop_tunnel
-        stop_tunnel()
-        st.session_state.tunnel_enabled = False
-        st.rerun()
-else:
-    if tunnel_url:
-        from utils.tunnel import stop_tunnel
-        stop_tunnel()
-    st.sidebar.info("Cloudflare tunnel is disabled.")
-    if st.sidebar.button("🚀 Start Collaboration Tunnel", use_container_width=True):
-        st.session_state.tunnel_enabled = True
-        st.rerun()
-
+# Top menu: full-width framed bar with a larger font (applies to every page)
+st.markdown("""
+    <style>
+        nav[data-testid="stTopNav"] {
+            background-color: #18181D;
+            border: 1px solid #3E3E4A;
+            border-radius: 12px;
+            flex: 1 1 auto;
+            justify-content: space-evenly;
+            padding: 0.35rem 0.75rem;
+            margin: 0.5rem 0.75rem 0.5rem 1rem;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+        }
+        nav[data-testid="stTopNav"] [data-testid="stTopNavLinkContainer"],
+        nav[data-testid="stTopNav"] [data-testid="stTopNavSection"] {
+            margin: 0 0.15rem;
+        }
+        nav[data-testid="stTopNav"] [data-testid="stTopNavLink"],
+        nav[data-testid="stTopNav"] [data-testid="stTopNavSection"],
+        nav[data-testid="stTopNav"] [data-testid="stTopNavLink"] p,
+        nav[data-testid="stTopNav"] [data-testid="stTopNavSection"] p,
+        nav[data-testid="stTopNav"] span {
+            font-size: 1.2rem !important;
+            font-weight: 600;
+        }
+    </style>
+""", unsafe_allow_html=True)
+render_release_plan_stepper(pg)
 pg.run()

@@ -35,8 +35,9 @@ class NavOrderTests(unittest.TestCase):
     def test_app_uses_menu_and_keeps_ai_agent_hidden(self):
         src = (ROOT / "app.py").read_text(encoding="utf-8")
         ast.parse(src)
-        self.assertRegex(src, r'"[^"]*Release Plan": release_plan_nav_pages')
-        self.assertIn('a[href$="AI_Agent"]', src)
+        self.assertRegex(src, r'"[^"]*Releases": \[release_notes_page, \*release_plan_nav_pages\]')
+        self.assertIn('position="top"', src)
+        self.assertRegex(src, r'ai_agent_page = st\.Page\("tools/6_AI_Agent\.py".*visibility="hidden"\)')
         self.assertIn("rr_overview_page", src)
         for f in ("1_Quarterly_Planner", "2_Sprint_Review", "3_Release_Notes", "4_Sprint_KPIs",
                   "5_AI_Issue_Creator", "6_AI_Agent"):
