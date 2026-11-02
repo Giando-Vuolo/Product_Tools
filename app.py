@@ -1,6 +1,7 @@
 import truststore
 truststore.inject_into_ssl()  # verify TLS with the OS trust store (corporate proxies such as Zscaler)
 import streamlit as st
+import html
 import os
 import requests
 from dotenv import load_dotenv
@@ -11,6 +12,7 @@ from utils.sbom_helpers import check_sbom_connection
 from utils.vanguard_helpers import check_vanguard_connection
 from utils.access import is_remote_request, check_access_password
 from utils.connection_checks import check_jira_connection, check_confluence_connection
+from utils.stepper import inject_stepper_css, active_step_html, step_label
 
 # Load environment variables
 load_dotenv(override=True)
@@ -241,11 +243,11 @@ if "jira_connection_status" not in st.session_state:
     check_quality_integrations(quality_integration_args(), skip_unconfigured=True)
 
 # 1. Define the page objects first so they are globally accessible
-planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner", icon="📅")
+planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planning", icon="📅")
 sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", icon="📋")
 release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
-ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="AI Issue Creator", icon="🤖")
+ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="Issue Creator", icon="🤖")
 # Reachable by URL only: hidden from the menu
 ai_agent_page = st.Page("tools/6_AI_Agent.py", title="AI Agent", icon="💬", visibility="hidden")
 from utils.navigation import RELEASE_PLAN_PAGES
@@ -275,46 +277,15 @@ def render_release_plan_stepper(current_page):
     )
     if current is None:
         return
-    st.markdown("""
-        <style>
-            .st-key-rp_stepper { margin-bottom: 1.25rem; }
-            .st-key-rp_stepper [data-testid="stColumn"] { position: relative; }
-            .rp-step {
-                display: flex; align-items: center; gap: 0.6rem;
-                padding: 0.55rem 0.9rem; border-radius: 10px;
-                border: 1px solid #3E3E4A; background: #18181D; color: #94A3B8;
-                font-weight: 600; min-height: 2.6rem;
-            }
-            .rp-step .rp-num {
-                display: inline-flex; align-items: center; justify-content: center;
-                width: 1.6rem; height: 1.6rem; border-radius: 50%;
-                border: 2px solid currentColor; font-size: 0.85rem; flex: none;
-            }
-            .rp-step.rp-active { border-color: #60A5FA; background: rgba(96, 165, 250, 0.12); color: #FFFFFF; }
-            .rp-step.rp-active .rp-num { background: #60A5FA; border-color: #60A5FA; color: #0F172A; }
-            .st-key-rp_stepper [data-testid="stColumn"]:not(:last-child)::after {
-                content: ""; position: absolute; top: 50%; right: -1rem; width: 1rem;
-                border-top: 2px solid #3E3E4A;
-            }
-            .st-key-rp_stepper [data-testid="stPageLink"] a {
-                border: 1px solid #3E3E4A; border-radius: 10px; background: #18181D;
-                padding: 0.55rem 0.9rem; min-height: 2.6rem; margin: 0;
-            }
-            .st-key-rp_stepper [data-testid="stPageLink"] a:hover { border-color: #60A5FA; }
-        </style>
-    """, unsafe_allow_html=True)
+    inject_stepper_css("rp_stepper")
     with st.container(key="rp_stepper"):
         for i, (col, n) in enumerate(zip(st.columns(len(RELEASE_PLAN_STEPS)), RELEASE_PLAN_STEPS)):
             label = _rp_step_labels[n]
             with col:
                 if i == current:
-                    st.markdown(
-                        f'<div class="rp-step rp-active"><span class="rp-num">{i + 1}</span>{label}</div>',
-                        unsafe_allow_html=True,
-                    )
+                    st.markdown(active_step_html(i + 1, label), unsafe_allow_html=True)
                 else:
-                    marker = "✅" if i < current else f"{i + 1}️⃣"
-                    st.page_link(_rp_pages[n], label=label, icon=marker, width="stretch")
+                    st.page_link(_rp_pages[n], label=step_label(i + 1, label, done=i < current), width="stretch")
 
 # Shared Premium Dark Mode styles for the Home Hub and Configuration pages
 def _inject_hub_styles():
@@ -865,20 +836,18 @@ def show_collaboration():
 
 
 # 3. Define the page listing for navigation
-home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
+home_page = st.Page(show_home, title="Home", icon="🏠", default=True)
 configuration_page = st.Page(show_configuration, title="Configuration", icon="⚙️", url_path="configuration")
-collaboration_page = st.Page(show_collaboration, title="Live Collaboration", icon="🤝", url_path="collaboration")
+collaboration_page = st.Page(show_collaboration, title="Collaboration", icon="🤝", url_path="collaboration")
 
-# 4. Setup and run navigation (top menu: each section is a dropdown)
+# 4. Setup and run navigation (top menu: direct links, then one dropdown per section)
 pg = st.navigation(
     {
-        "": [home_page],
+        # Single pages are direct links; Streamlit renders them before the dropdown sections,
+        # so the final order is set with CSS in the top menu styles below
+        "": [home_page, planner_page, ai_creator_page, ai_agent_page, collaboration_page, configuration_page],
         "🏃 Sprint": [sprint_review_page, sprint_kpis_page],
         "🚀 Releases": [release_notes_page, *release_plan_nav_pages],
-        "📅 Quarterly Planning": [planner_page],
-        "🤖 AI": [ai_creator_page, ai_agent_page],
-        "⚙️ Configuration": [configuration_page],
-        "🤝 Collaboration": [collaboration_page],
     },
     position="top",
 )
@@ -936,6 +905,17 @@ st.markdown("""
             margin: 0.5rem 0.75rem 0.5rem 1rem;
             box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
         }
+        /* Menu order: Home, Sprint, Releases, Quarterly Planning, Issue Creator, Collaboration, Configuration.
+           DOM order is the visible links (Home, Quarterly Planning, Issue Creator, Collaboration,
+           Configuration) followed by the Sprint and Releases dropdowns. */
+        nav[data-testid="stTopNav"] > :nth-child(1) { order: 1 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(2) { order: 4 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(3) { order: 5 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(4) { order: 6 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(5) { order: 7 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(6) { order: 2 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(7) { order: 3 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(n+8) { order: 8 !important; }
         nav[data-testid="stTopNav"] [data-testid="stTopNavLinkContainer"],
         nav[data-testid="stTopNav"] [data-testid="stTopNavSection"] {
             margin: 0 0.15rem;
@@ -950,5 +930,88 @@ st.markdown("""
         }
     </style>
 """, unsafe_allow_html=True)
+# Connections each tool needs: (label, session-state prefix of its check, is it configured?, (target name, value))
+def _ss(key):
+    return str(st.session_state.get(key) or "")
+
+
+def _quality_configured(key):
+    return lambda: all(a and str(a).strip() for a in quality_integration_args()[key])
+
+
+_JIRA = ("Jira", "jira", lambda: bool(_ss("jira_server")), lambda: ("Server", _ss("jira_server")))
+_CONFLUENCE = ("Confluence", "conf", lambda: bool(_ss("conf_server")), lambda: ("Server", _ss("conf_server")))
+_OLLAMA = ("Ollama", "ollama", lambda: bool(_ss("ollama_url")), lambda: ("Server", _ss("ollama_url")))
+_SONAR = ("SonarQube", "sonar", _quality_configured("sonar"),
+          lambda: ("Project", f"{_ss('sonar_component')} on {_ss('sonar_server')}"))
+_SBOM = ("SBOM", "sbom", _quality_configured("sbom"),
+         lambda: ("Application", f"{_ss('sbom_app_id')} on {_ss('sbom_server')}"))
+_VANGUARD = ("Vanguard", "vanguard", _quality_configured("vanguard"), lambda: ("Project", _ss("vanguard_project_id")))
+PAGE_CONNECTIONS = {
+    planner_page.url_path: [_JIRA],
+    sprint_review_page.url_path: [_JIRA, _CONFLUENCE],
+    sprint_kpis_page.url_path: [_JIRA, _CONFLUENCE, _SONAR, _SBOM, _VANGUARD],
+    release_notes_page.url_path: [_JIRA, _CONFLUENCE],
+    ai_creator_page.url_path: [_JIRA, _OLLAMA],
+    ai_agent_page.url_path: [_OLLAMA],
+    **{page.url_path: [_JIRA, _CONFLUENCE] for page in release_plan_nav_pages},
+}
+
+
+def _connection_state(prefix, configured):
+    """(dot, status title, explanation) for one connection, from the checks stored in session state."""
+    status = st.session_state.get(f"{prefix}_connection_status", "Not checked")
+    msg = str(st.session_state.get(f"{prefix}_connection_msg", "") or "").replace("`", "")
+    if not configured:
+        return "⚪", "Not configured", "Its settings are missing. Add them on the Configuration page."
+    if status == "Success":
+        return "🟢", "Connected", msg or "The last connection check succeeded."
+    if status == "Failed":
+        return "🔴", "Connection failed", (f"{msg}. " if msg else "") + \
+            "Check the settings on the Configuration page and run 'Check Integration Status' again."
+    return "🟡", "Not checked yet", \
+        "Configured but not tested yet. Run 'Check Integration Status' on the Configuration page."
+
+
+def render_connection_status(current_page):
+    """Small list of the connections the current tool needs, top right under the menu; hover for details."""
+    connections = PAGE_CONNECTIONS.get(current_page.url_path)
+    if not connections:
+        return
+    items = []
+    for label, prefix, is_configured, target in connections:
+        configured = is_configured()
+        dot, title, detail = _connection_state(prefix, configured)
+        target_name, target_value = target()
+        items.append(
+            f'<span class="po-conn" tabindex="0">{dot} {html.escape(label)}'
+            f'<span class="po-conn-tip" role="tooltip">'
+            f'<b>{dot} {html.escape(label)}: {html.escape(title)}</b>'
+            f'<span>{html.escape(detail)}</span>'
+            f'<span class="po-conn-server">{html.escape(target_name)}: '
+            f'{html.escape(target_value if configured else "not set")}</span>'
+            f'</span></span>'
+        )
+    st.markdown(f"""
+        <style>
+            .po-conn-bar {{ display: flex; justify-content: flex-end; gap: 0.9rem; margin: -5rem 0 3.5rem 0;
+                            font-size: 0.78rem; color: #94A3B8; position: relative; z-index: 1000; }}
+            .po-conn {{ position: relative; cursor: help; white-space: nowrap; outline: none; }}
+            .po-conn-tip {{
+                display: none; position: absolute; top: calc(100% + 6px); right: 0; width: 280px;
+                padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #60A5FA;
+                background: #18181D; color: #E2E8F0; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+                white-space: normal; font-size: 0.8rem; line-height: 1.35; text-align: left;
+            }}
+            .po-conn-tip b {{ display: block; margin-bottom: 0.25rem; color: #FFFFFF; }}
+            .po-conn-tip span {{ display: block; }}
+            .po-conn-tip .po-conn-server {{ margin-top: 0.35rem; color: #94A3B8; word-break: break-all; }}
+            .po-conn:hover .po-conn-tip, .po-conn:focus .po-conn-tip {{ display: block; }}
+        </style>
+        <div class="po-conn-bar">{"".join(items)}</div>
+    """, unsafe_allow_html=True)
+
+
+render_connection_status(pg)
 render_release_plan_stepper(pg)
 pg.run()

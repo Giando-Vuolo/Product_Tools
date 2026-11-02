@@ -44,6 +44,14 @@ def configured_quality_kpis():
             + ([VANGUARD_KPI] if vanguard_configured() else []))
 
 
+def without_jira_kpis(metrics):
+    """Copy of a metrics dict with the Jira KPIs blanked (sprint dates kept): used when Jira KPIs are switched off."""
+    blanked = dict(metrics)
+    blanked.update({key: "" for key in BASE_METRIC_KEYS if key != "dates"})
+    blanked["items"] = {name: "" for name in ITEM_KPIS}
+    return blanked
+
+
 def sprint_review_kpi_catalog():
     """Return the ordered list of Sprint Review KPI names available to the user."""
     catalog = list(ITEM_KPIS) + [
@@ -1105,7 +1113,7 @@ def find_confluence_page(base_url, headers, auth, space_key, page_title, attempt
 
 
 def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, page_title, sprint_val, sprint_name, metrics,
-                               replace_existing=False, upload_charts=True):
+                               replace_existing=False, upload_charts=True, quality_kpis=None):
     if not server_url or not token or not space_key or not page_title:
         raise Exception("Required configuration fields (URL, Token, Space Key, Page Title) cannot be empty.")
         
@@ -1126,7 +1134,9 @@ def publish_kpis_to_confluence(server_url, auth_type, token, email, space_key, p
     header_parser = TableParser()
     header_parser.feed(current_body)
     existing_headers = header_parser.rows[0] if header_parser.rows else []
-    added_columns = [name for name in ITEM_KPIS + configured_quality_kpis() if name not in existing_headers]
+    # quality_kpis: the quality columns this publish may add (default: every configured source)
+    new_quality = configured_quality_kpis() if quality_kpis is None else list(quality_kpis)
+    added_columns = [name for name in ITEM_KPIS + new_quality if name not in existing_headers]
     extra_columns = [h for h in existing_headers if h in APPENDABLE_KPIS] + added_columns
     quality_columns = [c for c in extra_columns if c in QUALITY_KPIS]
     item_values = metrics.get("items", {})

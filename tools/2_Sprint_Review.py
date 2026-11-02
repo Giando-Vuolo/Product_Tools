@@ -14,6 +14,7 @@ from utils.jira_helpers import (
 )
 from utils.sprint_review_jira import fetch_sprint_review_dataset, selected_issue_types, JiraFetchError
 from utils.kpi_helpers import default_sprint_review_kpis, SPRINT_REVIEW_KPI_OPTIONS, sprint_kpi_summary_df
+from utils.stepper import render_stepper
 import requests
 import os
 import base64
@@ -513,20 +514,6 @@ st.markdown("""
              font-weight: 500 !important;
          }
          
-         /* Sidebar dark theme label improvements */
-         section[data-testid="stSidebar"] {
-             background-color: #18181D !important;
-             border-right: 1px solid #3E3E4A !important;
-         }
-         section[data-testid="stSidebar"] h1,
-         section[data-testid="stSidebar"] h2,
-         section[data-testid="stSidebar"] h3,
-         section[data-testid="stSidebar"] h4,
-         section[data-testid="stSidebar"] label,
-         section[data-testid="stSidebar"] .stMarkdown {
-             color: #FFFFFF !important;
-         }
-         
          /* Rounded borders and shadows for dataframes and tables */
          div[data-testid="stDataFrame"] { 
              border-radius: 12px; 
@@ -878,31 +865,9 @@ def build_sprint_review_pdf(overview_df, outlook_df):
 st.title("📋 Sprint Review Report Generator")
 st.markdown("Automate and customize Sprint Review reports securely by connecting directly to **Jira** or importing local files.")
 
-# Programmatic Navigation Sidebar
-st.sidebar.markdown("### 🧭 Navigation Panel")
+# Step navigation: horizontal stepper (active_tab drives which step is rendered)
 options_en = ["🔌 Ingestion", "✍️ Workbook", "🎨 Branding", "💾 Exporter"]
-
-if 'active_tab' not in st.session_state or st.session_state.active_tab not in options_en:
-    st.session_state.active_tab = "🔌 Ingestion"
-
-# When active_tab is changed programmatically (e.g. after ingestion), we must
-# also update the radio widget's session-state key so it reflects the new tab.
-# Without this, the radio returns its old cached value and immediately resets
-# active_tab back to the previous selection on the next render.
-if st.session_state.get("_force_active_tab"):
-    st.session_state["_sidebar_nav"] = st.session_state.active_tab
-    del st.session_state["_force_active_tab"]
-
-selected_nav = st.sidebar.radio(
-    "Select current step:",
-    options=options_en,
-    key="_sidebar_nav",
-    index=options_en.index(st.session_state.active_tab)
-)
-
-if selected_nav != st.session_state.active_tab:
-    st.session_state.active_tab = selected_nav
-    st.rerun()
+render_stepper(options_en, "active_tab", key="sr_stepper")
 
 
 
@@ -924,25 +889,10 @@ if st.session_state.active_tab == "🔌 Ingestion":
             st.warning(fb.get("text"))
         del st.session_state.ingestion_feedback
     
-    # Credentials block
-
-    jira_status = st.session_state.get("jira_connection_status")
-    jira_msg = st.session_state.get("jira_connection_msg", "Not checked yet")
-    if not st.session_state.jira_server:
-        st.warning("⚠️ **Jira Connection**: Not configured. Go to **Home Hub** -> **Centralized Integrations** tab.")
-    elif jira_status == "Success":
-        st.success(f"🟢 **Jira Connected**: `{st.session_state.jira_server}` ({jira_msg})")
-    elif jira_status == "Failed":
-        st.error(f"🔴 **Jira Connection Failed**: `{st.session_state.jira_server}` ({jira_msg}). Fix it on the **Home Hub**.")
-    else:
-        st.info(f"🟡 **Jira Configured**: `{st.session_state.jira_server}` (Status: {jira_msg}). Go to **Home Hub** to test connection.")
-    st.caption("Credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
-
     st.divider()
 
     # Issue Type Selection Checkboxes
-    st.markdown("**2. Filter Ingested Issue Types**")
-    st.write("Select which issue types should be loaded into the workspace:")
+    st.markdown("**2. Filter Ingested Issue Types**", help="Select which issue types should be loaded into the workspace.")
     col_cb1, col_cb2, col_cb3, col_cb4, col_cb5, col_cb6, col_cb7 = st.columns(7)
     with col_cb1:
         inc_all = st.checkbox("All / Everything", value=False, key="inc_all")
@@ -2433,18 +2383,9 @@ elif st.session_state.active_tab == "💾 Exporter":
             </div>
             """, unsafe_allow_html=True)
             
-            conf_status = st.session_state.get("conf_connection_status")
-            conf_msg = st.session_state.get("conf_connection_msg", "Not checked yet")
             if not st.session_state.conf_server:
-                st.warning("⚠️ **Confluence Connection**: Not configured. Go to **Home Hub** -> **Centralized Integrations** tab.")
-            elif conf_status == "Success":
-                st.success(f"🟢 **Confluence Connected**: `{st.session_state.conf_server}` ({conf_msg})")
-            elif conf_status == "Failed":
-                st.error(f"🔴 **Confluence Connection Failed**: `{st.session_state.conf_server}` ({conf_msg}). Fix it on the **Home Hub**.")
-            else:
-                st.info(f"🟡 **Confluence Configured**: `{st.session_state.conf_server}` (Status: {conf_msg}). Go to **Home Hub** to test connection.")
-            st.caption("Credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
-                
+                st.warning("⚠️ **Confluence** is not configured. Set it up on the **Configuration** page.")
+
             col_space, col_page = st.columns([1, 2])
             with col_space:
                 conf_space_input = st.text_input(

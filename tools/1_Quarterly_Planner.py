@@ -9,6 +9,7 @@ import html
 import base64
 from dotenv import load_dotenv
 from utils.jira_helpers import build_quarterly_epic_progress_table
+from utils.stepper import render_stepper
 
 # Shared file paths for live collaboration
 SHARED_DIR = "data"
@@ -464,9 +465,7 @@ def sync_main_editor_changes():
 
 st.title("📅 Quarterly Planner")
 
-# Load credentials and status
-jira_status = st.session_state.get("jira_connection_status")
-jira_msg = st.session_state.get("jira_connection_msg", "Not checked yet")
+# Load credentials
 jira_server = st.session_state.get("jira_server", "")
 
 # ---------------------------------------------------------
@@ -555,22 +554,10 @@ def load_and_normalize_data(file_or_path):
     return df_raw
 
 # ---------------------------------------------------------
-# Sidebar Navigation Steps
+# Step Navigation (stepper)
 # ---------------------------------------------------------
 options_qp = ["🔌 Ingestion", "✍️ Workbook", "💾 Exporter"]
-
-if 'active_tab_qp' not in st.session_state or st.session_state.active_tab_qp not in options_qp:
-    st.session_state.active_tab_qp = "🔌 Ingestion"
-
-selected_nav = st.sidebar.radio(
-    "Select current step:",
-    options=options_qp,
-    index=options_qp.index(st.session_state.active_tab_qp)
-)
-
-if selected_nav != st.session_state.active_tab_qp:
-    st.session_state.active_tab_qp = selected_nav
-    st.rerun()
+render_stepper(options_qp, "active_tab_qp", key="qp_stepper")
 
 # Auto-load shared backlog on startup if not already loaded
 if 'main_df' not in st.session_state:
@@ -599,16 +586,6 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
             st.warning(fb.get("text"))
         del st.session_state.ingestion_feedback
     
-    # Connection status display
-    if not jira_server:
-        st.warning("⚠️ **Jira Connection**: Not configured. Set credentials in **Home Hub** -> **Centralized Integrations** tab.")
-    elif jira_status == "Success":
-        st.success(f"🟢 **Jira Connected**: `{jira_server}` ({jira_msg})")
-    elif jira_status == "Failed":
-        st.error(f"🔴 **Jira Connection Failed**: `{jira_server}` ({jira_msg}). Fix it on the **Home Hub**.")
-    else:
-        st.info(f"🟡 **Jira Configured**: `{jira_server}` (Status: {jira_msg}). Go to **Home Hub** to test connection.")
-        
     st.divider()
     
     uploaded_file = st.file_uploader("Upload your data (CSV)", type=['csv'])
@@ -671,7 +648,7 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
 
         if st.button("📈 Load Quarterly Epic Progress", use_container_width=True):
             if not st.session_state.get("jira_server") or not st.session_state.get("jira_token"):
-                st.error("Configure and test the Jira connection first in Home Hub.")
+                st.error("Configure and test the Jira connection first on the Configuration page.")
             elif not progress_committed_label.strip() or not progress_quarter_label.strip():
                 st.error("Enter both the committed Epic label and the quarter label.")
             else:
