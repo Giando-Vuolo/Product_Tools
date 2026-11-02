@@ -930,10 +930,10 @@ st.markdown("""
         }
     </style>
 """, unsafe_allow_html=True)
-# Connections each tool needs: (label, session-state prefix, session key holding its server; None = always configured)
+# Connections each tool needs: (label, session-state prefix, session key holding its server)
 _JIRA = ("Jira", "jira", "jira_server")
 _CONFLUENCE = ("Confluence", "conf", "conf_server")
-_OLLAMA = ("Ollama", "ollama", None)
+_OLLAMA = ("Ollama", "ollama", "ollama_url")
 PAGE_CONNECTIONS = {
     planner_page.url_path: [_JIRA],
     sprint_review_page.url_path: [_JIRA, _CONFLUENCE],
@@ -945,30 +945,53 @@ PAGE_CONNECTIONS = {
 }
 
 
+def _connection_state(prefix, server_key):
+    """(dot, status title, explanation) for one connection, from the checks stored in session state."""
+    status = st.session_state.get(f"{prefix}_connection_status", "Not checked")
+    msg = str(st.session_state.get(f"{prefix}_connection_msg", "") or "").replace("`", "")
+    if not st.session_state.get(server_key):
+        return "⚪", "Not configured", "No server is set. Add the server and token on the Configuration page."
+    if status == "Success":
+        return "🟢", "Connected", msg or "The last connection check succeeded."
+    if status == "Failed":
+        return "🔴", "Connection failed", (f"{msg}. " if msg else "") + \
+            "Check the settings on the Configuration page and run 'Check Integration Status' again."
+    return "🟡", "Not checked yet", \
+        "Configured but not tested yet. Run 'Check Integration Status' on the Configuration page."
+
+
 def render_connection_status(current_page):
-    """Small list of the connections the current tool needs, top right under the menu."""
+    """Small list of the connections the current tool needs, top right under the menu; hover for details."""
     connections = PAGE_CONNECTIONS.get(current_page.url_path)
     if not connections:
         return
     items = []
     for label, prefix, server_key in connections:
-        status = st.session_state.get(f"{prefix}_connection_status", "Not checked")
-        msg = st.session_state.get(f"{prefix}_connection_msg", "")
-        if server_key and not st.session_state.get(server_key):
-            dot, detail = "⚪", "Not configured"
-        elif status == "Success":
-            dot, detail = "🟢", msg or "Connected"
-        elif status == "Failed":
-            dot, detail = "🔴", msg or "Connection failed"
-        else:
-            dot, detail = "🟡", "Not checked yet"
-        tooltip = html.escape(f"{label}: {detail}. Manage it on the Configuration page.", quote=True)
-        items.append(f'<span class="po-conn" title="{tooltip}">{dot} {label}</span>')
+        dot, title, detail = _connection_state(prefix, server_key)
+        server = st.session_state.get(server_key) or "not set"
+        items.append(
+            f'<span class="po-conn" tabindex="0">{dot} {html.escape(label)}'
+            f'<span class="po-conn-tip" role="tooltip">'
+            f'<b>{dot} {html.escape(label)}: {html.escape(title)}</b>'
+            f'<span>{html.escape(detail)}</span>'
+            f'<span class="po-conn-server">Server: {html.escape(str(server))}</span>'
+            f'</span></span>'
+        )
     st.markdown(f"""
         <style>
             .po-conn-bar {{ display: flex; justify-content: flex-end; gap: 0.9rem; margin: -5rem 0 3.5rem 0;
-                            font-size: 0.78rem; color: #94A3B8; }}
-            .po-conn {{ cursor: help; white-space: nowrap; }}
+                            font-size: 0.78rem; color: #94A3B8; position: relative; z-index: 1000; }}
+            .po-conn {{ position: relative; cursor: help; white-space: nowrap; outline: none; }}
+            .po-conn-tip {{
+                display: none; position: absolute; top: calc(100% + 6px); right: 0; width: 280px;
+                padding: 0.6rem 0.75rem; border-radius: 8px; border: 1px solid #60A5FA;
+                background: #18181D; color: #E2E8F0; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+                white-space: normal; font-size: 0.8rem; line-height: 1.35; text-align: left;
+            }}
+            .po-conn-tip b {{ display: block; margin-bottom: 0.25rem; color: #FFFFFF; }}
+            .po-conn-tip span {{ display: block; }}
+            .po-conn-tip .po-conn-server {{ margin-top: 0.35rem; color: #94A3B8; word-break: break-all; }}
+            .po-conn:hover .po-conn-tip, .po-conn:focus .po-conn-tip {{ display: block; }}
         </style>
         <div class="po-conn-bar">{"".join(items)}</div>
     """, unsafe_allow_html=True)
