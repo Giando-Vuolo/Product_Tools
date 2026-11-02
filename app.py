@@ -241,7 +241,7 @@ if "jira_connection_status" not in st.session_state:
     check_quality_integrations(quality_integration_args(), skip_unconfigured=True)
 
 # 1. Define the page objects first so they are globally accessible
-planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner", icon="📅")
+planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planning", icon="📅")
 sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", icon="📋")
 release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
@@ -867,18 +867,15 @@ def show_collaboration():
 # 3. Define the page listing for navigation
 home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
 configuration_page = st.Page(show_configuration, title="Configuration", icon="⚙️", url_path="configuration")
-collaboration_page = st.Page(show_collaboration, title="Live Collaboration", icon="🤝", url_path="collaboration")
+collaboration_page = st.Page(show_collaboration, title="Collaboration", icon="🤝", url_path="collaboration")
 
-# 4. Setup and run navigation (top menu: each section is a dropdown)
+# 4. Setup and run navigation (top menu: direct links, then one dropdown per section)
 pg = st.navigation(
     {
-        "": [home_page],
+        # Single pages are direct links; Streamlit only renders those before the dropdown sections
+        "": [home_page, planner_page, ai_creator_page, ai_agent_page, configuration_page, collaboration_page],
         "🏃 Sprint": [sprint_review_page, sprint_kpis_page],
         "🚀 Releases": [release_notes_page, *release_plan_nav_pages],
-        "📅 Quarterly Planning": [planner_page],
-        "🤖 AI": [ai_creator_page, ai_agent_page],
-        "⚙️ Configuration": [configuration_page],
-        "🤝 Collaboration": [collaboration_page],
     },
     position="top",
 )
