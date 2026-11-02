@@ -245,7 +245,7 @@ planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planning
 sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", icon="📋")
 release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
-ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="Issue Creator AI", icon="🤖")
+ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="Issue Creator", icon="🤖")
 # Reachable by URL only: hidden from the menu
 ai_agent_page = st.Page("tools/6_AI_Agent.py", title="AI Agent", icon="💬", visibility="hidden")
 from utils.navigation import RELEASE_PLAN_PAGES
@@ -865,15 +865,16 @@ def show_collaboration():
 
 
 # 3. Define the page listing for navigation
-home_page = st.Page(show_home, title="Home Hub", icon="🏠", default=True)
+home_page = st.Page(show_home, title="Home", icon="🏠", default=True)
 configuration_page = st.Page(show_configuration, title="Configuration", icon="⚙️", url_path="configuration")
 collaboration_page = st.Page(show_collaboration, title="Collaboration", icon="🤝", url_path="collaboration")
 
 # 4. Setup and run navigation (top menu: direct links, then one dropdown per section)
 pg = st.navigation(
     {
-        # Single pages are direct links; Streamlit only renders those before the dropdown sections
-        "": [home_page, planner_page, ai_creator_page, ai_agent_page, configuration_page, collaboration_page],
+        # Single pages are direct links; Streamlit renders them before the dropdown sections,
+        # so the final order is set with CSS in the top menu styles below
+        "": [home_page, planner_page, ai_creator_page, ai_agent_page, collaboration_page, configuration_page],
         "🏃 Sprint": [sprint_review_page, sprint_kpis_page],
         "🚀 Releases": [release_notes_page, *release_plan_nav_pages],
     },
@@ -933,6 +934,17 @@ st.markdown("""
             margin: 0.5rem 0.75rem 0.5rem 1rem;
             box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
         }
+        /* Menu order: Home, Sprint, Releases, Quarterly Planning, Issue Creator, Collaboration, Configuration.
+           DOM order is the visible links (Home, Quarterly Planning, Issue Creator, Collaboration,
+           Configuration) followed by the Sprint and Releases dropdowns. */
+        nav[data-testid="stTopNav"] > :nth-child(1) { order: 1 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(2) { order: 4 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(3) { order: 5 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(4) { order: 6 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(5) { order: 7 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(6) { order: 2 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(7) { order: 3 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(n+8) { order: 8 !important; }
         nav[data-testid="stTopNav"] [data-testid="stTopNavLinkContainer"],
         nav[data-testid="stTopNav"] [data-testid="stTopNavSection"] {
             margin: 0 0.15rem;
