@@ -930,14 +930,27 @@ st.markdown("""
         }
     </style>
 """, unsafe_allow_html=True)
-# Connections each tool needs: (label, session-state prefix, session key holding its server)
-_JIRA = ("Jira", "jira", "jira_server")
-_CONFLUENCE = ("Confluence", "conf", "conf_server")
-_OLLAMA = ("Ollama", "ollama", "ollama_url")
+# Connections each tool needs: (label, session-state prefix of its check, is it configured?, (target name, value))
+def _ss(key):
+    return str(st.session_state.get(key) or "")
+
+
+def _quality_configured(key):
+    return lambda: all(a and str(a).strip() for a in quality_integration_args()[key])
+
+
+_JIRA = ("Jira", "jira", lambda: bool(_ss("jira_server")), lambda: ("Server", _ss("jira_server")))
+_CONFLUENCE = ("Confluence", "conf", lambda: bool(_ss("conf_server")), lambda: ("Server", _ss("conf_server")))
+_OLLAMA = ("Ollama", "ollama", lambda: bool(_ss("ollama_url")), lambda: ("Server", _ss("ollama_url")))
+_SONAR = ("SonarQube", "sonar", _quality_configured("sonar"),
+          lambda: ("Project", f"{_ss('sonar_component')} on {_ss('sonar_server')}"))
+_SBOM = ("SBOM", "sbom", _quality_configured("sbom"),
+         lambda: ("Application", f"{_ss('sbom_app_id')} on {_ss('sbom_server')}"))
+_VANGUARD = ("Vanguard", "vanguard", _quality_configured("vanguard"), lambda: ("Project", _ss("vanguard_project_id")))
 PAGE_CONNECTIONS = {
     planner_page.url_path: [_JIRA],
     sprint_review_page.url_path: [_JIRA, _CONFLUENCE],
-    sprint_kpis_page.url_path: [_JIRA, _CONFLUENCE],
+    sprint_kpis_page.url_path: [_JIRA, _CONFLUENCE, _SONAR, _SBOM, _VANGUARD],
     release_notes_page.url_path: [_JIRA, _CONFLUENCE],
     ai_creator_page.url_path: [_JIRA, _OLLAMA],
     ai_agent_page.url_path: [_OLLAMA],
@@ -945,12 +958,12 @@ PAGE_CONNECTIONS = {
 }
 
 
-def _connection_state(prefix, server_key):
+def _connection_state(prefix, configured):
     """(dot, status title, explanation) for one connection, from the checks stored in session state."""
     status = st.session_state.get(f"{prefix}_connection_status", "Not checked")
     msg = str(st.session_state.get(f"{prefix}_connection_msg", "") or "").replace("`", "")
-    if not st.session_state.get(server_key):
-        return "⚪", "Not configured", "No server is set. Add the server and token on the Configuration page."
+    if not configured:
+        return "⚪", "Not configured", "Its settings are missing. Add them on the Configuration page."
     if status == "Success":
         return "🟢", "Connected", msg or "The last connection check succeeded."
     if status == "Failed":
@@ -966,15 +979,17 @@ def render_connection_status(current_page):
     if not connections:
         return
     items = []
-    for label, prefix, server_key in connections:
-        dot, title, detail = _connection_state(prefix, server_key)
-        server = st.session_state.get(server_key) or "not set"
+    for label, prefix, is_configured, target in connections:
+        configured = is_configured()
+        dot, title, detail = _connection_state(prefix, configured)
+        target_name, target_value = target()
         items.append(
             f'<span class="po-conn" tabindex="0">{dot} {html.escape(label)}'
             f'<span class="po-conn-tip" role="tooltip">'
             f'<b>{dot} {html.escape(label)}: {html.escape(title)}</b>'
             f'<span>{html.escape(detail)}</span>'
-            f'<span class="po-conn-server">Server: {html.escape(str(server))}</span>'
+            f'<span class="po-conn-server">{html.escape(target_name)}: '
+            f'{html.escape(target_value if configured else "not set")}</span>'
             f'</span></span>'
         )
     st.markdown(f"""
