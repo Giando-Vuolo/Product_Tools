@@ -892,8 +892,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
     st.divider()
 
     # Issue Type Selection Checkboxes
-    st.markdown("**2. Filter Ingested Issue Types**")
-    st.write("Select which issue types should be loaded into the workspace:")
+    st.markdown("**2. Filter Ingested Issue Types**", help="Select which issue types should be loaded into the workspace.")
     col_cb1, col_cb2, col_cb3, col_cb4, col_cb5, col_cb6, col_cb7 = st.columns(7)
     with col_cb1:
         inc_all = st.checkbox("All / Everything", value=False, key="inc_all")

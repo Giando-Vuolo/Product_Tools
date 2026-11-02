@@ -655,8 +655,7 @@ with col_s:
     default_sprint_num = os.getenv("OVERVIEW_SPRINT_NUM", "")
     sprint_val = st.text_input("Enter Sprint Name or ID:", value=default_sprint_num, placeholder="e.g. 142 or 'Sprint 15'", key="kpi_sprint_query")
 
-st.markdown("**Filter Ingested Issue Types**")
-st.write("Select which issue types should be loaded into the workspace:")
+st.markdown("**Filter Ingested Issue Types**", help="Select which issue types should be loaded into the workspace.")
 col_cb1, col_cb2, col_cb3, col_cb4, col_cb5, col_cb6, col_cb7 = st.columns(7)
 with col_cb1:
     inc_all = st.checkbox("All / Everything", value=False, key="kpi_inc_all")
