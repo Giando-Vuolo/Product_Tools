@@ -9,6 +9,7 @@ import html
 import base64
 from dotenv import load_dotenv
 from utils.jira_helpers import build_quarterly_epic_progress_table
+from utils.stepper import render_stepper
 
 # Shared file paths for live collaboration
 SHARED_DIR = "data"
@@ -555,22 +556,10 @@ def load_and_normalize_data(file_or_path):
     return df_raw
 
 # ---------------------------------------------------------
-# Sidebar Navigation Steps
+# Step Navigation (stepper)
 # ---------------------------------------------------------
 options_qp = ["🔌 Ingestion", "✍️ Workbook", "💾 Exporter"]
-
-if 'active_tab_qp' not in st.session_state or st.session_state.active_tab_qp not in options_qp:
-    st.session_state.active_tab_qp = "🔌 Ingestion"
-
-selected_nav = st.sidebar.radio(
-    "Select current step:",
-    options=options_qp,
-    index=options_qp.index(st.session_state.active_tab_qp)
-)
-
-if selected_nav != st.session_state.active_tab_qp:
-    st.session_state.active_tab_qp = selected_nav
-    st.rerun()
+render_stepper(options_qp, "active_tab_qp", key="qp_stepper")
 
 # Auto-load shared backlog on startup if not already loaded
 if 'main_df' not in st.session_state:
