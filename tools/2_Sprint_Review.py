@@ -513,20 +513,6 @@ st.markdown("""
              font-weight: 500 !important;
          }
          
-         /* Sidebar dark theme label improvements */
-         section[data-testid="stSidebar"] {
-             background-color: #18181D !important;
-             border-right: 1px solid #3E3E4A !important;
-         }
-         section[data-testid="stSidebar"] h1,
-         section[data-testid="stSidebar"] h2,
-         section[data-testid="stSidebar"] h3,
-         section[data-testid="stSidebar"] h4,
-         section[data-testid="stSidebar"] label,
-         section[data-testid="stSidebar"] .stMarkdown {
-             color: #FFFFFF !important;
-         }
-         
          /* Rounded borders and shadows for dataframes and tables */
          div[data-testid="stDataFrame"] { 
              border-radius: 12px; 
@@ -878,31 +864,57 @@ def build_sprint_review_pdf(overview_df, outlook_df):
 st.title("📋 Sprint Review Report Generator")
 st.markdown("Automate and customize Sprint Review reports securely by connecting directly to **Jira** or importing local files.")
 
-# Programmatic Navigation Sidebar
-st.sidebar.markdown("### 🧭 Navigation Panel")
+# Step navigation: horizontal stepper (active_tab drives which step is rendered)
 options_en = ["🔌 Ingestion", "✍️ Workbook", "🎨 Branding", "💾 Exporter"]
 
 if 'active_tab' not in st.session_state or st.session_state.active_tab not in options_en:
     st.session_state.active_tab = "🔌 Ingestion"
 
-# When active_tab is changed programmatically (e.g. after ingestion), we must
-# also update the radio widget's session-state key so it reflects the new tab.
-# Without this, the radio returns its old cached value and immediately resets
-# active_tab back to the previous selection on the next render.
-if st.session_state.get("_force_active_tab"):
-    st.session_state["_sidebar_nav"] = st.session_state.active_tab
-    del st.session_state["_force_active_tab"]
 
-selected_nav = st.sidebar.radio(
-    "Select current step:",
-    options=options_en,
-    key="_sidebar_nav",
-    index=options_en.index(st.session_state.active_tab)
-)
+def _go_to_step(step):
+    st.session_state.active_tab = step
 
-if selected_nav != st.session_state.active_tab:
-    st.session_state.active_tab = selected_nav
-    st.rerun()
+
+st.markdown("""
+    <style>
+        .st-key-sr_stepper { margin: 0.5rem 0 1.25rem 0; }
+        .st-key-sr_stepper [data-testid="stColumn"] { position: relative; }
+        .st-key-sr_stepper [data-testid="stColumn"]:not(:last-child)::after {
+            content: ""; position: absolute; top: 50%; right: -1rem; width: 1rem;
+            border-top: 2px solid #3E3E4A;
+        }
+        .sr-step {
+            display: flex; align-items: center; gap: 0.6rem;
+            padding: 0.55rem 0.9rem; border-radius: 10px; min-height: 2.6rem;
+            border: 1px solid #60A5FA; background: rgba(96, 165, 250, 0.12);
+            color: #FFFFFF; font-weight: 600;
+        }
+        .sr-step .sr-num {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 1.6rem; height: 1.6rem; border-radius: 50%; flex: none;
+            background: #60A5FA; color: #0F172A; font-size: 0.85rem;
+        }
+        .st-key-sr_stepper button {
+            justify-content: flex-start !important; min-height: 2.6rem;
+            border: 1px solid #3E3E4A !important; border-radius: 10px !important;
+            background: #18181D !important; color: #94A3B8 !important; font-weight: 600 !important;
+        }
+        .st-key-sr_stepper button:hover { border-color: #60A5FA !important; color: #FFFFFF !important; }
+    </style>
+""", unsafe_allow_html=True)
+
+current_step = options_en.index(st.session_state.active_tab)
+with st.container(key="sr_stepper"):
+    for i, (col, step) in enumerate(zip(st.columns(len(options_en)), options_en)):
+        icon, name = step.split(" ", 1)
+        with col:
+            if i == current_step:
+                st.markdown(f'<div class="sr-step"><span class="sr-num">{i + 1}</span>{icon} {name}</div>',
+                            unsafe_allow_html=True)
+            else:
+                marker = "✅" if i < current_step else f"{i + 1}."
+                st.button(f"{marker} {icon} {name}", key=f"sr_step_{i}", on_click=_go_to_step, args=(step,),
+                          use_container_width=True)
 
 
 
