@@ -1494,14 +1494,6 @@ if st.session_state.active_tab == "🔌 Ingestion":
 # ---------------------------------------------------------
 elif st.session_state.active_tab == "✍️ Workbook":
     st.subheader("✍️ Workspace Workbooks: Commercial Fine-Tuning")
-    st.markdown(
-        f"<div style='background-color:#1E3A8A; padding:8px 12px; border-radius:8px; border:1px solid #3B82F6; margin-bottom:12px; font-size:14px; color:#F8FAFC; display:flex; align-items:center; gap:8px;'>"
-        f"<span style='color:#10B981; font-weight:bold;'>🟢 Connected to Shared Workbook</span> "
-        f"<span style='color:#94A3B8;'>|</span> "
-        f"<span style='color:#E2E8F0;'>Simultaneous collaboration enabled (auto-refresh active)</span>"
-        f"</div>",
-        unsafe_allow_html=True
-    )
     st.write("Convert technical Jira summaries into elegant commercial feature descriptions, assign demo presenters, and toggle report targets.")
     
 
