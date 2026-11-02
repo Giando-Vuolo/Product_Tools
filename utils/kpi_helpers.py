@@ -636,6 +636,9 @@ def fetch_sprint_kpi_data(server, token, auth_type, email, sprint_query, selecte
         # The loop above runs before the sprint is known, so it cannot check this itself.
         if sprint_name:
             df["Resolved"] = df["Sprint Resolved"] == sprint_name
+            # Cycle time belongs to the sprint that delivered the issue: carried-over issues resolved
+            # in another sprint must not count in this sprint's average.
+            df.loc[~df["Resolved"], ["Resolved At", "Cycle Time (Days)"]] = None
 
         gh_committed, gh_achieved, gh_added_keys, scope_counts, scope_error = None, None, [], None, "no sprint found on the issues"
         if most_common_id:
