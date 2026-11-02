@@ -640,9 +640,9 @@ if not st.session_state.get("jira_server") or not st.session_state.get("jira_tok
     st.warning("⚠️ Please configure your Jira credentials on the Configuration page first.")
     st.stop()
 
-st.markdown("**KPI Sources**")
-st.caption("Choose which KPIs are calculated, shown and published. Jira is always used to find the sprint and its dates; "
-           "switching it off only hides its KPIs. Sources that are not configured stay off.")
+st.markdown("**KPI Sources**",
+            help="Choose which KPIs are calculated, shown and published. Jira is always used to find the sprint and its "
+                 "dates; switching it off only hides its KPIs. Sources that are not configured stay off.")
 for col, (src_key, src_label, is_configured) in zip(st.columns(len(KPI_SOURCES)), KPI_SOURCES):
     configured = is_configured()
     col.toggle(src_label, value=configured, key=f"kpi_src_{src_key}", disabled=not configured,
