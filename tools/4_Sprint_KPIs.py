@@ -16,12 +16,34 @@ from utils.kpi_helpers import (
     format_sprint_label,
     QUALITY_KPIS, configured_quality_kpis, build_code_quality_chart,
     ITEM_KPIS, ITEMS_COMMITTED_KPI, ITEMS_ADDED_KPI, ITEMS_DELIVERED_KPI, build_items_chart,
-    compute_sprint_metrics, metrics_to_table_row
+    compute_sprint_metrics, metrics_to_table_row, without_jira_kpis
 )
 
 from utils.sonar_helpers import SONAR_KPIS, sonar_configured, fetch_sonar_kpis, format_kpi_value
 from utils.sbom_helpers import SBOM_KPI, sbom_configured, fetch_dependency_findings
 from utils.vanguard_helpers import VANGUARD_KPI, vanguard_configured, fetch_platform_findings
+
+# KPI sources the user can switch on/off: (key, label, configured?). Jira is always used to find the sprint and its
+# dates; its toggle only controls whether its KPIs are shown and published.
+KPI_SOURCES = [
+    ("jira", "Jira", lambda: True),
+    ("sonar", "SonarQube", sonar_configured),
+    ("sbom", "SBOM Inventory", sbom_configured),
+    ("vanguard", "Vanguard", vanguard_configured),
+]
+
+
+def source_enabled(key):
+    """Whether a KPI source is configured and switched on in the KPI Sources toggles."""
+    configured = next(is_configured for k, _, is_configured in KPI_SOURCES if k == key)
+    return bool(st.session_state.get(f"kpi_src_{key}", True)) and configured()
+
+
+def selected_quality_kpis():
+    """Quality KPI names of the enabled sources, in table order."""
+    return ((list(SONAR_KPIS.values()) if source_enabled("sonar") else [])
+            + ([SBOM_KPI] if source_enabled("sbom") else [])
+            + ([VANGUARD_KPI] if source_enabled("vanguard") else []))
 
 
 def fetch_sprint_kpi_dataset():
@@ -43,18 +65,18 @@ def fetch_sprint_kpi_dataset():
         return
         
     quality_kpis = {}
-    if sonar_configured():
+    if source_enabled("sonar"):
         try:
             quality_kpis = fetch_sonar_kpis(res.get("sprint_end"))
         except Exception as e:
             st.session_state.kpi_error += f"\nWarning: SonarQube: {str(e)}"
-    if sbom_configured():
+    if source_enabled("sbom"):
         try:
             quality_kpis[SBOM_KPI] = fetch_dependency_findings()
         except Exception as e:
             st.session_state.kpi_error += f"\nWarning: SBOM Inventory: {str(e)}"
     st.session_state.kpi_vanguard_fetched_at = None
-    if vanguard_configured():
+    if source_enabled("vanguard"):
         try:
             quality_kpis[VANGUARD_KPI] = fetch_platform_findings()
             st.session_state.kpi_vanguard_fetched_at = datetime.now(timezone.utc)
@@ -393,7 +415,11 @@ def render_dashboard():
     # Store calculated metrics in session state so charts can include the current un-published sprint
     date_str = f"{s_start.strftime('%Y-%m-%d')} to {s_end.strftime('%Y-%m-%d')}" if (s_start and s_end) else "Unknown"
     quality_kpis = st.session_state.get("kpi_quality") or {}
-    st.session_state.current_sprint_metrics = {
+    jira_on = source_enabled("jira")
+    quality_names = selected_quality_kpis()
+    quality_values = {name: format_kpi_value(name, quality_kpis.get(name)) if name in quality_names else ""
+                      for name in QUALITY_KPIS}
+    current_metrics = {
         "sprint_name": st.session_state.get("kpi_sprint_name") or st.session_state.get("kpi_sprint_query"),
         "dates": date_str,
         "total_sp": total_sp,
@@ -405,9 +431,26 @@ def render_dashboard():
         "resolved_bugs": resolved_bugs,
         "cycle_time": avg_cycle_time,
         "items": items_metrics,
-        "quality": {name: format_kpi_value(name, quality_kpis.get(name)) for name in QUALITY_KPIS}
+        "quality": quality_values,
     }
-    
+    st.session_state.current_sprint_metrics = current_metrics if jira_on else without_jira_kpis(current_metrics)
+
+    if jira_on:
+        render_jira_kpis(df, total_sp, achieved_sp, sprint_pct, releases_count, resolved_bugs, avg_cycle_time,
+                         open_bugs, open_critical_bugs, scope_counts, items_metrics)
+    else:
+        st.info("Jira KPIs are switched off in **KPI Sources**: they are not shown and are left empty when publishing.")
+
+    render_quality_kpis(quality_names, quality_kpis)
+    st.divider()
+    render_confluence_publisher(date_str, total_sp, achieved_sp, sprint_pct, releases_count, open_bugs,
+                                open_critical_bugs, resolved_bugs, avg_cycle_time, items_metrics, quality_values,
+                                jira_on, quality_names)
+
+
+def render_jira_kpis(df, total_sp, achieved_sp, sprint_pct, releases_count, resolved_bugs, avg_cycle_time,
+                     open_bugs, open_critical_bugs, scope_counts, items_metrics):
+    """Story points, bugs, cycle time, item counts and the issue details table."""
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Committed SP (at Start)", f"{total_sp:g}", help="Sums the Story Points of the tickets with Scope = 'Sprint scope' (in the sprint when it started). Tickets added after the sprint started (Additional scope) are excluded.")
@@ -432,24 +475,6 @@ def render_dashboard():
     if scope_counts:
         total_items = scope_counts[ITEMS_COMMITTED_KPI] + scope_counts[ITEMS_ADDED_KPI]
         ic4.metric("Items Delivery %", f"{(scope_counts[ITEMS_DELIVERED_KPI] / total_items * 100) if total_items else 0:.1f}%", help="Delivered / (Committed + Added) * 100.")
-
-    quality_names = configured_quality_kpis()
-    if quality_names:
-        sources = []
-        if sonar_configured():
-            sources.append(f"SonarQube ({os.getenv('SONAR_COMPONENT')}) at sprint end")
-        if sbom_configured():
-            sources.append(f"{SBOM_KPI}: SBOM Inventory today, dev + prod")
-        if vanguard_configured():
-            captured_at = st.session_state.get("kpi_vanguard_fetched_at")
-            if captured_at:
-                sources.append(f"Vanguard: open findings, excluding previews, captured {captured_at:%Y-%m-%d %H:%M UTC}")
-            else:
-                sources.append("Vanguard: current findings not available; calculate KPIs to retry")
-        st.caption("Code Quality from " + " · ".join(sources))
-        for start in range(0, len(quality_names), 4):
-            for col, name in zip(st.columns(4), quality_names[start:start + 4]):
-                col.metric(name, format_kpi_value(name, quality_kpis.get(name)) or "N/A")
 
     st.divider()
     
@@ -486,9 +511,33 @@ def render_dashboard():
             )
         }
     )
-    
-    st.divider()
-    
+
+
+def render_quality_kpis(quality_names, quality_kpis):
+    """Code quality KPIs of the enabled sources (SonarQube, SBOM Inventory, Vanguard)."""
+    if quality_names:
+        st.divider()
+        sources = []
+        if source_enabled("sonar"):
+            sources.append(f"SonarQube ({os.getenv('SONAR_COMPONENT')}) at sprint end")
+        if source_enabled("sbom"):
+            sources.append(f"{SBOM_KPI}: SBOM Inventory today, dev + prod")
+        if source_enabled("vanguard"):
+            captured_at = st.session_state.get("kpi_vanguard_fetched_at")
+            if captured_at:
+                sources.append(f"Vanguard: open findings, excluding previews, captured {captured_at:%Y-%m-%d %H:%M UTC}")
+            else:
+                sources.append("Vanguard: current findings not available; calculate KPIs to retry")
+        st.caption("Code Quality from " + " · ".join(sources))
+        for start in range(0, len(quality_names), 4):
+            for col, name in zip(st.columns(4), quality_names[start:start + 4]):
+                col.metric(name, format_kpi_value(name, quality_kpis.get(name)) or "N/A")
+
+
+def render_confluence_publisher(date_str, total_sp, achieved_sp, sprint_pct, releases_count, open_bugs,
+                                open_critical_bugs, resolved_bugs, avg_cycle_time, items_metrics, quality_values,
+                                jira_on, quality_names):
+    """Append the current sprint's KPIs (enabled sources only) to the Confluence KPI page, and show its history."""
     st.markdown("### 🔌 Confluence Publisher")
     st.markdown("Append this sprint's KPIs to a Confluence page. If the page doesn't exist, it will be created.")
     
@@ -533,8 +582,10 @@ def render_dashboard():
                         "resolved_bugs": str(resolved_bugs),
                         "cycle_time": f"{avg_cycle_time:.1f}" if pd.notna(avg_cycle_time) else "N/A",
                         "items": items_metrics,
-                        "quality": st.session_state.current_sprint_metrics["quality"]
+                        "quality": quality_values,
                     }
+                    if not jira_on:
+                        metrics = without_jira_kpis(metrics)
                     sprint_query_val = st.session_state.get("kpi_sprint_query", "Current Sprint")
                     sprint_name_val = st.session_state.get("kpi_sprint_name", sprint_query_val)
 
@@ -547,7 +598,8 @@ def render_dashboard():
                         page_title=page_title,
                         sprint_val=sprint_query_val,
                         sprint_name=sprint_name_val,
-                        metrics=metrics
+                        metrics=metrics,
+                        quality_kpis=quality_names,
                     )
                     st.success("🎉 **KPIs successfully appended to Confluence!**")
                     st.markdown(f"[👉 Click here to view Confluence Page]({page_url})")
@@ -587,6 +639,16 @@ st.markdown("Extract and calculate key performance indicators for a specific Jir
 if not st.session_state.get("jira_server") or not st.session_state.get("jira_token"):
     st.warning("⚠️ Please configure your Jira credentials on the Configuration page first.")
     st.stop()
+
+st.markdown("**KPI Sources**")
+st.caption("Choose which KPIs are calculated, shown and published. Jira is always used to find the sprint and its dates; "
+           "switching it off only hides its KPIs. Sources that are not configured stay off.")
+for col, (src_key, src_label, is_configured) in zip(st.columns(len(KPI_SOURCES)), KPI_SOURCES):
+    configured = is_configured()
+    col.toggle(src_label, value=configured, key=f"kpi_src_{src_key}", disabled=not configured,
+               help=None if configured else f"{src_label} is not configured. Set it up on the Configuration page.")
+if not source_enabled("jira") and not selected_quality_kpis():
+    st.warning("All KPI sources are off: switch on at least one.")
 
 col_s, col_b = st.columns([3, 1])
 with col_s:
@@ -655,8 +717,10 @@ def run_batch_kpis(sprints, selected_types):
             errors.append(f"{sprint}: no issues found.")
             continue
         metrics = compute_sprint_metrics(res)
+        if not source_enabled("jira"):
+            metrics = without_jira_kpis(metrics)
         # Only SonarQube is historical (value at sprint end); SBOM/Vanguard are "today" values so they stay empty
-        if sonar_configured() and res.get("sprint_end") is not None:
+        if source_enabled("sonar") and res.get("sprint_end") is not None:
             try:
                 sonar = fetch_sonar_kpis(res.get("sprint_end"))
                 metrics["quality"] = {name: format_kpi_value(name, sonar.get(name)) for name in SONAR_KPIS.values()}
@@ -684,7 +748,7 @@ def build_batch_preview_df(rows, df_hist=None):
 st.divider()
 st.markdown("### 🗂️ Batch KPIs (multiple sprints)")
 st.markdown("Calculate the KPIs of several sprints at once, review the table and charts, and only then decide whether to publish them to Confluence. "
-            "Uses the issue type filters above. All issues are included (no manual exclusions).")
+            "Uses the issue type filters and KPI sources above. All issues are included (no manual exclusions).")
 
 batch_text = st.text_area("Sprints (names or IDs, separated by commas or new lines)", key="batch_kpi_sprints",
                           placeholder="e.g.\n140\n141\nSprint 15")
@@ -764,6 +828,7 @@ if batch_rows:
                             sprint_val=r["sprint_val"], sprint_name=r["sprint_name"], metrics=r["metrics"],
                             replace_existing=True,
                             upload_charts=(i == len(selected) - 1),  # charts only once, after the last row
+                            quality_kpis=selected_quality_kpis(),
                         )
                     st.success(f"🎉 **{len(selected)} sprint(s) published to Confluence!**")
                     st.markdown(f"[👉 Click here to view Confluence Page]({page_url})")
