@@ -245,7 +245,7 @@ planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planner"
 sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", icon="📋")
 release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
-ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="AI Issue Creator", icon="🤖")
+ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="Issue Creator AI", icon="🤖")
 # Reachable by URL only: hidden from the menu
 ai_agent_page = st.Page("tools/6_AI_Agent.py", title="AI Agent", icon="💬", visibility="hidden")
 from utils.navigation import RELEASE_PLAN_PAGES
