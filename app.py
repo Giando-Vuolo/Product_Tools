@@ -845,7 +845,7 @@ pg = st.navigation(
     {
         # Single pages are direct links; Streamlit renders them before the dropdown sections,
         # so the final order is set with CSS in the top menu styles below
-        "": [home_page, planner_page, ai_creator_page, ai_agent_page, collaboration_page, configuration_page],
+        "": [home_page, planner_page, ai_creator_page, ai_agent_page, configuration_page],
         "🏃 Sprint": [sprint_review_page, sprint_kpis_page],
         "🚀 Releases": [release_notes_page, *release_plan_nav_pages],
     },
@@ -899,34 +899,45 @@ st.markdown("""
             background-color: #18181D;
             border: 1px solid #3E3E4A;
             border-radius: 12px;
-            flex: 1 1 auto;
-            justify-content: space-evenly;
-            padding: 0.35rem 0.75rem;
-            margin: 0.5rem 0.75rem 0.5rem 1rem;
-            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+            flex: 0 0 auto;
+            width: fit-content;
+            max-width: 100%;
+            justify-content: flex-start;
+            gap: 0.25rem;
+            padding: 0.25rem 0.5rem;
+            /* centered on the page header, independent of the Deploy button on the right */
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            margin: 0.5rem 0;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
         }
-        /* Menu order: Home, Sprint, Releases, Quarterly Planning, Issue Creator, Collaboration, Configuration.
-           DOM order is the visible links (Home, Quarterly Planning, Issue Creator, Collaboration,
-           Configuration) followed by the Sprint and Releases dropdowns. */
+        /* Menu order: Home, Sprint, Releases, Quarterly Planning, Issue Creator, Configuration.
+           Streamlit renders the individual pages first (Home, Quarterly Planning, Issue Creator,
+           Configuration; AI Agent is hidden) and then the sections in dict order (Sprint, Releases). */
         nav[data-testid="stTopNav"] > :nth-child(1) { order: 1 !important; }
         nav[data-testid="stTopNav"] > :nth-child(2) { order: 4 !important; }
         nav[data-testid="stTopNav"] > :nth-child(3) { order: 5 !important; }
         nav[data-testid="stTopNav"] > :nth-child(4) { order: 6 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(5) { order: 7 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(6) { order: 2 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(7) { order: 3 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(n+8) { order: 8 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(5) { order: 2 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(6) { order: 3 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(n+7) { order: 7 !important; }
         nav[data-testid="stTopNav"] [data-testid="stTopNavLinkContainer"],
         nav[data-testid="stTopNav"] [data-testid="stTopNavSection"] {
-            margin: 0 0.15rem;
+            margin: 0;
         }
         nav[data-testid="stTopNav"] [data-testid="stTopNavLink"],
         nav[data-testid="stTopNav"] [data-testid="stTopNavSection"],
         nav[data-testid="stTopNav"] [data-testid="stTopNavLink"] p,
         nav[data-testid="stTopNav"] [data-testid="stTopNavSection"] p,
         nav[data-testid="stTopNav"] span {
-            font-size: 1.2rem !important;
+            font-size: 1rem !important;
             font-weight: 600;
+        }
+        nav[data-testid="stTopNav"] [data-testid="stTopNavLink"],
+        nav[data-testid="stTopNav"] [data-testid="stTopNavSection"] {
+            padding: 0.3rem 0.7rem !important;
+            border-radius: 8px;
         }
     </style>
 """, unsafe_allow_html=True)
