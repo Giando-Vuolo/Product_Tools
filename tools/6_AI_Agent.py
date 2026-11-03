@@ -34,7 +34,7 @@ if "agent_messages" not in st.session_state:
 
 # Credentials from session state or .env
 API_KEY = os.getenv("API_KEY", "")
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = os.getenv("LOCAL_API_URL", "http://localhost:8000").rstrip("/")
 
 # ==========================================
 # TOOL DEFINITIONS (Dynamic OpenAPI Parsing)
@@ -140,7 +140,7 @@ def dispatch_tool_call(func_name: str, func_args: dict) -> str:
 # ==========================================
 
 if not st.session_state.ollama_models:
-    st.error("🔴 Ollama Not Running or no models available. Please configure it in the Home Hub -> Integrations tab.")
+    st.error("🔴 Ollama Not Running or no models available. Please configure it on the Configuration page.")
 else:
     col_model, _ = st.columns([1, 2])
     with col_model:

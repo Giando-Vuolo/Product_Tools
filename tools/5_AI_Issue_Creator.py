@@ -34,7 +34,7 @@ st.markdown("Configure where this issue will be created in Jira.")
 jira_connected = st.session_state.get("jira_connection_status") == "Success"
 
 if not jira_connected:
-    st.warning("Jira is not connected. Go to the Home Hub to configure your connection.")
+    st.warning("Jira is not connected. Go to the Configuration page to configure your connection.")
     selected_proj_key = ""
     jira_issue_type = ""
     jira_parent = ""
@@ -126,7 +126,7 @@ if st.session_state.get("ollama_models"):
         
     selected_model = st.selectbox("Select AI Model", st.session_state.ollama_models, index=default_model_index)
 else:
-    st.error("🔴 Ollama Not Running or no models available. Please configure it in the Home Hub -> Integrations tab.")
+    st.error("🔴 Ollama Not Running or no models available. Please configure it on the Configuration page.")
     selected_model = None
 
 # Load structures from ai_issue_structures.json with fallback

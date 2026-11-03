@@ -6,6 +6,7 @@ from utils.persistence import (
     get_last_mtime, enable_auto_save, setup_autorefresh
 )
 from utils.jira_helpers import fetch_jira_tickets_dataset, map_jira_status
+from utils.stepper import render_stepper
 import requests
 import os
 import io
@@ -125,8 +126,8 @@ def sync_editor_changes(df_key, editor_key, display_df_indices):
     deleted_indices = edits.get("deleted_rows", [])
     if deleted_indices:
         indices_to_drop = [display_df_indices[i] for i in deleted_indices if i < len(display_df_indices)]
-        df.drop(index=indices_to_drop, inplace=True)
-        df.reset_index(drop=True, inplace=True)
+        df = df.drop(index=indices_to_drop)
+        df = df.reset_index(drop=True)
         has_real_edits = True
         
     # Added rows
@@ -166,8 +167,8 @@ def sync_custom_table_changes(table_idx, editor_key, display_df_indices):
     deleted_indices = edits.get("deleted_rows", [])
     if deleted_indices:
         indices_to_drop = [display_df_indices[i] for i in deleted_indices if i < len(display_df_indices)]
-        df.drop(index=indices_to_drop, inplace=True)
-        df.reset_index(drop=True, inplace=True)
+        df = df.drop(index=indices_to_drop)
+        df = df.reset_index(drop=True)
         has_real_edits = True
         
     # Added rows
@@ -294,8 +295,8 @@ if 'release_notes_intro' not in st.session_state:
     st.session_state.release_notes_intro = default_release_notes_intro
 
 # Page state for dynamic programmatic navigation
-if 'active_tab' not in st.session_state:
-    st.session_state.active_tab = "🔌 Ingestion"
+if 'active_tab_rn' not in st.session_state:
+    st.session_state.active_tab_rn = "🔌 Ingestion"
 
 # Temporary logo file management
 if 'rn_logo_temp_path' not in st.session_state:
@@ -357,7 +358,7 @@ def load_release_notes_shared():
         st.session_state.next_release_df = nr_df
 
 # Only run auto-refresh on the Workbook tab to prevent resource overhead and iframe blinking on other tabs
-if st.session_state.get("active_tab", "🔌 Ingestion") == "✍️ Workbook":
+if st.session_state.get("active_tab_rn", "🔌 Ingestion") == "✍️ Workbook":
     setup_autorefresh(
         sync_interval_ms=10000, 
         last_sync_key="release_notes_last_sync", 
@@ -428,20 +429,6 @@ st.markdown("""
          [data-testid="stFileUploadDropzone"] small {
              color: #94A3B8 !important;
              font-weight: 500 !important;
-         }
-         
-         /* Sidebar dark theme label improvements */
-         section[data-testid="stSidebar"] {
-             background-color: #18181D !important;
-             border-right: 1px solid #3E3E4A !important;
-         }
-         section[data-testid="stSidebar"] h1,
-         section[data-testid="stSidebar"] h2,
-         section[data-testid="stSidebar"] h3,
-         section[data-testid="stSidebar"] h4,
-         section[data-testid="stSidebar"] label,
-         section[data-testid="stSidebar"] .stMarkdown {
-             color: #FFFFFF !important;
          }
          
          /* Rounded borders and shadows for dataframes and tables */
@@ -675,29 +662,16 @@ def build_release_notes_pdf(overview_df):
 st.title("📣 Release Notes Generator")
 st.markdown("Automate and customize Release Notes reports securely by connecting directly to **Jira** or importing local files.")
 
-# Programmatic Navigation Sidebar
-st.sidebar.markdown("### 🧭 Navigation Panel")
+# Step navigation: horizontal stepper (active_tab_rn drives which step is rendered)
 options_en = ["🔌 Ingestion", "✍️ Workbook", "💾 Exporter"]
-
-if 'active_tab' not in st.session_state or st.session_state.active_tab not in options_en:
-    st.session_state.active_tab = "🔌 Ingestion"
-
-selected_nav = st.sidebar.radio(
-    "Select current step:",
-    options=options_en,
-    index=options_en.index(st.session_state.active_tab)
-)
-
-if selected_nav != st.session_state.active_tab:
-    st.session_state.active_tab = selected_nav
-    st.rerun()
+render_stepper(options_en, "active_tab_rn", key="rn_stepper")
 
 
 
 # ---------------------------------------------------------
 # STEP 1: Ingestion & Connection
 # ---------------------------------------------------------
-if st.session_state.active_tab == "🔌 Ingestion":
+if st.session_state.active_tab_rn == "🔌 Ingestion":
     st.subheader("🔌 Jira Backlog Ingestion")
     st.write("Configure connection details below to load the **Overview** (What We Did) ticket dataset.")
     
@@ -712,38 +686,6 @@ if st.session_state.active_tab == "🔌 Ingestion":
             st.warning(fb.get("text"))
         del st.session_state.ingestion_feedback
     
-    # Credentials block
-
-    # Centralized Integration Status
-    jira_status = st.session_state.get("jira_connection_status")
-    jira_msg = st.session_state.get("jira_connection_msg", "Not checked yet")
-    conf_status = st.session_state.get("conf_connection_status")
-    conf_msg = st.session_state.get("conf_connection_msg", "Not checked yet")
-
-    col_stat1, col_stat2 = st.columns([1, 1])
-    with col_stat1:
-        if not st.session_state.jira_server:
-            st.warning("⚠️ **Jira**: Not configured.")
-        elif jira_status == "Success":
-            st.success(f"🟢 **Jira Connected**: `{st.session_state.jira_server}` ({jira_msg})")
-        elif jira_status == "Failed":
-            st.error(f"🔴 **Jira Connection Failed**: `{st.session_state.jira_server}` ({jira_msg})")
-        else:
-            st.info(f"🟡 **Jira Configured**: `{st.session_state.jira_server}` (Status: {jira_msg})")
-            
-    with col_stat2:
-        if not st.session_state.conf_server:
-            st.warning("⚠️ **Confluence**: Not configured.")
-        elif conf_status == "Success":
-            st.success(f"🟢 **Confluence Connected**: `{st.session_state.conf_server}` ({conf_msg})")
-        elif conf_status == "Failed":
-            st.error(f"🔴 **Confluence Connection Failed**: `{st.session_state.conf_server}` ({conf_msg})")
-        else:
-            st.info(f"🟡 **Confluence Configured**: `{st.session_state.conf_server}` (Status: {conf_msg})")
-            
-    st.caption("Credentials can be configured centrally on the **Home Hub** page under the **Centralized Integrations** tab.")
-
-
     st.subheader("📝 Prepare Release Note")
     st.write("Paste the Jira version link to load the release metadata, resolved issues, and known residual anomalies.")
     jira_version_link_base = os.getenv("JIRA_VERSION_LINK_BASE", "https://your-company.atlassian.net/jira/projects/MYPROJECT/versions/")
@@ -782,8 +724,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
     st.divider()
 
     # Issue Type Selection Checkboxes
-    st.markdown("**2. Filter Ingested Issue Types**")
-    st.write("Select which issue types should be loaded into the workspace:")
+    st.markdown("**2. Filter Ingested Issue Types**", help="Select which issue types should be loaded into the workspace.")
     col_cb1, col_cb2, col_cb3, col_cb4, col_cb5, col_cb6 = st.columns(6)
     with col_cb1:
         inc_all = st.checkbox("All / Everything", value=False, key="inc_all")
@@ -982,7 +923,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
                 if epic_col_detected:
                     norm_cols[epic_col_detected] = 'Epic'
                 if norm_cols:
-                    csv_df.rename(columns=norm_cols, inplace=True)
+                    csv_df = csv_df.rename(columns=norm_cols)
                 for req in ['Key', 'Summary', 'Epic', 'Status', 'Fix Version']:
                     if req not in csv_df.columns:
                         csv_df[req] = "N/A"
@@ -1042,16 +983,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
 # ---------------------------------------------------------
 # STEP 2: Worktable Workspace (Tabbed Data Editor)
 # ---------------------------------------------------------
-elif st.session_state.active_tab == "✍️ Workbook":
-    st.markdown(
-        f"<div style='background-color:#1E3A8A; padding:8px 12px; border-radius:8px; border:1px solid #3B82F6; margin-bottom:12px; font-size:14px; color:#F8FAFC; display:flex; align-items:center; gap:8px;'>"
-        f"<span style='color:#10B981; font-weight:bold;'>🟢 Connected to Shared Workbook</span> "
-        f"<span style='color:#94A3B8;'>|</span> "
-        f"<span style='color:#E2E8F0;'>Simultaneous collaboration enabled (auto-refresh active)</span>"
-        f"</div>",
-        unsafe_allow_html=True
-    )
-    
+elif st.session_state.active_tab_rn == "✍️ Workbook":
     label_sources = [st.session_state.overview_df]
     found_labels = {
         label.strip()
@@ -1383,7 +1315,7 @@ elif st.session_state.active_tab == "✍️ Workbook":
                         st.toast("Custom table dataset cleared!", icon="🧹")
                         st.rerun()
 # ---------------------------------------------------------
-elif st.session_state.active_tab == "🎨 Branding":
+elif st.session_state.active_tab_rn == "🎨 Branding":
     st.subheader("🎨 Visual Customization & Documentation Branding")
     st.write("Configure document metadata, Next Target Release targets, custom logos, and rich welcomes.")
     
@@ -1666,7 +1598,7 @@ elif st.session_state.active_tab == "🎨 Branding":
 # ---------------------------------------------------------
 # STEP 4: PDF Exporter
 # ---------------------------------------------------------
-elif st.session_state.active_tab == "💾 Exporter":
+elif st.session_state.active_tab_rn == "💾 Exporter":
     st.subheader("💾 Branded PDF Exporters & Live Interactive Previews")
     st.write("Inspect base64 rendered preview before downloading the document directly to your system.")
     
