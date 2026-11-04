@@ -1,7 +1,8 @@
 """Streamlit glue shared by the Release Plan readiness sub-pages (no rule logic here).
 
-Read-only: Jira and Confluence are only read (GET). Every page keeps its data in its own
-session keys ``rr<N>_*`` and fetches nothing until its own Refresh button is clicked.
+Read-only: Jira and Confluence are only read (GET). Data lives in session keys ``rr<N>_*`` and nothing
+is fetched until a Load Information button is clicked. On the aggregate pages (Overview, Scope,
+Notifications, By owner) and Post Actions, one click loads all of them (see ``load_information``).
 """
 import os
 from dataclasses import dataclass
@@ -137,9 +138,9 @@ def fetch_not_relevant(ctx: Context, fields: str = jira_helpers.RELEASE_READINES
 
 
 def refresh(ctx: Context, with_freeze: bool = False) -> None:
-    """The page's own Refresh button: fetches only when clicked; stores under rr<N>_data."""
+    """The page's own Load Information button: fetches only when clicked; stores under rr<N>_data."""
     key = f"{ctx.prefix}_data"
-    if not st.button("Refresh", key=f"{ctx.prefix}_refresh", disabled=not ctx.valid):
+    if not st.button("Load Information", key=f"{ctx.prefix}_refresh", disabled=not ctx.valid):
         return
     st.session_state.pop(key, None)
     st.session_state.pop(f"{ctx.prefix}_freeze_manual", None)
@@ -152,16 +153,20 @@ def refresh(ctx: Context, with_freeze: bool = False) -> None:
         return
     data["issues"] = issues
     data["checked_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    data["version"] = ctx.version
     st.session_state[key] = data
 
 
 def get_data(ctx: Context) -> Optional[dict]:
     if not ctx.valid:
-        st.info("Enter a release version X.Y.Z, then click Refresh.")
+        st.info("Enter a release version X.Y.Z, then click Load Information.")
         return None
     data = st.session_state.get(f"{ctx.prefix}_data")
+    if data and data.get("version") not in (None, ctx.version):
+        st.info(f"The loaded data is for release {data['version']}. Click Load Information to load {ctx.version}.")
+        return None
     if not data:
-        st.info("Nothing loaded yet. Click Refresh to check this rule.")
+        st.info("Nothing loaded yet. Click Load Information to check this rule.")
     return data
 
 
@@ -233,30 +238,118 @@ def render_by_owner(data: dict, freeze, release: str) -> None:
 
 
 def refresh_all(ctx: Context, with_not_relevant: bool = True) -> None:
-    """Own Refresh for the aggregate pages (0, 1, 8): in-scope issues + freeze (+ not-relevant issues)."""
-    key = f"{ctx.prefix}_data"
-    if not st.button("Refresh", key=f"{ctx.prefix}_refresh", disabled=not ctx.valid):
+    """Load Information button of the aggregate pages (0, 1, 8, 9).
+
+    One click loads every Release Plan tab (readiness data for all aggregate pages + Post Actions),
+    so the other tabs do not need their own load.
+    """
+    if not st.button("Load Information", key=f"{ctx.prefix}_refresh", disabled=not ctx.valid):
         return
-    st.session_state.pop(key, None)
-    st.session_state.pop(f"{ctx.prefix}_freeze_manual", None)
+    err, warning = load_information(ctx, with_not_relevant)
+    if err:
+        st.error(err)
+    elif warning:
+        st.warning(warning)
+
+
+# Pages sharing one readiness dataset; their data is loaded together by load_information().
+AGGREGATE_PREFIXES = ("rr0", "rr1", "rr8", "rr9")
+POST_ACTIONS_STATE_KEY = "rp_preview"
+POST_ACTIONS_ERRORS_KEY = "rp_load_errors"
+POST_ACTIONS_TARGET_KEY = "rp_target"
+
+
+def _collect_readiness(ctx: Context, with_not_relevant: bool):
+    """Pure fetch (no Streamlit calls: runs in a worker thread). Returns (data|None, error, warning)."""
     data = {}
     data["freeze"], data["freeze_note"] = _read_freeze(ctx)
     issues, err = fetch_issues(ctx)
     if err:
-        st.error(err)
-        return
+        return None, err, None
+    warning = None
     data["scope_issues"] = list(issues)
     data["not_relevant_issues"] = []
     if with_not_relevant:
         extra, err = fetch_not_relevant(ctx)
         if err:
-            st.warning(f"Could not read 'Not release relevant' issues: {err}")
+            warning = f"Could not read 'Not release relevant' issues: {err}"
         else:
             seen = {i.key for i in issues}
             data["not_relevant_issues"] = [i for i in extra if i.key not in seen]
     data["issues"] = data["scope_issues"] + data["not_relevant_issues"]
     data["checked_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    st.session_state[key] = data
+    return data, None, warning
+
+
+def _collect_post_actions(ctx: Context) -> dict:
+    """Pure fetch (no Streamlit calls). Returns {"state": dict|None, "errors": [..], "target": tuple|None}."""
+    out = {"state": None, "errors": [], "target": None}
+    try:
+        version = rp.validate_version(ctx.version)
+        children = confluence_helpers.list_child_pages(
+            ctx.conf_server, ctx.conf_token, ctx.auth, ctx.email, ctx.cfg.parent_id)
+        if children.get("error"):
+            raise ValueError(children["error"])
+        title = rp.build_target_title(ctx.cfg.title_template, version)
+        target = rp.select_target_page(children["results"], title, ctx.cfg.parent_id)
+        page_id = target["id"]
+        page = confluence_helpers.get_confluence_page(
+            ctx.conf_server, ctx.conf_token, ctx.auth, ctx.email, page_id)
+        # Guard and target first, before any Jira call.
+        guard = rp.check_target_guard(page, version, ctx.cfg.label, parent_id=ctx.cfg.parent_id)
+        out["target"] = (guard.title or target.get("title", ""), page_id, target.get("url", ""))
+        if not guard.ok:
+            out["errors"] = list(guard.errors)
+            return out
+        res = jira_helpers.fetch_release_issues_with_comments(
+            ctx.server, ctx.token, ctx.auth, ctx.email, rp.build_release_jql(version, ctx.cfg.label))
+        if res.get("error"):
+            if rp.is_missing_fix_version_error(res["error"]):
+                out["errors"] = [f"Version {rp.build_fix_version(version, ctx.cfg.label)} does not exist in Jira. "
+                                 "Nothing to extract."]
+            else:
+                out["errors"] = [res["error"]]
+            return out
+        preview = rp.build_preview(page, res["issues"], version, ctx.cfg.label, ctx.server, ctx.cfg.parent_id)
+        out["state"] = {
+            "page_id": page_id, "version": version, "label": ctx.cfg.label, "parent_id": ctx.cfg.parent_id,
+            "page_url": target.get("url", ""),
+            "page_version": page.get("version"), "preview": preview,
+            "actions": rp.extract_actions(res["issues"]), "issue_count": len(res["issues"]),
+        }
+    except ValueError as e:
+        out["errors"] = [str(e)]
+    except Exception as e:  # a worker must never take the page down
+        out["errors"] = [f"Could not load Post Actions: {e}"]
+    return out
+
+
+def load_information(ctx: Context, with_not_relevant: bool = True):
+    """Load everything the Release Plan tabs need in one go (read-only), in parallel.
+
+    Fills the readiness data of every aggregate page and the Post Actions preview, tagged with the
+    release version. Returns (readiness_error, readiness_warning) for the calling page to display.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    for prefix in AGGREGATE_PREFIXES:
+        st.session_state.pop(f"{prefix}_data", None)
+        st.session_state.pop(f"{prefix}_freeze_manual", None)
+    for key in (POST_ACTIONS_STATE_KEY, POST_ACTIONS_ERRORS_KEY, POST_ACTIONS_TARGET_KEY):
+        st.session_state.pop(key, None)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        readiness_f = pool.submit(_collect_readiness, ctx, with_not_relevant)
+        post_f = pool.submit(_collect_post_actions, ctx)
+        data, err, warning = readiness_f.result()
+        post = post_f.result()
+    if data is not None:
+        data["version"] = ctx.version
+        for prefix in AGGREGATE_PREFIXES:
+            st.session_state[f"{prefix}_data"] = dict(data)
+    st.session_state[POST_ACTIONS_ERRORS_KEY] = post["errors"]
+    st.session_state[POST_ACTIONS_TARGET_KEY] = post["target"]
+    if post["state"]:
+        st.session_state[POST_ACTIONS_STATE_KEY] = post["state"]
+    return err, warning
 
 
 def render_overview(data: dict, freeze) -> None:
@@ -289,21 +382,78 @@ def render_overview(data: dict, freeze) -> None:
 
 
 RELEASE_PLAN_SHARED_VERSION_KEY = "release_plan_version"
+RELEASE_PLAN_SHARED_LINK_KEY = "release_plan_version_link"
+RELEASE_PLAN_SHARED_NAME_KEY = "release_plan_version_jira_name"
+_VERSION_ERROR_KEY = "release_plan_version_error"
+
+
+def _fetch_jira_version(version_id):
+    from utils.release_helpers import jira_request
+    import requests
+    try:
+        resp = jira_request(
+            os.getenv("JIRA_SERVER", ""), os.getenv("JIRA_API_TOKEN", ""), f"/rest/api/2/version/{version_id}",
+            auth_type=os.getenv("JIRA_AUTH_METHOD", "Jira Server Token (Bearer)"), email=os.getenv("JIRA_EMAIL", ""))
+        return resp.status_code, (resp.json() if resp.status_code == 200 else {})
+    except (requests.RequestException, ValueError) as e:
+        raise ValueError(f"Could not reach Jira ({e}).") from None
+
+
+def _load_version_from_link(prefix: str) -> None:
+    """Link field callback: resolve the link, then share the extracted X.Y.Z with every release page."""
+    link = st.session_state.get(f"{prefix}_version_link", "")
+    base = os.getenv(rp.ENV_VERSION_LINK_BASE, "")
+    if not link.strip() or link.strip() == base.strip():  # nothing but the prefilled base yet
+        st.session_state[_VERSION_ERROR_KEY] = ""
+        return
+    try:
+        name, number = rp.resolve_version_link(link, _fetch_jira_version)
+    except ValueError as e:
+        st.session_state[_VERSION_ERROR_KEY] = str(e)
+        return
+    st.session_state[_VERSION_ERROR_KEY] = ""
+    st.session_state[RELEASE_PLAN_SHARED_VERSION_KEY] = number
+    st.session_state[RELEASE_PLAN_SHARED_NAME_KEY] = name
+    st.session_state[RELEASE_PLAN_SHARED_LINK_KEY] = link
+    st.session_state[f"{prefix}_version"] = number  # shown in the editable field
+
+
+def _commit_typed_version(prefix: str) -> None:
+    typed = str(st.session_state.get(f"{prefix}_version", "")).strip()
+    if typed:
+        st.session_state[RELEASE_PLAN_SHARED_VERSION_KEY] = typed
 
 
 def bind_release_version_input(prefix: str, label: str = "Release version (X.Y.Z)") -> str:
-    """Keep Release Plan version in sync across all sidebar subpages."""
+    """Release version selector shared by all Release Plan pages: enter it once, every page uses it.
+
+    Paste a Jira version link (prefilled with JIRA_VERSION_LINK_BASE, like Release Notes) and X.Y.Z is
+    extracted from Jira's response into an editable field, or just type X.Y.Z. Always visible (no
+    expander, so it never collapses on rerun).
+    """
     shared = st.session_state.get(RELEASE_PLAN_SHARED_VERSION_KEY, "")
-    current = st.session_state.get(f"{prefix}_version", shared)
-    value = current if current else shared
-    version = st.text_input(label, value=value, placeholder="e.g. 35.0.0",
-                            key=f"{prefix}_version").strip()
+    base = os.getenv(rp.ENV_VERSION_LINK_BASE, "")
+    version_key, link_key = f"{prefix}_version", f"{prefix}_version_link"
+    st.session_state.setdefault(version_key, shared)
+    st.session_state.setdefault(link_key, st.session_state.get(RELEASE_PLAN_SHARED_LINK_KEY) or base)
+    with st.container():
+        link_col, version_col = st.columns([3, 1])
+        with link_col:
+            st.text_input("Jira version link", key=link_key, placeholder=f"{base}543216",
+                          on_change=_load_version_from_link, args=(prefix,),
+                          help="Paste the link and press Enter (or click outside): X.Y.Z is extracted automatically.")
+        with version_col:
+            st.text_input(label, key=version_key, placeholder="e.g. 35.0.0",
+                          on_change=_commit_typed_version, args=(prefix,))
+        if st.session_state.get(_VERSION_ERROR_KEY):
+            st.error(st.session_state[_VERSION_ERROR_KEY])
+        if st.session_state.get(RELEASE_PLAN_SHARED_NAME_KEY):
+            st.caption(f"Jira version: {st.session_state[RELEASE_PLAN_SHARED_NAME_KEY]}")
+    version = str(st.session_state.get(version_key, "")).strip()
     if version:
         st.session_state[RELEASE_PLAN_SHARED_VERSION_KEY] = version
-    elif shared:
-        st.session_state[f"{prefix}_version"] = shared
-        return shared
-    return version
+        return version
+    return shared
 
 
 # ----------------------------------------------------------------- publish (sandbox only)

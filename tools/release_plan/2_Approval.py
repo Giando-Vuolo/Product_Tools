@@ -5,7 +5,7 @@ from utils import release_readiness_page as rr
 
 P = "rr2"
 rr.page_header("Release Plan · 2 Approval",
-               "Checks the 'Ready to release' approval of every in-scope issue. Runs only on Refresh.")
+               "Checks the 'Ready to release' approval of every in-scope issue. Runs only on Load Information.")
 ctx = rr.load_context(P)
 rr.refresh(ctx, with_freeze=True)
 data = rr.get_data(ctx)

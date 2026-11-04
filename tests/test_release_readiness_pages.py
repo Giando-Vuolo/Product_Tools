@@ -35,14 +35,18 @@ def load(path):
 
 class PagesCase(unittest.TestCase):
     def run_page(self, prefix, version="", click=True, env=ENV, page=None, title=None, issues=None):
-        self.jqls = []
+        self.jqls = []       # readiness queries (explicit field list)
+        self.post_jqls = []  # Post Actions query, loaded together by Load Information (default fields)
         self.conf_calls = 0
         issues = issues if issues is not None else load("release_readiness/issues.json")
         page = page if page is not None else load("release_plan/confluence_page_35.json")
         title = title or f"Release Plan {version}"
 
         def fake_jira(server, token, auth, email, jql, page_size=50, fields=None):
-            self.jqls.append((jql, fields))
+            if fields is None:
+                self.post_jqls.append(jql)
+            else:
+                self.jqls.append((jql, fields))
             return issues(jql) if callable(issues) else issues
 
         def fake_children(*a, **k):
@@ -210,9 +214,10 @@ class CriticalPageTests(PagesCase):
         self.assertEqual(list(first.columns), ["Issue", "Summary", "Assignee", "Reasons"])
         self.assertIn("RP-2", list(first["Issue"]))
         self.assertNotIn("RP-1", list(first["Issue"]))
-        self.assertEqual(len(at.expander), 1)
-        self.assertEqual(at.expander[0].label, "Other in-scope issues")
-        self.assertFalse(at.expander[0].proto.expanded)
+        exps = list(at.expander)
+        self.assertEqual(len(exps), 1)
+        self.assertEqual(exps[0].label, "Other in-scope issues")
+        self.assertFalse(exps[0].proto.expanded)
         self.assertIn("RP-1", list(at.dataframe[1].value["Issue"]))
         self.assertTrue(any(c.value.startswith("Checked at ") for c in at.caption))
         self.assertEqual(len(self.jqls), 1)

@@ -91,6 +91,36 @@ def validate_version(version: str) -> str:
     return v
 
 
+ENV_VERSION_LINK_BASE = "JIRA_VERSION_LINK_BASE"  # same variable Release Notes uses
+VERSION_ID_RE = re.compile(r"/versions/(\d+)")
+VERSION_NUMBER_RE = re.compile(r"(?<![\d.])\d+\.\d+\.\d+(?![\d.])")
+
+
+def parse_version_id(link: str) -> str:
+    """Jira version id from a link ending in /versions/<id>."""
+    m = VERSION_ID_RE.search((link or "").strip())
+    if not m:
+        raise ValueError("Paste a Jira version link ending in /versions/<id>.")
+    return m.group(1)
+
+
+def extract_version_number(name: str) -> str:
+    """X.Y.Z found in a Jira version name such as 'DIGITAL:HUB 35.0.0'."""
+    m = VERSION_NUMBER_RE.search(name or "")
+    if not m:
+        raise ValueError(f"No X.Y.Z found in the Jira version name '{name}'. Type the version manually.")
+    return m.group(0)
+
+
+def resolve_version_link(link: str, fetch) -> tuple:
+    """Return (jira_version_name, X.Y.Z). ``fetch(version_id)`` returns (http_status, json_body)."""
+    status, body = fetch(parse_version_id(link))
+    if status != 200:
+        raise ValueError(f"Could not load the Jira version (HTTP {status}).")
+    name = str((body or {}).get("name", "") or "")
+    return name, extract_version_number(name)
+
+
 def load_release_plan_config(env: Mapping) -> ReleasePlanConfig:
     def get(name):
         return str(env.get(name, "") or "").strip()

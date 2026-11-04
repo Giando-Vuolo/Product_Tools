@@ -3,29 +3,13 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 
-from utils.confluence_helpers import get_confluence_page, list_child_pages, update_confluence_page
-from utils.jira_helpers import fetch_release_issues_with_comments
-from utils.release_plan_helpers import (
-    build_preview,
-    build_fix_version,
-    build_release_jql,
-    build_target_title,
-    extract_actions,
-    check_target_guard,
-    fix_version_display,
-    is_missing_fix_version_error,
-    load_release_plan_config,
-    missing_config,
-    publish,
-    select_target_page,
-    validate_version,
-)
-from utils.release_readiness_page import bind_release_version_input
+from utils import release_readiness_page as rr
+from utils.confluence_helpers import get_confluence_page, update_confluence_page
+from utils.release_plan_helpers import publish
 
 load_dotenv(override=True)
 
 JIRA_SERVER = os.getenv("JIRA_SERVER", "")
-JIRA_TOKEN = os.getenv("JIRA_API_TOKEN", "")
 JIRA_AUTH_METHOD = os.getenv("JIRA_AUTH_METHOD", "Jira Server Token (Bearer)")
 JIRA_EMAIL = os.getenv("JIRA_EMAIL", "")
 CONF_SERVER = os.getenv("CONFLUENCE_SERVER", "")
@@ -37,26 +21,12 @@ st.caption(
     "adds them, unchecked, to the Post-actions section of a Release Plan page. Existing content is never overwritten."
 )
 
-missing = missing_config(os.environ)
-if missing:
-    st.error("Missing configuration (set in .env): " + ", ".join(missing))
-    st.stop()
-
-try:
-    cfg = load_release_plan_config(os.environ)
-except ValueError as e:
-    st.error(str(e))
-    st.stop()
+# Config check, shared release version input and sandbox banner (same as the readiness tabs).
+ctx = rr.load_context("rp")
 
 
 def _get_page(page_id):
     return get_confluence_page(CONF_SERVER, CONF_TOKEN, JIRA_AUTH_METHOD, JIRA_EMAIL, page_id)
-
-
-version_in = bind_release_version_input("rp", label="Release version (X.Y.Z)")
-st.text_input("fixVersion prefix", value=fix_version_display(version_in, cfg.label), disabled=True)
-st.caption("Once you finish typing, click outside the field (or press Enter) to update the fixVersion.")
-
 
 
 def _show_target(title, page_id, url):
@@ -64,52 +34,26 @@ def _show_target(title, page_id, url):
     st.write(f"Target page: **{title or '?'}** (ID {page_id}){link}")
 
 
-just_generated = False
-if st.button("Generate preview", key="rp_preview_btn"):
-    just_generated = True
-    st.session_state.pop("rp_preview", None)
-    try:
-        version = validate_version(version_in)
-        children = list_child_pages(CONF_SERVER, CONF_TOKEN, JIRA_AUTH_METHOD, JIRA_EMAIL, cfg.parent_id)
-        if children.get("error"):
-            raise ValueError(children["error"])
-        title = build_target_title(cfg.title_template, version)
-        target = select_target_page(children["results"], title, cfg.parent_id)
-    except ValueError as e:
-        st.error(str(e))
-        st.stop()
-    page_id = target["id"]
-    page = _get_page(page_id)
-    # RF13: guard and show the target BEFORE any Jira call.
-    guard = check_target_guard(page, version, cfg.label, parent_id=cfg.parent_id)
-    _show_target(guard.title or target.get("title", ""), page_id, target.get("url", ""))
-    if not guard.ok:
-        for err in guard.errors:
-            st.error(err)
-        st.stop()
-    jql = build_release_jql(version, cfg.label)
-    res = fetch_release_issues_with_comments(JIRA_SERVER, JIRA_TOKEN, JIRA_AUTH_METHOD, JIRA_EMAIL, jql)
-    if res.get("error"):
-        if is_missing_fix_version_error(res["error"]):
-            st.error(f"Version {build_fix_version(version, cfg.label)} does not exist in Jira. Nothing to extract.")
-        else:
-            st.error(res["error"])
-        st.stop()
-    preview = build_preview(page, res["issues"], version, cfg.label, JIRA_SERVER, cfg.parent_id)
-    st.session_state["rp_preview"] = {
-        "page_id": page_id, "version": version, "label": cfg.label, "parent_id": cfg.parent_id,
-        "page_url": target.get("url", ""),
-        "page_version": page.get("version"), "preview": preview,
-        "actions": extract_actions(res["issues"]), "issue_count": len(res["issues"]),
-    }
+# One Load Information loads every Release Plan tab (readiness data + this preview).
+if st.button("Load Information", key="rp_preview_btn", disabled=not ctx.valid):
+    rr.load_information(ctx)
 
-state = st.session_state.get("rp_preview")
+load_target = st.session_state.get(rr.POST_ACTIONS_TARGET_KEY)
+if load_target:
+    _show_target(*load_target)
+for load_error in st.session_state.get(rr.POST_ACTIONS_ERRORS_KEY) or []:
+    st.error(load_error)
+if not ctx.valid:
+    st.info("Enter a release version X.Y.Z, then click Load Information.")
+
+state = st.session_state.get(rr.POST_ACTIONS_STATE_KEY)
+if state and state["version"] != ctx.version:
+    st.info(f"The loaded preview is for release {state['version']}. Click Load Information to load {ctx.version}.")
+    state = None
 if state:
     preview = state["preview"]
     guard = preview["guard"]
     st.subheader("Preview")
-    if not just_generated:
-        _show_target(guard.title, guard.page_id, state.get("page_url", ""))
     if not guard.ok:
         for err in guard.errors:
             st.error(err)

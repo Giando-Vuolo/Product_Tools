@@ -78,7 +78,8 @@ class OverviewTests(RoutedCase):
         self.assertTrue(any("Not release relevant" in j for j, _ in self.jqls))
         self.assertTrue(any("updated >=" in j for j, _ in self.jqls))
         self.assertIn("rr0_data", at.session_state)
-        self.assertNotIn("rr8_data", at.session_state)
+        self.assertIn("rr8_data", at.session_state)  # one Load Information fills every tab
+        self.assertEqual(len(self.post_jqls), 1)
         self.assertEqual([m.label for m in at.metric], ["ERROR", "WARN", "INFO"])
         self.assertTrue(any("Release readiness: " in s.value for s in at.subheader))
         self.assertEqual(list(at.dataframe[0].value.columns)[:1], ["Issue"])  # critical table first
@@ -121,10 +122,11 @@ class ScopeTests(RoutedCase):
 
 
 class NotificationsTests(RoutedCase):
-    def test_independent_refresh_and_texts(self):
+    def test_shared_load_and_texts(self):
         at = self.run_page("rr8", "35.0.0")
         self.assertIn("rr8_data", at.session_state)
-        self.assertNotIn("rr0_data", at.session_state)
+        self.assertIn("rr0_data", at.session_state)  # loaded for the other tabs too
+        self.assertIn("rp_preview", at.session_state)
         self.assertEqual(len(self.jqls), 2)
         codes = [c.value for c in at.code]
         self.assertTrue(codes)
