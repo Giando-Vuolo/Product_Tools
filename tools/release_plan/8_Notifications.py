@@ -5,7 +5,7 @@ from utils import release_readiness_page as rr
 
 P = "rr8"
 rr.page_header("📨 Notifications",
-               "Copy-ready texts to paste into Jira comments or chat. Nothing is posted from here. Runs only on Refresh.")
+               "Copy-ready texts to paste into Jira comments or chat. Nothing is posted from here. Runs only on Load Information.")
 ctx = rr.load_context(P)
 rr.refresh_all(ctx)
 data = rr.get_data(ctx)

@@ -41,7 +41,8 @@ class PageCase(unittest.TestCase):
         calls = {"jira": 0}
 
         def fake_jira(*a, **k):
-            calls["jira"] += 1
+            if k.get("fields") is None:  # Post Actions query; readiness queries pass an explicit field list
+                calls["jira"] += 1
             return jira if jira is not None else {"issues": []}
 
         page = page if page is not None else load("confluence_page_35.json")
@@ -78,16 +79,15 @@ class PageCase(unittest.TestCase):
 
 
 class PageUiTests(PageCase):
-    def test_prefix_field_disabled_and_shows_label_version_ac8(self):
+    def test_no_fixversion_prefix_field(self):
         at = self.run_page("35.0.0", click=False)
-        field = [t for t in at.text_input if t.label == "fixVersion prefix"][0]
-        self.assertTrue(field.disabled)
-        self.assertEqual(field.value, "DIGITAL:HUB 35.0.0")
+        self.assertEqual([t for t in at.text_input if t.label == "fixVersion prefix"], [])
 
-    def test_click_outside_caption_visible_ac9(self):
-        at = self.run_page(click=False)
-        self.assertIn("Once you finish typing, click outside the field (or press Enter) to update the fixVersion.",
-                      [c.value for c in at.caption])
+    def test_load_information_also_loads_readiness_tabs(self):
+        kids = [{"id": ID_35, "title": TITLE_35, "url": ""}]
+        at = self.run_page("35.0.0", children=kids, jira={"issues": [ISSUE]})
+        self.assertIn("rr0_data", at.session_state)
+        self.assertIn("rr8_data", at.session_state)
 
     def test_page_not_found_no_jira_call_rf13(self):
         at = self.run_page("98.0.0", children=[{"id": "1", "title": TITLE_35, "url": ""}])

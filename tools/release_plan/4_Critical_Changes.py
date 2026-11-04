@@ -3,7 +3,7 @@ from utils import release_readiness_page as rr
 
 P = "rr4"
 rr.page_header("Release Plan · 4 Critical changes",
-               "Lists in-scope issues flagged as critical changes by their Documentation table. Runs only on Refresh.")
+               "Lists in-scope issues flagged as critical changes by their Documentation table. Runs only on Load Information.")
 ctx = rr.load_context(P)
 rr.refresh(ctx)
 data = rr.get_data(ctx)

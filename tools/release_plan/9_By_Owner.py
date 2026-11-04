@@ -5,7 +5,7 @@ from utils import release_readiness_page as rr
 P = "rr9"
 rr.page_header("Release Plan · 9 By owner",
                "Issues to review grouped by owner, with a copy-ready message each. Nothing is posted from here. "
-               "Runs only on Refresh.")
+               "Runs only on Load Information.")
 ctx = rr.load_context(P)
 rr.refresh_all(ctx)
 data = rr.get_data(ctx)

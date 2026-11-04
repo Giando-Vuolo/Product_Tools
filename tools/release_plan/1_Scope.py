@@ -6,7 +6,7 @@ from utils import release_readiness_page as rr
 
 P = "rr1"
 rr.page_header("Release Plan · 1 Scope",
-               "In-scope issues, exclusions and possibly misclassified issues. Runs only on Refresh.")
+               "In-scope issues, exclusions and possibly misclassified issues. Runs only on Load Information.")
 ctx = rr.load_context(P)
 rr.refresh_all(ctx)
 data = rr.get_data(ctx)

@@ -3,7 +3,7 @@ from utils import release_readiness_page as rr
 
 P = "rr5"
 rr.page_header("Release Plan · 5 PRE testing",
-               "Lists issues with 'Tested in PRE = No' and whether it is explained. Runs only on Refresh.")
+               "Lists issues with 'Tested in PRE = No' and whether it is explained. Runs only on Load Information.")
 ctx = rr.load_context(P)
 rr.refresh(ctx)
 data = rr.get_data(ctx)

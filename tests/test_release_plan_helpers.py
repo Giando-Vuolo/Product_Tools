@@ -497,5 +497,37 @@ class SandboxGuardTests(OfflineTestCase):
         self.assertTrue(g.ok, g.errors)
 
 
+class VersionLinkTests(unittest.TestCase):
+    def test_parse_version_id(self):
+        self.assertEqual(rp.parse_version_id("https://x.net/jira/projects/P/versions/543216"), "543216")
+        self.assertEqual(rp.parse_version_id(" https://x.net/versions/12?tab=1 "), "12")
+        for bad in ("", "https://x.net/versions/", "35.0.0"):
+            with self.assertRaises(ValueError):
+                rp.parse_version_id(bad)
+
+    def test_extract_version_number(self):
+        self.assertEqual(rp.extract_version_number("DIGITAL:HUB 35.0.0"), "35.0.0")
+        self.assertEqual(rp.extract_version_number("Release 9.12.3 hotfix"), "9.12.3")
+        for bad in ("", "DIGITAL:HUB 35.0", "DIGITAL:HUB 35.0.0.1"):
+            with self.assertRaises(ValueError):
+                rp.extract_version_number(bad)
+
+    def test_resolve_version_link(self):
+        seen = []
+
+        def fetch(version_id):
+            seen.append(version_id)
+            return 200, {"name": "DIGITAL:HUB 35.0.0"}
+
+        self.assertEqual(rp.resolve_version_link("https://x.net/versions/7", fetch), ("DIGITAL:HUB 35.0.0", "35.0.0"))
+        self.assertEqual(seen, ["7"])
+
+    def test_resolve_version_link_errors(self):
+        with self.assertRaises(ValueError):
+            rp.resolve_version_link("https://x.net/versions/7", lambda _id: (404, {}))
+        with self.assertRaises(ValueError):
+            rp.resolve_version_link("https://x.net/versions/7", lambda _id: (200, {"name": "Backlog"}))
+
+
 if __name__ == "__main__":
     unittest.main()
