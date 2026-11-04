@@ -287,33 +287,39 @@ def calculate_business_days(start_dt, end_dt):
     total = first_day_frac + middle_days + last_day_frac
     return round(total, 2)
 
-def get_story_points_field_id(server, headers, auth):
-    """Return the Jira field id used for the Sprint field, with a safe fallback."""
-    url = f"{server.rstrip('/')}/rest/api/2/field"
+_FIELD_IDS_CACHE = {}  # server -> {"story points": id, "sprint": id}; field ids rarely change
+
+def _lookup_field_ids(server, headers, auth):
+    """Fetch Jira's field list once per server and return the Story Points / Sprint ids found.
+
+    Only successful lookups are cached, so a transient failure is retried on the next call.
+    """
+    key = server.rstrip('/')
+    if key in _FIELD_IDS_CACHE:
+        return _FIELD_IDS_CACHE[key]
+    url = f"{key}/rest/api/2/field"
+    ids = {}
     try:
         resp = requests.get(url, headers=headers, auth=auth, timeout=10) if auth else requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 200:
             for f in resp.json():
                 name_lower = f.get("name", "").lower().strip()
                 if name_lower in ["story points", "story point estimate"]:
-                    return f.get("id")
+                    ids.setdefault("story points", f.get("id"))
+                elif name_lower in ["sprint", "sprints"]:
+                    ids.setdefault("sprint", f.get("id"))
+            _FIELD_IDS_CACHE[key] = ids
     except Exception:
         pass
-    return os.getenv("JIRA_STORY_POINTS_FIELD", "customfield_10016")
+    return ids
+
+def get_story_points_field_id(server, headers, auth):
+    """Return the Jira field id used for Story Points, with a safe fallback."""
+    return _lookup_field_ids(server, headers, auth).get("story points") or os.getenv("JIRA_STORY_POINTS_FIELD", "customfield_10016")
 
 def get_sprint_field_id(server, headers, auth):
     """Return the Jira field id used for the Sprint field, with a safe fallback."""
-    url = f"{server.rstrip('/')}/rest/api/2/field"
-    try:
-        resp = requests.get(url, headers=headers, auth=auth, timeout=10) if auth else requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            for f in resp.json():
-                name_lower = f.get("name", "").lower().strip()
-                if name_lower in ["sprint", "sprints"]:
-                    return f.get("id")
-    except Exception:
-        pass
-    return os.getenv("JIRA_SPRINT_FIELD", "customfield_10020")
+    return _lookup_field_ids(server, headers, auth).get("sprint") or os.getenv("JIRA_SPRINT_FIELD", "customfield_10020")
 
 
 def fetch_exact_sprint_report(server, headers, auth, sprint_id, selected_types=None):

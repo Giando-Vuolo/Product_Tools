@@ -4,6 +4,7 @@ import streamlit as st
 import html
 import os
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from utils.tunnel import start_tunnel, get_tunnel_url, get_tunnel_error, set_tunnel_url
 from utils.ai_helpers import get_ollama_models
@@ -454,84 +455,102 @@ def _inject_hub_styles():
 
 
 # 2. Define the Home Page rendering function
+def _inject_home_styles():
+    st.markdown("""
+        <style>
+            .po-hero {
+                background: linear-gradient(135deg, #1E3A8A 0%, #18181D 70%);
+                border: 1px solid #3E3E4A;
+                border-radius: 16px;
+                padding: 1.1rem 1.5rem;
+                margin-bottom: 0.75rem;
+            }
+            .po-hero h1 { margin: 0 0 0.2rem 0 !important; padding: 0 !important; font-size: 1.7rem !important; }
+            .po-hero p { margin: 0 !important; color: #CBD5E1 !important; font-size: 0.95rem; max-width: 760px; }
+            .po-section {
+                color: #94A3B8 !important; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em;
+                text-transform: uppercase; margin: 0.4rem 0 0.3rem 0.25rem;
+            }
+            /* Equal-size cards: every card is a fixed-height bordered container */
+            [class*="st-key-pocard_"] {
+                background-color: #18181D !important;
+                border: 1px solid #3E3E4A !important;
+                border-radius: 14px !important;
+                padding: 0.25rem 0.5rem !important;
+                box-shadow: 0 6px 14px -4px rgba(0, 0, 0, 0.5) !important;
+                transition: border-color 0.2s ease-in-out, transform 0.2s ease-in-out;
+            }
+            [class*="st-key-pocard_"]:hover { border-color: #60A5FA !important; transform: translateY(-2px); }
+            .po-card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.35rem; }
+            .po-icon {
+                width: 34px; height: 34px; border-radius: 10px; font-size: 18px;
+                display: flex; align-items: center; justify-content: center;
+                background: #60A5FA22; border: 1px solid #60A5FA55;
+            }
+            .po-badge {
+                background-color: #60A5FA22; color: #60A5FA; border: 1px solid #60A5FA;
+                padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 600;
+            }
+            .po-card h3 { margin: 0 0 0.2rem 0 !important; padding: 0 !important; font-size: 1.05rem !important; }
+            .po-card p { margin: 0 !important; color: #CBD5E1 !important; font-size: 0.85rem; line-height: 1.35; }
+        </style>
+    """, unsafe_allow_html=True)
+
+
+def _home_card(key, icon, title, desc, badge, page, link_label):
+    """One home card: fixed height so every card has the same size regardless of text length."""
+    with st.container(border=True, height=190, key=f"poCard_{key}"):
+        st.markdown(f"""
+            <div class="po-card">
+                <div class="po-card-top"><div class="po-icon">{icon}</div><span class="po-badge">{badge}</span></div>
+                <h3>{title}</h3>
+                <p>{desc}</p>
+            </div>
+        """, unsafe_allow_html=True)
+        st.page_link(page, label=link_label, icon=icon)
+
+
 def show_home():
     _inject_hub_styles()
+    _inject_home_styles()
 
-    # Main Title and Welcome
-    st.title("💼 Product Owner Suite Hub")
-    st.markdown("Welcome to the **Product Owner & Project Management Tools Suite**. Use the top menu to seamlessly navigate between the different tools available in this workspace.")
+    st.markdown("""
+        <div class="po-hero">
+            <h1>💼 Product Tools</h1>
+            <p>Product workflows, data visualization, integrations and AI-assisted capabilities in one modular platform.</p>
+        </div>
+    """, unsafe_allow_html=True)
 
-    st.divider()
+    st.markdown('<div class="po-section">Planning, reviews & releases</div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3, gap="medium")
+    with c1:
+        _home_card("planner", "🎯", "Quarterly Planner",
+                   "Track committed quarterly Epics from Jira, add delivery context and milestones, then export progress and roadmap slides.",
+                   "ACTIVE 🚀", planner_page, "Open Planner")
+    with c2:
+        _home_card("review", "📋", "Sprint Review",
+                   "Extract Jira sprint data, edit items in a workbook, apply custom branding and export PDF Sprint Review reports.",
+                   "ACTIVE 🚀", sprint_review_page, "Open Sprint Review")
+    with c3:
+        _home_card("notes", "📣", "Release Notes",
+                   "Create a Release Note from a Jira version: load release data, review the tables, then export or publish the PDF.",
+                   "ACTIVE 🚀", release_notes_page, "Open Release Notes")
 
-    st.subheader("🛠️ Available Tools")
-    r1c1, r1c2, r1c3 = st.columns(3)
+    st.markdown('<div class="po-section">Metrics, AI & quality</div>', unsafe_allow_html=True)
+    c4, c5, c6 = st.columns(3, gap="medium")
+    with c4:
+        _home_card("kpis", "📊", "Sprint KPIs",
+                   "Calculate KPIs from Jira such as cycle times, committed vs achieved points and releases.",
+                   "ACTIVE 🚀", sprint_kpis_page, "Open Sprint KPIs")
+    with c5:
+        _home_card("ai", "🤖", "AI Issue Creator",
+                   "Draft, format and upload Jira issues effortlessly using a local Ollama AI model.",
+                   "NEW ✨", ai_creator_page, "Open AI Creator")
+    with c6:
+        _home_card("readiness", "✅", "Release Readiness",
+                   "Check a release before go-live: scope, approvals, documentation, critical changes, PRE testing and unassigned issues. Read-only.",
+                   "NEW ✨", rr_overview_page, "Open Release Overview")
 
-    with r1c1:
-        st.markdown("""
-            <div class="hub-card">
-                <span class="hub-badge">ACTIVE 🚀</span>
-                <h3>🎯 Quarterly Planner</h3>
-                <p>Track committed quarterly Epics from Jira, add delivery context and planned milestones, then export progress and delivery-roadmap slides.</p>
-            </div>
-        """, unsafe_allow_html=True)
-        st.page_link(planner_page, label="Open Planner", icon="🎯")
-
-    with r1c2:
-        st.markdown("""
-            <div class="hub-card">
-                <span class="hub-badge">ACTIVE 🚀</span>
-                <h3>📋 Sprint Review</h3>
-                <p>Extract Jira sprint data, edit items in a workbook, apply custom branding, and export PDF Sprint Review reports.</p>
-            </div>
-        """, unsafe_allow_html=True)
-        st.page_link(sprint_review_page, label="Open Sprint Review", icon="📋")
-
-    with r1c3:
-        st.markdown("""
-            <div class="hub-card">
-                <span class="hub-badge">ACTIVE 🚀</span>
-                <h3>📣 Release Notes</h3>
-                <p>Create a Release Note from a Jira version: load release data, review the editable purpose and ticket tables, then export or publish the PDF.</p>
-            </div>
-        """, unsafe_allow_html=True)
-        st.page_link(release_notes_page, label="Open Release Notes", icon="📣")
-
-    r2c1, r2c2, r2c3 = st.columns(3)
-
-    with r2c1:
-        st.markdown("""
-            <div class="hub-card">
-                <span class="hub-badge">ACTIVE 🚀</span>
-                <h3>📊 Sprint KPIs</h3>
-                <p>Calculate specific KPIs from Jira such as cycle times, committed vs achieved points, and releases.</p>
-            </div>
-        """, unsafe_allow_html=True)
-        st.page_link(sprint_kpis_page, label="Open Sprint KPIs", icon="📊")
-
-    with r2c2:
-        st.markdown("""
-            <div class="hub-card">
-                <span class="hub-badge">NEW ✨</span>
-                <h3>🤖 AI Issue Creator</h3>
-                <p>Draft, format and upload Jira issues effortlessly using a local Ollama AI model.</p>
-            </div>
-        """, unsafe_allow_html=True)
-        st.page_link(ai_creator_page, label="Open AI Creator", icon="🤖")
-
-    with r2c3:
-        pass # AI Agent card removed temporarily while under development
-
-    r3c1, r3c2, r3c3 = st.columns(3)
-
-    with r3c1:
-        st.markdown("""
-            <div class="hub-card">
-                <span class="hub-badge">NEW ✨</span>
-                <h3>✅ Release Readiness</h3>
-                <p>Check a release before go-live: scope, approvals, documentation table, critical changes, PRE testing and unassigned issues, with copy-ready notifications. Read-only.</p>
-            </div>
-        """, unsafe_allow_html=True)
-        st.page_link(rr_overview_page, label="Open Release Overview", icon="✅")
 
 
 # Configuration page: centralized integrations and connection checks

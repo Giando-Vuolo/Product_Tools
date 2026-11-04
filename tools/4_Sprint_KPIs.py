@@ -4,6 +4,7 @@ import requests
 import os
 import re
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from html.parser import HTMLParser
 import altair as alt
@@ -57,31 +58,42 @@ def fetch_sprint_kpi_dataset():
     sprint_query = st.session_state.get("kpi_sprint_query", "")
     selected_types = st.session_state.get("kpi_selected_types", [])
     
-    res = fetch_sprint_kpi_data(server, token, auth_type, email, sprint_query, selected_types)
-    
-    if res.get("error"):
-        st.session_state.kpi_error = res["error"]
-        st.session_state.kpi_loading = False
-        return
-        
-    quality_kpis = {}
-    if source_enabled("sonar"):
-        try:
-            quality_kpis = fetch_sonar_kpis(res.get("sprint_end"))
-        except Exception as e:
-            st.session_state.kpi_error += f"\nWarning: SonarQube: {str(e)}"
-    if source_enabled("sbom"):
-        try:
-            quality_kpis[SBOM_KPI] = fetch_dependency_findings()
-        except Exception as e:
-            st.session_state.kpi_error += f"\nWarning: SBOM Inventory: {str(e)}"
-    st.session_state.kpi_vanguard_fetched_at = None
-    if source_enabled("vanguard"):
-        try:
-            quality_kpis[VANGUARD_KPI] = fetch_platform_findings()
-            st.session_state.kpi_vanguard_fetched_at = datetime.now(timezone.utc)
-        except ValueError as e:
-            st.session_state.kpi_error += f"\nWarning: {e}"
+    # SBOM and Vanguard do not depend on the Jira result, so they run in parallel with it.
+    # Sonar needs the sprint end date, so it starts as soon as Jira returns. Worker threads
+    # never touch st.session_state; results are read back on the script thread.
+    executor = ThreadPoolExecutor(max_workers=3)
+    sbom_future = executor.submit(fetch_dependency_findings) if source_enabled("sbom") else None
+    vanguard_future = executor.submit(fetch_platform_findings) if source_enabled("vanguard") else None
+    try:
+        res = fetch_sprint_kpi_data(server, token, auth_type, email, sprint_query, selected_types)
+
+        if res.get("error"):
+            st.session_state.kpi_error = res["error"]
+            st.session_state.kpi_loading = False
+            return
+
+        sonar_future = executor.submit(fetch_sonar_kpis, res.get("sprint_end")) if source_enabled("sonar") else None
+
+        quality_kpis = {}
+        if sonar_future:
+            try:
+                quality_kpis = sonar_future.result()
+            except Exception as e:
+                st.session_state.kpi_error += f"\nWarning: SonarQube: {str(e)}"
+        if sbom_future:
+            try:
+                quality_kpis[SBOM_KPI] = sbom_future.result()
+            except Exception as e:
+                st.session_state.kpi_error += f"\nWarning: SBOM Inventory: {str(e)}"
+        st.session_state.kpi_vanguard_fetched_at = None
+        if vanguard_future:
+            try:
+                quality_kpis[VANGUARD_KPI] = vanguard_future.result()
+                st.session_state.kpi_vanguard_fetched_at = datetime.now(timezone.utc)
+            except ValueError as e:
+                st.session_state.kpi_error += f"\nWarning: {e}"
+    finally:
+        executor.shutdown(wait=False)
 
     st.session_state.kpi_quality = quality_kpis
     st.session_state.kpi_data = res.get("df", pd.DataFrame())
