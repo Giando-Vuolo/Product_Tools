@@ -280,27 +280,35 @@ def _normalise_heading(text: str) -> str:
     return " ".join(t.split()).casefold()
 
 
-def find_post_actions_section(storage: str) -> tuple:
-    """Return (heading_start, heading_end, section_end)."""
+def find_heading_section(storage: str, titles: tuple, *, label: str, stop: str = "same_or_higher") -> tuple:
+    """Return (heading_start, heading_end, section_end) for the single heading whose
+    normalised title is in `titles`. stop: "same_or_higher" or "any" (next heading of any level)."""
+    if stop not in ("same_or_higher", "any"):
+        raise ValueError(f"Unknown stop mode '{stop}'.")
     headings = list(re.finditer(r"<h([1-6])\b[^>]*>(.*?)</h\1>", storage, re.S))
     matches = []
     for i, m in enumerate(headings):
         title = _normalise_heading(_plain(m.group(2)))
-        if title in ("post-actions", "post actions"):
+        if title in titles:
             matches.append(i)
     if not matches:
-        raise ValueError("Post-actions section not found on the page. Nothing was written.")
+        raise ValueError(f"{label} section not found on the page. Nothing was written.")
     if len(matches) > 1:
-        raise ValueError("More than one Post-actions heading found on the page. Nothing was written.")
+        raise ValueError(f"More than one {label} heading found on the page. Nothing was written.")
     idx = matches[0]
     h = headings[idx]
     level = int(h.group(1))
     section_end = len(storage)
     for nxt in headings[idx + 1:]:
-        if int(nxt.group(1)) <= level:
+        if stop == "any" or int(nxt.group(1)) <= level:
             section_end = nxt.start()
             break
     return h.start(), h.end(), section_end
+
+
+def find_post_actions_section(storage: str) -> tuple:
+    """Return (heading_start, heading_end, section_end)."""
+    return find_heading_section(storage, ("post-actions", "post actions"), label="Post-actions")
 
 
 def find_all_tasks(storage: str) -> list:

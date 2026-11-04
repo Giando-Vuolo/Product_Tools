@@ -9,3 +9,10 @@ data = rr.get_data(ctx)
 if data:
     freeze = rr.freeze_date_input(P, data)
     rr.render_overview(data, freeze)
+    from datetime import date
+
+    from utils import release_checks as rc
+    from utils import release_publish as rpub
+    summ = rc.summarize(rc.run_all(data["issues"], freeze, date.today()))
+    rr.render_publish_panel(ctx, "readiness", rpub.render_readiness_line(summ, data["checked_at"]),
+                            "Publish readiness line")

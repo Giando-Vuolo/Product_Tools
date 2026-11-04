@@ -435,3 +435,76 @@ def notification_texts(results: dict) -> dict:
             lines.append(f"* {f.issue_key}{who} [{f.severity}] {f.reason}")
         texts[rule] = "\n".join(lines)
     return texts
+
+
+# ------------------------------------------------------------------- by owner
+@dataclass(frozen=True)
+class OwnerIssue:
+    key: str
+    summary: str
+    status: str
+    max_severity: str
+    problems: tuple  # ((rule, reason), ...) ordered by severity, rule, reason
+
+
+@dataclass(frozen=True)
+class OwnerGroup:
+    owner: str
+    issues: tuple  # OwnerIssue, sorted by (SEVERITY_ORDER[max_severity], key)
+    counts: dict   # {ERROR, WARN, INFO}: number of ISSUES by their max severity
+
+
+def group_by_owner(results: dict, issues: list, include_info: bool = True) -> list:
+    """One row per (owner, issue) with its max severity; INFO findings dropped first if not include_info."""
+    status_by_key = {i.key: i.status for i in issues}
+    sev_by_rank = {v: k for k, v in SEVERITY_ORDER.items()}
+    per_owner: dict = {}
+    for items in results.values():
+        for f in items:
+            if not isinstance(f, Finding):
+                continue
+            if f.severity == INFO and not include_info:
+                continue
+            entry = per_owner.setdefault(f.assignee or UNASSIGNED_OWNER, {}).setdefault(
+                f.issue_key, {"summary": f.summary, "problems": {}})
+            pk = (f.rule, f.reason)
+            entry["problems"][pk] = min(SEVERITY_ORDER[f.severity], entry["problems"].get(pk, 99))
+    groups = []
+    for owner, by_key in per_owner.items():
+        rows = []
+        for key, e in by_key.items():
+            probs = sorted(e["problems"].items(), key=lambda kv: (kv[1], kv[0][0], kv[0][1]))
+            rows.append(OwnerIssue(key, e["summary"], status_by_key.get(key, ""),
+                                   sev_by_rank[probs[0][1]], tuple(p for p, _ in probs)))
+        rows.sort(key=lambda r: (SEVERITY_ORDER[r.max_severity], r.key))
+        counts = {s: sum(1 for r in rows if r.max_severity == s) for s in (ERROR, WARN, INFO)}
+        groups.append(OwnerGroup(owner, tuple(rows), counts))
+    groups.sort(key=lambda g: (g.owner == UNASSIGNED_OWNER, g.owner.casefold()))
+    return groups
+
+
+def owner_names(groups: list) -> list:
+    return [g.owner for g in groups]
+
+
+def owner_message(group: OwnerGroup, release: str) -> str:
+    n = len(group.issues)
+    if n == 0:
+        return ""
+    if group.owner == UNASSIGNED_OWNER:
+        head = f"Hi {' '.join(UNASSIGNED_MENTIONS)}, for release {release} you have {n} unassigned issues to review:"
+    else:
+        head = f"Hi {group.owner}, for release {release} you have {n} issues to review:"
+    lines = [head]
+    for i in group.issues:
+        probs = "; ".join(f"{r}: {x}" for r, x in i.problems)
+        lines.append(f"- {i.key} ({i.max_severity}): {probs}")
+    return "\n".join(lines)
+
+
+def owners_summary(groups: list, release: str) -> str:
+    lines = [f"Release {release} - issues to review per owner:"]
+    for g in groups:
+        c = g.counts
+        lines.append(f"{g.owner}: {len(g.issues)} issues ({c[ERROR]} ERROR, {c[WARN]} WARN, {c[INFO]} INFO)")
+    return "\n".join(lines)

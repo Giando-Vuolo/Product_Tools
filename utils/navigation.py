@@ -11,4 +11,5 @@ RELEASE_PLAN_PAGES = (
     (6, "tools/release_plan/6_Unassigned.py", "Unassigned", "release-plan-unassigned"),
     (7, "tools/7_Release_Plan.py", "Post Actions", None),
     (8, "tools/release_plan/8_Notifications.py", "Notifications", "release-plan-notifications"),
+    (9, "tools/release_plan/9_By_Owner.py", "By owner", "release-plan-by-owner"),
 )
