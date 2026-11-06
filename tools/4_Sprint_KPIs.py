@@ -21,8 +21,10 @@ from utils.kpi_helpers import (
 )
 
 from utils.sonar_helpers import SONAR_KPIS, sonar_configured, fetch_sonar_kpis, format_kpi_value
-from utils.sbom_helpers import SBOM_KPI, sbom_configured, fetch_dependency_findings
-from utils.vanguard_helpers import VANGUARD_KPI, vanguard_configured, fetch_platform_findings
+from utils.sbom_helpers import (SBOM_KPI, sbom_configured, fetch_dependency_findings_by_severity, format_severity_breakdown,
+                                 fetch_findings_by_stage, format_stage_breakdown)
+from utils.vanguard_helpers import (VANGUARD_KPI, vanguard_configured, fetch_platform_findings_summary, format_platform_breakdown,
+                                    scope_accounts)
 
 # KPI sources the user can switch on/off: (key, label, configured?). Jira is always used to find the sprint and its
 # dates; its toggle only controls whether its KPIs are shown and published.
@@ -61,9 +63,10 @@ def fetch_sprint_kpi_dataset():
     # SBOM and Vanguard do not depend on the Jira result, so they run in parallel with it.
     # Sonar needs the sprint end date, so it starts as soon as Jira returns. Worker threads
     # never touch st.session_state; results are read back on the script thread.
-    executor = ThreadPoolExecutor(max_workers=3)
-    sbom_future = executor.submit(fetch_dependency_findings) if source_enabled("sbom") else None
-    vanguard_future = executor.submit(fetch_platform_findings) if source_enabled("vanguard") else None
+    executor = ThreadPoolExecutor(max_workers=4)
+    sbom_future = executor.submit(fetch_dependency_findings_by_severity) if source_enabled("sbom") else None
+    sbom_stages_future = executor.submit(fetch_findings_by_stage) if source_enabled("sbom") else None
+    vanguard_future = executor.submit(fetch_platform_findings_summary) if source_enabled("vanguard") else None
     try:
         res = fetch_sprint_kpi_data(server, token, auth_type, email, sprint_query, selected_types)
 
@@ -80,15 +83,27 @@ def fetch_sprint_kpi_dataset():
                 quality_kpis = sonar_future.result()
             except Exception as e:
                 st.session_state.kpi_error += f"\nWarning: SonarQube: {str(e)}"
+        # Breakdown shown under a quality KPI (SBOM severities, Vanguard severity/urgency/evaluation), by KPI name
+        st.session_state.kpi_quality_breakdowns = {}
         if sbom_future:
             try:
-                quality_kpis[SBOM_KPI] = sbom_future.result()
+                by_severity = sbom_future.result()
+                quality_kpis[SBOM_KPI] = sum(by_severity.values())
+                st.session_state.kpi_quality_breakdowns[SBOM_KPI] = format_severity_breakdown(by_severity)
             except Exception as e:
                 st.session_state.kpi_error += f"\nWarning: SBOM Inventory: {str(e)}"
+            else:
+                # Per-stage lines (PROD, PRELIVE) are extra detail: if they fail, the total above is still shown
+                try:
+                    st.session_state.kpi_quality_breakdowns[SBOM_KPI] += "  \n" + format_stage_breakdown(sbom_stages_future.result())
+                except Exception as e:
+                    st.session_state.kpi_error += f"\nWarning: SBOM Inventory stages: {str(e)}"
         st.session_state.kpi_vanguard_fetched_at = None
         if vanguard_future:
             try:
-                quality_kpis[VANGUARD_KPI] = vanguard_future.result()
+                summary = vanguard_future.result()
+                quality_kpis[VANGUARD_KPI] = summary["total"]
+                st.session_state.kpi_quality_breakdowns[VANGUARD_KPI] = format_platform_breakdown(summary)
                 st.session_state.kpi_vanguard_fetched_at = datetime.now(timezone.utc)
             except ValueError as e:
                 st.session_state.kpi_error += f"\nWarning: {e}"
@@ -537,13 +552,17 @@ def render_quality_kpis(quality_names, quality_kpis):
         if source_enabled("vanguard"):
             captured_at = st.session_state.get("kpi_vanguard_fetched_at")
             if captured_at:
-                sources.append(f"Vanguard: open findings, excluding previews, captured {captured_at:%Y-%m-%d %H:%M UTC}")
+                sources.append(f"Vanguard: open findings of {' + '.join(scope_accounts())}, excluding previews, "
+                               f"captured {captured_at:%Y-%m-%d %H:%M UTC}")
             else:
                 sources.append("Vanguard: current findings not available; calculate KPIs to retry")
         st.caption("Code Quality from " + " · ".join(sources))
         for start in range(0, len(quality_names), 4):
             for col, name in zip(st.columns(4), quality_names[start:start + 4]):
                 col.metric(name, format_kpi_value(name, quality_kpis.get(name)) or "N/A")
+                breakdown = (st.session_state.get("kpi_quality_breakdowns") or {}).get(name)
+                if breakdown:
+                    col.caption(breakdown)
 
 
 def render_confluence_publisher(date_str, total_sp, achieved_sp, sprint_pct, releases_count, open_bugs,
@@ -665,7 +684,7 @@ if not source_enabled("jira") and not selected_quality_kpis():
 col_s, col_b = st.columns([3, 1])
 with col_s:
     default_sprint_num = os.getenv("OVERVIEW_SPRINT_NUM", "")
-    sprint_val = st.text_input("Enter Sprint Name or ID:", value=default_sprint_num, placeholder="e.g. 142 or 'Sprint 15'", key="kpi_sprint_query")
+    sprint_val = st.text_input("Enter Sprint Name or ID:", value=default_sprint_num, placeholder="e.g. ReCall2 -DIGI:HUB Sprint 14X", key="kpi_sprint_query")
 
 st.markdown("**Filter Ingested Issue Types**", help="Select which issue types should be loaded into the workspace.")
 col_cb1, col_cb2, col_cb3, col_cb4, col_cb5, col_cb6, col_cb7 = st.columns(7)
