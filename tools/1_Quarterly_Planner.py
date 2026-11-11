@@ -652,6 +652,7 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
             elif not progress_committed_label.strip() or not progress_quarter_label.strip():
                 st.error("Enter both the committed Epic label and the quarter label.")
             else:
+                st.session_state.pop("jira_query_error", None)
                 with st.spinner("Downloading committed Epics and calculating progress..."):
                     result = build_quarterly_epic_progress_table(
                         st.session_state.jira_server,
@@ -666,7 +667,11 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
                         include_parent_link=True,
                     )
                 if result is None:
-                    st.error("The quarterly Epic progress could not be loaded. Check the Jira connection and labels.")
+                    jira_error = st.session_state.pop("jira_query_error", None)
+                    st.error(
+                        "The quarterly Epic progress could not be loaded. Check the Jira connection, project key and labels."
+                        + (f"\n\n**Jira said:** {jira_error}" if jira_error else "")
+                    )
                 elif result["df"].empty:
                     st.warning("No committed Epics were found for those labels.")
                 else:
