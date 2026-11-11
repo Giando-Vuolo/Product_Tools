@@ -663,6 +663,7 @@ if st.session_state.active_tab_qp == "🔌 Ingestion":
                         st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)"),
                         st.session_state.get("jira_email", ""),
                         project_key=progress_project.strip() or os.getenv("PROJECT_NAME", "MYPROJECT"),
+                        include_parent_link=True,
                     )
                 if result is None:
                     st.error("The quarterly Epic progress could not be loaded. Check the Jira connection and labels.")
@@ -711,7 +712,7 @@ elif st.session_state.active_tab_qp == "✍️ Workbook":
     if isinstance(progress_df, pd.DataFrame) and not progress_df.empty:
         st.caption("Select the Epics to communicate, define their planned release milestone, and write a short update. Jira fields remain read-only.")
         progress_columns = [
-            "Key", "Summary", "Completion", "Closed / Resolved", "To Do", "In progress", "Status", "Team", "Presentation update",
+            "Parent Link", "Key", "Summary", "Completion", "Closed / Resolved", "To Do", "In progress", "Status", "Team", "Presentation update",
             "Include in delivery roadmap", "Release version", "Delivery month", "Delivery timing"
         ]
         progress_columns = [column for column in progress_columns if column in progress_df.columns]
@@ -724,6 +725,7 @@ elif st.session_state.active_tab_qp == "✍️ Workbook":
                     "Presentation update", "Include in delivery roadmap", "Release version", "Delivery month", "Delivery timing"
                 }],
                 column_config={
+                    "Parent Link": st.column_config.TextColumn("Parent Link", width="medium"),
                     "Key": st.column_config.TextColumn("Key", width="small"),
                     "Summary": st.column_config.TextColumn("Epic", width="large"),
                 "Completion": st.column_config.TextColumn("Completion", width="small"),

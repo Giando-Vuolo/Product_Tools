@@ -333,10 +333,16 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex):
     )
     key_style = ParagraphStyle("QuarterlyProgressKey", parent=body_style, fontName="Helvetica-Bold")
 
-    visible_columns = [
-        ("Key", 55), ("Epic", 150), ("Progress", 60), ("Closed / Resolved", 56),
-        ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 75), ("Update", 123)
-    ]
+    if "Parent Link" in df.columns:
+        visible_columns = [
+            ("Parent Link", 90), ("Key", 55), ("Epic", 120), ("Progress", 60), ("Closed / Resolved", 56),
+            ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 60), ("Update", 78)
+        ]
+    else:
+        visible_columns = [
+            ("Key", 55), ("Epic", 150), ("Progress", 60), ("Closed / Resolved", 56),
+            ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 75), ("Update", 123)
+        ]
     column_sources = {"Epic": "Summary", "Progress": "Completion", "Update": "Presentation update"}
     table_data = [[Paragraph(name, header_style) for name, _ in visible_columns]]
     for _, row in df.iterrows():
@@ -452,12 +458,20 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progr
         if subtitle:
             add_text(slide, subtitle, 0.7, 0.82, 11.7, 0.24, size=10, color=muted)
 
-    progress_columns = [
-        ("Key", "Key", 0.85), ("Epic", "Summary", 2.70), ("Progress", "Completion", 0.85),
-        ("Closed / Resolved", "Closed / Resolved", 0.90), ("To Do", "To Do", 0.65),
-        ("In progress", "In progress", 0.90), ("Status", "Status", 0.90), ("Team", "Team", 1.10),
-        ("Update", "Presentation update", 3.13),
-    ]
+    if progress_df is not None and "Parent Link" in progress_df.columns:
+        progress_columns = [
+            ("Parent Link", "Parent Link", 1.40), ("Key", "Key", 0.85), ("Epic", "Summary", 2.20),
+            ("Progress", "Completion", 0.85), ("Closed / Resolved", "Closed / Resolved", 0.90),
+            ("To Do", "To Do", 0.65), ("In progress", "In progress", 0.90), ("Status", "Status", 0.80),
+            ("Team", "Team", 1.00), ("Update", "Presentation update", 2.43),
+        ]
+    else:
+        progress_columns = [
+            ("Key", "Key", 0.85), ("Epic", "Summary", 2.70), ("Progress", "Completion", 0.85),
+            ("Closed / Resolved", "Closed / Resolved", 0.90), ("To Do", "To Do", 0.65),
+            ("In progress", "In progress", 0.90), ("Status", "Status", 0.90), ("Team", "Team", 1.10),
+            ("Update", "Presentation update", 3.13),
+        ]
     rows_per_slide = 12
     progress_df = prepare_quarterly_progress_for_presentation(progress_df)
     for start in range(0, len(progress_df), rows_per_slide):
