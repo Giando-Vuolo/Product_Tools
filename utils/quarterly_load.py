@@ -64,7 +64,7 @@ def render_load_source(prefix, csv_help, template_bytes, template_name, loaded_s
             col_project, col_committed, col_quarter = st.columns(3)
             with col_project:
                 project = st.text_input(
-                    "Project key", key=_remembered(f"{prefix}_project", os.getenv("PROJECT_NAME", "MYPROJECT")),
+                    "Project key", key=_remembered(f"{prefix}_project", os.getenv("JIRA_PROJECT_KEY", "")),
                     help="The Jira project key, e.g. RECALLTWO. Leave empty to search all projects.",
                 )
             with col_committed:

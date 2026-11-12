@@ -1022,6 +1022,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
         with col_proj:
             default_project_key = (
                 st.session_state.get("quarterly_epic_project_key")
+                or os.getenv("JIRA_PROJECT_KEY", "").strip()
                 or st.session_state.get("project_name")
                 or os.getenv("PROJECT_NAME", "MYPROJECT").strip()
                 or "MYPROJECT"
