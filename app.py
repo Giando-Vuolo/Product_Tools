@@ -931,9 +931,11 @@ st.markdown("""
             border: 1px solid #3E3E4A;
             border-radius: 12px;
             flex: 0 0 auto;
-            width: fit-content;
+            /* A fixed width, not fit-content: with fit-content Streamlit's overflow logic
+               measures the collapsed bar and folds every item into "N more". */
+            width: min(980px, calc(100vw - 220px));
             max-width: 100%;
-            justify-content: flex-start;
+            justify-content: center;
             gap: 0.25rem;
             padding: 0.25rem 0.5rem;
             /* centered on the page header, independent of the Deploy button on the right */
