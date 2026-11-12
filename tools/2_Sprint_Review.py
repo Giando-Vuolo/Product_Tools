@@ -257,12 +257,8 @@ def sync_next_release_changes():
 # ---------------------------------------------------------
 load_dotenv(override=True)
 
-# Configuration: Presets for item types to include during ingestion
-env_types = os.getenv("DEFAULT_INCLUDED_TYPES")
-if env_types:
-    DEFAULT_INCLUDED_TYPES = [t.strip() for t in env_types.split(",") if t.strip()]
-else:
-    DEFAULT_INCLUDED_TYPES = ["User Story", "Task", "Technical Task", "Technical Sub-task", "Improvement", "Bug"]
+# Item types preselected for ingestion: the same defaults as Sprint KPIs
+DEFAULT_INCLUDED_TYPES = ["User Story", "Task", "Improvement", "Bug"]
 
 # Read default environment variables if provided
 default_jira_server = os.getenv("JIRA_SERVER", "")
@@ -901,23 +897,23 @@ if st.session_state.active_tab == "🔌 Ingestion":
     with col_cb3:
         inc_task = st.checkbox("Task", value=("Task" in DEFAULT_INCLUDED_TYPES), key="inc_task", disabled=inc_all)
     with col_cb4:
-        inc_tech = st.checkbox("Technical Task", value=("Technical Task" in DEFAULT_INCLUDED_TYPES), key="inc_tech", disabled=inc_all)
-    with col_cb5:
-        inc_subtask = st.checkbox("Sub-task", value=("Technical Sub-task" in DEFAULT_INCLUDED_TYPES), key="inc_subtask", disabled=inc_all)
-    with col_cb6:
         inc_improvement = st.checkbox("Improvement", value=("Improvement" in DEFAULT_INCLUDED_TYPES), key="inc_improvement", disabled=inc_all)
-    with col_cb7:
+    with col_cb5:
         inc_bug = st.checkbox("Bug", value=("Bug" in DEFAULT_INCLUDED_TYPES), key="inc_bug", disabled=inc_all)
+    with col_cb6:
+        inc_tech = st.checkbox("Technical Task", value=("Technical Task" in DEFAULT_INCLUDED_TYPES), key="inc_tech", disabled=inc_all)
+    with col_cb7:
+        inc_subtask = st.checkbox("Sub-task", value=("Technical Sub-task" in DEFAULT_INCLUDED_TYPES), key="inc_subtask", disabled=inc_all)
 
     selected_types = []
     if not inc_all:
         if inc_story: selected_types.append("User Story")
         if inc_task: selected_types.append("Task")
+        if inc_improvement: selected_types.append("Improvement")
+        if inc_bug: selected_types.append("Bug")
         if inc_tech: selected_types.append("Technical Task")
         if inc_subtask:
             selected_types.extend(["Technical Sub-task", "Sub-task"])
-        if inc_improvement: selected_types.append("Improvement")
-        if inc_bug: selected_types.append("Bug")
 
     st.divider()
     
