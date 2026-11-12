@@ -122,8 +122,12 @@ def test_workbook_kpis_are_a_tab():
 
 def test_workbook_kpi_tab_without_kpis_points_to_ingestion():
     at = AppTest.from_file(PAGE, default_timeout=60)
-    at.session_state["overview_df"] = pd.DataFrame(
-        {"Select": [False], "Key": ["P-1"], "Summary": ["s"], "Type": ["Task"], "Status": ["Done"], "Labels": [""]})
+    # Same columns as a real Overview load (the Workbook groups and sorts by Epic, Fix Version, ...)
+    at.session_state["overview_df"] = pd.DataFrame([{
+        "Select": False, "Key": "P-1", "Summary": "s", "Epic": "E", "Status": "Done", "Fix Version": "v1",
+        "Outlook": "", "Sprint Review": True, "Release Notes": True, "Assignee": "A", "Demo": False,
+        "Type": "Task", "Labels": "",
+    }])
     at.session_state["active_tab"] = "✍️ Workbook"
     at.run()
     assert not at.exception
