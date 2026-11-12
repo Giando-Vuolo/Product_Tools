@@ -413,22 +413,23 @@ def build_delivery_roadmap_slide_pdf(roadmap_df, title, primary_color_hex):
     return buffer.getvalue()
 
 
-def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle=""):
+def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle="", by_initiative=False):
     """Create a presentation-style landscape slide for the quarterly Epic progress.
 
     With a local PowerPoint template in assets/templates the PDF copies its look
     (same design as the PowerPoint export), so the on-screen preview matches it.
+    With by_initiative there is one page per initiative (Parent Link), as in the PowerPoint.
     """
     template_path = find_quarterly_pptx_template()
     if template_path is not None:
         try:
-            return _build_template_progress_pdf(df, title, subtitle, template_path)
+            return _build_template_progress_pdf(df, title, subtitle, template_path, by_initiative)
         except Exception:
             pass  # unreadable template: fall back to the built-in design
     from reportlab.lib.pagesizes import letter, landscape
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, PageBreak
     from utils.pdf_helpers import get_progress_bar_drawing
 
     buffer = io.BytesIO()
@@ -456,46 +457,62 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle=""
     )
     key_style = ParagraphStyle("QuarterlyProgressKey", parent=body_style, fontName="Helvetica-Bold")
 
-    if "Parent Link" in df.columns:
-        visible_columns = [
-            ("Parent Link", 90), ("Key", 55), ("Epic", 120), ("Progress", 60), ("Closed / Resolved", 56),
-            ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 60), ("Update", 78)
-        ]
-    else:
-        visible_columns = [
-            ("Key", 55), ("Epic", 150), ("Progress", 60), ("Closed / Resolved", 56),
-            ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 75), ("Update", 123)
-        ]
-    column_sources = {"Epic": "Summary", "Progress": "Completion", "Update": "Presentation update"}
-    table_data = [[Paragraph(name, header_style) for name, _ in visible_columns]]
-    for _, row in df.iterrows():
-        cells = []
-        for name, _ in visible_columns:
-            source = column_sources.get(name, name)
-            value = row.get(source, "-")
-            value = "-" if pd.isna(value) or str(value).strip() == "" else str(value)
-            if name == "Progress":
-                cells.append(get_progress_bar_drawing(value, primary, width=52, height=18) or Paragraph(value, body_style))
-            else:
-                cells.append(Paragraph(html.escape(value), key_style if name == "Key" else body_style))
-        table_data.append(cells)
+    def progress_table(df):
+        if "Parent Link" in df.columns:
+            visible_columns = [
+                ("Parent Link", 90), ("Key", 55), ("Epic", 120), ("Progress", 60), ("Closed / Resolved", 56),
+                ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 60), ("Update", 78)
+            ]
+        else:
+            visible_columns = [
+                ("Key", 55), ("Epic", 150), ("Progress", 60), ("Closed / Resolved", 56),
+                ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 75), ("Update", 123)
+            ]
+        column_sources = {"Epic": "Summary", "Progress": "Completion", "Update": "Presentation update"}
+        table_data = [[Paragraph(name, header_style) for name, _ in visible_columns]]
+        for _, row in df.iterrows():
+            cells = []
+            for name, _ in visible_columns:
+                source = column_sources.get(name, name)
+                value = row.get(source, "-")
+                value = "-" if pd.isna(value) or str(value).strip() == "" else str(value)
+                if name == "Progress":
+                    cells.append(get_progress_bar_drawing(value, primary, width=52, height=18) or Paragraph(value, body_style))
+                else:
+                    cells.append(Paragraph(html.escape(value), key_style if name == "Key" else body_style))
+            table_data.append(cells)
 
-    table = Table(table_data, colWidths=[width for _, width in visible_columns], repeatRows=1)
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), primary),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#CBD5E1")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-    ]))
+        table = Table(table_data, colWidths=[width for _, width in visible_columns], repeatRows=1)
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), primary),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#CBD5E1")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+        ]))
+        return table
+
     project_name = os.getenv("PROJECT_NAME", "MYPROJECT")
     generated = pd.Timestamp.today().strftime("%d %b %Y")
-    story = [
-        Paragraph(html.escape(title), title_style),
-        Paragraph(f"<b>Project:</b> {html.escape(project_name)} &nbsp; | &nbsp; <b>Generated:</b> {generated} &nbsp; | &nbsp; <b>Committed Epics:</b> {len(df)}", subtitle_style),
-        table,
-    ]
+    if by_initiative:
+        # One page per initiative table, like the PowerPoint slides
+        story = []
+        slides = progress_slides(df, title, subtitle, by_initiative=True)
+        for index, spec in enumerate(slides):
+            story += [
+                Paragraph(html.escape(spec["title"]), title_style),
+                Paragraph(f"<b>{html.escape(spec['subtitle'])}</b> &nbsp; | &nbsp; <b>Generated:</b> {generated} &nbsp; | &nbsp; <b>Epics:</b> {len(spec['df'])}", subtitle_style),
+                progress_table(spec["df"]),
+            ]
+            if index < len(slides) - 1:
+                story.append(PageBreak())
+    else:
+        story = [
+            Paragraph(html.escape(title), title_style),
+            Paragraph(f"<b>Project:</b> {html.escape(project_name)} &nbsp; | &nbsp; <b>Generated:</b> {generated} &nbsp; | &nbsp; <b>Committed Epics:</b> {len(df)}", subtitle_style),
+            progress_table(df),
+        ]
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
@@ -565,6 +582,48 @@ def _progress_columns(df):
     ]
 
 
+NO_INITIATIVE_LABEL = "No initiative"
+
+
+def _natural_key(text):
+    """Sort key that orders embedded numbers by value ("INIT-2" before "INIT-10")."""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", str(text))]
+
+
+def progress_slides(df, title, subtitle="", by_initiative=False):
+    """Plan the progress report slides: [{"title", "subtitle", "df", "columns"}].
+
+    All Epics in one table (paged by PROGRESS_ROWS_PER_SLIDE), or with
+    by_initiative one table per Parent Link: subtitle "Initiative: <Parent Link>"
+    and no Parent Link column. Continuation slides get "(cont. N)" in the title.
+    """
+    df = prepare_quarterly_progress_for_presentation(df) if df is not None else pd.DataFrame()
+    title = (title or "").strip()
+    subtitle = (subtitle or "").strip()
+    if by_initiative:
+        parents = df["Parent Link"] if "Parent Link" in df.columns else pd.Series("-", index=df.index)
+        parents = parents.fillna("-").astype(str).str.strip().replace({"": "-"})
+        groups = [
+            (f"Initiative: {NO_INITIATIVE_LABEL if parent == '-' else parent}",
+             df[parents == parent].drop(columns=["Parent Link"], errors="ignore"))
+            # Initiatives by name (keys sort naturally: INIT-2 before INIT-10), Epics without one last
+            for parent in sorted(set(parents), key=lambda p: (p == "-", _natural_key(p)))
+        ]
+    else:
+        groups = [(subtitle, df)]
+    slides = []
+    for group_subtitle, group_df in groups:
+        columns = _progress_columns(group_df)
+        for page, start in enumerate(range(0, len(group_df), PROGRESS_ROWS_PER_SLIDE), start=1):
+            slides.append({
+                "title": title if page == 1 else f"{title} (cont. {page})",
+                "subtitle": group_subtitle,
+                "df": group_df.iloc[start:start + PROGRESS_ROWS_PER_SLIDE].reset_index(drop=True),
+                "columns": columns,
+            })
+    return slides
+
+
 def _template_chrome(template_path):
     """Logo and footer texts of the template's content layout, for drawing them into the PDF.
 
@@ -626,7 +685,7 @@ def _template_progress_bar(value, width, height):
     return drawing
 
 
-def _build_template_progress_pdf(df, title, subtitle, template_path):
+def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiative=False):
     """PDF version of the template-styled PowerPoint progress slides (same layout, colours and paging)."""
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
@@ -639,12 +698,9 @@ def _build_template_progress_pdf(df, title, subtitle, template_path):
     white = colors.white
     teal = colors.HexColor(TEMPLATE_TEAL_HEX)
     background = colors.HexColor(TEMPLATE_BACKGROUND_HEX)
-    title = (title or "").strip()
-    subtitle = (subtitle or "").strip()
-
-    df = prepare_quarterly_progress_for_presentation(df)
-    columns = _progress_columns(df)
-    pages = max(1, -(-len(df) // PROGRESS_ROWS_PER_SLIDE))
+    slides = progress_slides(df, title, subtitle, by_initiative) or [
+        {"title": (title or "").strip(), "subtitle": (subtitle or "").strip(), "df": pd.DataFrame(), "columns": _progress_columns(df)}
+    ]
     logo = ImageReader(io.BytesIO(chrome["logo"][0])) if chrome["logo"] else None
 
     def y_from_top(inches_from_top):
@@ -657,14 +713,13 @@ def _build_template_progress_pdf(df, title, subtitle, template_path):
         if logo is not None:
             _, left, top, width, height = chrome["logo"]
             canvas.drawImage(logo, left * point, y_from_top(top + height), width * point, height * point, mask="auto")
-        page_number = canvas.getPageNumber()
-        suffix = "" if page_number == 1 else f" (cont. {page_number})"
+        spec = slides[min(canvas.getPageNumber(), len(slides)) - 1]
         canvas.setFillColor(white)
         canvas.setFont("Helvetica", 24)
-        canvas.drawString(0.52 * point, y_from_top(0.93), f"{title}{suffix}")
-        if subtitle:
+        canvas.drawString(0.52 * point, y_from_top(0.93), spec["title"])
+        if spec["subtitle"]:
             canvas.setFont("Helvetica", 13)
-            canvas.drawString(0.52 * point, y_from_top(1.36), subtitle)
+            canvas.drawString(0.52 * point, y_from_top(1.36), spec["subtitle"])
         for text, left, top, width, size, color, right in chrome["texts"]:
             canvas.setFillColor(colors.HexColor(color))
             canvas.setFont("Helvetica", size)
@@ -685,14 +740,14 @@ def _build_template_progress_pdf(df, title, subtitle, template_path):
     header_style = ParagraphStyle("TplHeader", fontName="Helvetica-Bold", fontSize=8, leading=9.5, textColor=white)
     body_style = ParagraphStyle("TplBody", fontName="Helvetica", fontSize=7.2, leading=8.6, textColor=white)
     key_style = ParagraphStyle("TplKey", parent=body_style, fontName="Helvetica-Bold")
-    # PowerPoint stretches the columns to the full table width; do the same
-    scale = table_width / sum(c[2] for c in columns)
-    widths = [c[2] * scale * point for c in columns]
-
     story = []
-    for page in range(pages):
-        chunk = df.iloc[page * PROGRESS_ROWS_PER_SLIDE:(page + 1) * PROGRESS_ROWS_PER_SLIDE]
-        row_height = table_height * point / (len(chunk) + 1)
+    for page, spec in enumerate(slides):
+        chunk, columns = spec["df"], spec["columns"]
+        # PowerPoint stretches the columns to the full table width; do the same
+        scale = table_width / sum(c[2] for c in columns)
+        widths = [c[2] * scale * point for c in columns]
+        # Rows never get taller than on a full slide, so a short table stays compact
+        row_height = table_height * point / (max(len(chunk), PROGRESS_ROWS_PER_SLIDE) + 1)
         data = [[Paragraph(html.escape(header), header_style) for header, _, _ in columns]]
         for _, row in chunk.iterrows():
             cells = []
@@ -716,13 +771,13 @@ def _build_template_progress_pdf(df, title, subtitle, template_path):
             ("GRID", (0, 0), (-1, -1), 1, white),
         ]))
         story.append(table)
-        if page < pages - 1:
+        if page < len(slides) - 1:
             story.append(PageBreak())
     doc.build(story)
     return buffer.getvalue()
 
 
-def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progress_subtitle, roadmap_title, roadmap_subtitle, primary_color_hex):
+def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progress_subtitle, roadmap_title, roadmap_subtitle, primary_color_hex, by_initiative=False):
     """Build editable PowerPoint slides for quarterly progress and delivery milestones."""
     from pptx import Presentation
     from pptx.util import Inches, Pt
@@ -802,30 +857,16 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progr
         if subtitle:
             add_text(slide, subtitle, 0.7, 0.82, 11.7, 0.24, size=10, color=muted)
 
-    if progress_df is not None and "Parent Link" in progress_df.columns:
-        progress_columns = [
-            ("Parent Link", "Parent Link", 1.40), ("Key", "Key", 0.85), ("Epic", "Summary", 2.20),
-            ("Progress", "Completion", 0.85), ("Closed / Resolved", "Closed / Resolved", 0.90),
-            ("To Do", "To Do", 0.65), ("In progress", "In progress", 0.90), ("Status", "Status", 0.80),
-            ("Team", "Team", 1.00), ("Update", "Presentation update", 2.43),
-        ]
-    else:
-        progress_columns = [
-            ("Key", "Key", 0.85), ("Epic", "Summary", 2.70), ("Progress", "Completion", 0.85),
-            ("Closed / Resolved", "Closed / Resolved", 0.90), ("To Do", "To Do", 0.65),
-            ("In progress", "In progress", 0.90), ("Status", "Status", 0.90), ("Team", "Team", 1.10),
-            ("Update", "Presentation update", 3.13),
-        ]
-    rows_per_slide = 12
-    progress_df = prepare_quarterly_progress_for_presentation(progress_df)
-    for start in range(0, len(progress_df), rows_per_slide):
-        chunk = progress_df.iloc[start:start + rows_per_slide].reset_index(drop=True)
-        suffix = "" if start == 0 else f" (cont. {start // rows_per_slide + 1})"
+    # One slide per table: all Epics, or one table per initiative (Parent Link)
+    for slide_spec in progress_slides(progress_df, progress_title, progress_subtitle, by_initiative):
+        chunk, progress_columns = slide_spec["df"], slide_spec["columns"]
         slide = prs.slides.add_slide(content_layout)
-        add_chrome(slide, f"{progress_title}{suffix}", progress_subtitle)
+        add_chrome(slide, slide_spec["title"], slide_spec["subtitle"])
         table_left, table_top, table_width = 0.42, 1.90, 12.45
         table_height = 4.92 if using_template else 5.85
-        row_height = table_height / (len(chunk) + 1)
+        # Rows never get taller than on a full slide, so a short table (e.g. one initiative) stays compact
+        row_height = table_height / (max(len(chunk), PROGRESS_ROWS_PER_SLIDE) + 1)
+        table_height = row_height * (len(chunk) + 1)
         table_shape = slide.shapes.add_table(len(chunk) + 1, len(progress_columns), Inches(table_left), Inches(table_top), Inches(table_width), Inches(table_height))
         table = table_shape.table
         for row in table.rows:

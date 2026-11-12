@@ -210,3 +210,41 @@ class QuarterlyPptxTemplateTests(unittest.TestCase):
         table = next(shape for shape in Presentation(io.BytesIO(pptx)).slides[0].shapes if shape.has_table).table
         self.assertEqual(str(table.cell(0, 0).fill.fore_color.rgb), "0B2756")
         self.assertEqual({str(table.cell(1, 0).fill.fore_color.rgb), str(table.cell(2, 0).fill.fore_color.rgb)}, {"FFFFFF", "F1F5F9"})
+
+
+class ProgressByInitiativeTests(unittest.TestCase):
+    def _df(self):
+        rows = [{"Parent Link": "INIT-1 - Platform", "Key": f"A-{i}", "Summary": "Epic", "Completion": "50%", "Status": "In Progress"} for i in range(14)]
+        rows += [{"Parent Link": "INIT-2 - Customer", "Key": "B-1", "Summary": "Epic", "Completion": "10%", "Status": "To Do"},
+                 {"Parent Link": "-", "Key": "C-1", "Summary": "Epic", "Completion": "0%", "Status": "To Do"}]
+        return pd.DataFrame(rows)
+
+    def test_slides_per_initiative(self):
+        from utils.quarterly_planner_helpers import progress_slides
+        slides = progress_slides(self._df(), "Committed Epics Q4 - Status", "ignored", by_initiative=True)
+        self.assertEqual([s["subtitle"] for s in slides], [
+            "Initiative: INIT-1 - Platform", "Initiative: INIT-1 - Platform",
+            "Initiative: INIT-2 - Customer", "Initiative: No initiative",
+        ])
+        self.assertEqual([s["title"] for s in slides][:2], ["Committed Epics Q4 - Status", "Committed Epics Q4 - Status (cont. 2)"])
+        self.assertEqual([len(s["df"]) for s in slides], [12, 2, 1, 1])
+        self.assertTrue(all("Parent Link" not in [c[1] for c in s["columns"]] for s in slides))
+
+    def test_slides_all_in_one_table(self):
+        from utils.quarterly_planner_helpers import progress_slides
+        slides = progress_slides(self._df(), "T", "Sub")
+        self.assertEqual([len(s["df"]) for s in slides], [12, 4])
+        self.assertEqual({s["subtitle"] for s in slides}, {"Sub"})
+        self.assertEqual(slides[0]["columns"][0][0], "Parent Link")
+
+    def test_pptx_and_pdf_by_initiative(self):
+        from pptx import Presentation
+        from pypdf import PdfReader
+        from utils.quarterly_planner_helpers import build_quarterly_progress_pptx, build_quarterly_progress_slide_pdf
+        prs = Presentation(io.BytesIO(build_quarterly_progress_pptx(self._df(), None, "T", "Sub", "", "", "#0B2756", by_initiative=True)))
+        self.assertEqual(len(prs.slides), 4)
+        texts = [shape.text_frame.text for shape in prs.slides[2].shapes if shape.has_text_frame]
+        self.assertIn("Initiative: INIT-2 - Customer", texts)
+        reader = PdfReader(io.BytesIO(build_quarterly_progress_slide_pdf(self._df(), "T", "#0B2756", "Sub", by_initiative=True)))
+        self.assertEqual(len(reader.pages), 4)
+        self.assertIn("Initiative: No initiative", reader.pages[3].extract_text())
