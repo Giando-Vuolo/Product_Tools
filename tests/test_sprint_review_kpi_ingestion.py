@@ -44,5 +44,6 @@ def test_kpi_table_reflects_metrics_when_section_already_enabled():
     kpi_df = at.session_state["current_sprint_kpi_df"]
     assert not kpi_df.empty
     assert "Committed" in set(kpi_df["KPI"])
-    assert len(at.dataframe) >= 1
+    # The KPI values are shown in the Workbook's Sprint KPIs tab, not as a table in Ingestion
+    assert len(at.dataframe) == 0
     assert not at.exception

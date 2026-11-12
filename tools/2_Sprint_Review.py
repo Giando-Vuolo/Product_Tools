@@ -93,12 +93,48 @@ def rebuild_current_sprint_kpi_df():
     metrics = st.session_state.get("current_sprint_metrics") or {}
     st.session_state.current_sprint_kpi_df = sprint_kpi_summary_df(valid_selection, metrics)
 
+def render_loaded_check(text):
+    """Persistent green check under a loader, shown while its data is in the workspace."""
+    st.markdown(f":green[**✅ {text}**]")
+
+
+def loaded_rows(df):
+    return 0 if df is None else len(df)
+
+
 _KPI_SOURCE_CONFIGURED = {"jira": lambda: True, "sonar": sonar_configured, "sbom": sbom_configured, "vanguard": vanguard_configured}
 
 
 def kpi_source_enabled(key):
     """Same rule as the Sprint KPIs page: configured and not switched off in its KPI Sources toggles."""
     return bool(st.session_state.get(f"kpi_src_{key}", True)) and _KPI_SOURCE_CONFIGURED[key]()
+
+
+def render_sprint_kpis_tab():
+    """Workbook tab: read-only view of the KPIs calculated in the Ingestion step (or the Sprint KPIs page)."""
+    st.markdown("#### 📊 Sprint KPIs")
+    workbook_metrics = st.session_state.get("current_sprint_metrics")
+    if not workbook_metrics:
+        st.info("No sprint KPIs yet. Calculate them in step **🔌 Ingestion** (section 📊 Sprint KPIs) with **🧮 Calculate Sprint KPIs**.")
+    else:
+        st.caption(f"Sprint **{workbook_metrics.get('sprint_name') or 'current sprint'}** · {workbook_metrics.get('dates', '')}")
+        all_kpis_df = sprint_kpi_summary_df(SPRINT_REVIEW_KPI_OPTIONS, workbook_metrics)
+        all_kpis_df = all_kpis_df[all_kpis_df["Value"].astype(str).str.strip() != ""].reset_index(drop=True)
+        in_pdf = set(st.session_state.get("sprint_kpi_selection") or []) if st.session_state.get("include_sprint_kpis") else set()
+        if all_kpis_df.empty:
+            st.info("The KPI sources returned no values for this sprint.")
+        else:
+            per_row = 4
+            for start in range(0, len(all_kpis_df), per_row):
+                cols = st.columns(per_row)
+                for col, (_, row) in zip(cols, all_kpis_df.iloc[start:start + per_row].iterrows()):
+                    with col.container(border=True):
+                        label = f"📄 {row['KPI']}" if row["KPI"] in in_pdf else row["KPI"]
+                        st.metric(label, str(row["Value"]))
+        if in_pdf:
+            st.caption("📄 = included in the Sprint Review PDF. Change the selection in step 🔌 Ingestion.")
+        else:
+            st.caption("The KPI section is not included in the PDF. Enable it in step 🔌 Ingestion.")
 
 
 def check_any_selected(df_key, editor_key, display_df_indices):
@@ -975,6 +1011,8 @@ if st.session_state.active_tab == "🔌 Ingestion":
                     else:
                         st.session_state.ingestion_feedback = {"type": "error", "text": "❌ Failed to connect or load Overview tickets from Jira. Check server credentials or query parameters."}
                         st.rerun()
+            if loaded_rows(st.session_state.get("overview_df")):
+                render_loaded_check(f"{loaded_rows(st.session_state.overview_df)} Overview tickets loaded")
         
     with col_ot_query:
         with st.container(border=True):
@@ -1018,6 +1056,8 @@ if st.session_state.active_tab == "🔌 Ingestion":
                     else:
                         st.session_state.ingestion_feedback = {"type": "error", "text": "❌ Failed to connect or load Outlook tickets from Jira. Check server credentials or query parameters."}
                         st.rerun()
+            if loaded_rows(st.session_state.get("outlook_df")):
+                render_loaded_check(f"{loaded_rows(st.session_state.outlook_df)} Outlook tickets loaded")
     
     # Standard quarterly Epic progress table
     st.subheader("📈 Quarterly Epic Progress")
@@ -1124,13 +1164,16 @@ if st.session_state.active_tab == "🔌 Ingestion":
                 except Exception as e:
                     logger.exception(f"tools/2_Sprint_Review.py button click EXCEPTION: {e}")
                     st.error(f"Error: {e}")
+        epic_table = next((t for t in st.session_state.custom_tables if t.get("table_type") == "quarterly_epic_progress"), None)
+        if epic_table is not None and loaded_rows(epic_table.get("df")):
+            render_loaded_check(f"{loaded_rows(epic_table['df'])} committed Epics loaded ({epic_table.get('title', '')})")
 
     st.divider()
 
     # Sprint KPI summary (optional section of the generated PDF)
     st.subheader("📊 Sprint KPIs (Optional)")
     st.caption("Calculate the sprint KPIs here (same calculation as the Sprint KPIs page, using the issue types selected above) "
-               "and optionally include a compact KPI snapshot in the generated Sprint Review PDF. They are also shown in the Workbook step.")
+               "and optionally include a compact KPI snapshot in the generated Sprint Review PDF. You can see them in the **📊 Sprint KPIs** tab of the Workbook step.")
 
     # The KPIs use the single Sprint Number of the Overview query. Only when Overview is loaded with JQL
     # (no sprint number on screen) is a sprint asked for here, kept in its own key so it survives tab switches.
@@ -1172,7 +1215,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
                 st.warning(f"⚠️ {warning}")
     elif st.session_state.get("current_sprint_metrics"):
         current = st.session_state.current_sprint_metrics
-        st.caption(f"Current KPIs: **{current.get('sprint_name') or 'current sprint'}** ({current.get('dates', '')}).")
+        render_loaded_check(f"KPIs calculated for {current.get('sprint_name') or 'current sprint'} ({current.get('dates', '')})")
 
     def _sync_include_sprint_kpis():
         st.session_state.include_sprint_kpis = st.session_state.include_sprint_kpis_widget
@@ -1208,9 +1251,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
             placeholder="Select KPI metrics...",
             on_change=_sync_sprint_kpi_selection
         )
-        if st.session_state.get("current_sprint_metrics"):
-            st.dataframe(st.session_state.get("current_sprint_kpi_df", pd.DataFrame(columns=["KPI", "Value"])), use_container_width=True, hide_index=True)
-        else:
+        if not st.session_state.get("current_sprint_metrics"):
             st.info("Click **🧮 Calculate Sprint KPIs** above (or run the Sprint KPIs page) to populate the current sprint metrics for this block.")
     else:
         st.caption("KPI section disabled for this export.")
@@ -1329,6 +1370,10 @@ if st.session_state.active_tab == "🔌 Ingestion":
                     st.toast(f"Success! Loaded {len(res_df)} tickets for custom table '{new_table['title']}'.", icon="📊")
                     save_sprint_review_shared()
                     st.rerun()
+
+    for custom_table in st.session_state.custom_tables:
+        if custom_table.get("table_type") != "quarterly_epic_progress" and loaded_rows(custom_table.get("df")):
+            render_loaded_check(f"Custom table '{custom_table.get('title', '')}' loaded ({loaded_rows(custom_table['df'])} rows)")
 
     st.divider()
     
@@ -1561,7 +1606,8 @@ elif st.session_state.active_tab == "✍️ Workbook":
         elif fb.get("type") == "warning":
             st.warning(fb.get("text"))
         del st.session_state.ingestion_feedback
-    if st.session_state.overview_df is None and st.session_state.outlook_df is None and not st.session_state.custom_tables:
+    if (st.session_state.overview_df is None and st.session_state.outlook_df is None and not st.session_state.custom_tables
+            and not st.session_state.get("current_sprint_metrics")):
         st.info("⚠️ Workspace empty. Please complete step **🔌 1. Ingestion & Connection** by fetching Jira data or clicking 'Load Mock Sprint Datasets'.")
     else:
         # Sorting callback functions
@@ -1696,10 +1742,14 @@ elif st.session_state.active_tab == "✍️ Workbook":
             tab_display_title = table['title'].strip() if table['title'].strip() else f"Custom Table {idx + 1}"
             tabs_list.append(f"📊 Custom: {tab_display_title}")
             
+        tabs_list.append("📊 Sprint KPIs")
+
         tabs = st.tabs(tabs_list)
         work_subtab_ov = tabs[0]
         work_subtab_ot = tabs[1]
-        work_subtabs_ext = tabs[2:]
+        work_subtabs_ext = tabs[2:-1]
+        with tabs[-1]:
+            render_sprint_kpis_tab()
         
         # Overview Dataset Workspace
         with work_subtab_ov:
@@ -2095,32 +2145,6 @@ elif st.session_state.active_tab == "✍️ Workbook":
                         st.session_state.custom_tables.pop(ext_idx)
                         st.toast(f"Custom table '{display_title}' deleted!", icon="🗑️")
                         st.rerun()
-
-    # Sprint KPIs: read-only view of the KPIs calculated in the Ingestion step (or the Sprint KPIs page)
-    st.divider()
-    st.markdown("#### 📊 Sprint KPIs")
-    workbook_metrics = st.session_state.get("current_sprint_metrics")
-    if not workbook_metrics:
-        st.info("No sprint KPIs yet. Calculate them in step **🔌 Ingestion** (section 📊 Sprint KPIs) with **🧮 Calculate Sprint KPIs**.")
-    else:
-        st.caption(f"Sprint **{workbook_metrics.get('sprint_name') or 'current sprint'}** · {workbook_metrics.get('dates', '')}")
-        all_kpis_df = sprint_kpi_summary_df(SPRINT_REVIEW_KPI_OPTIONS, workbook_metrics)
-        all_kpis_df = all_kpis_df[all_kpis_df["Value"].astype(str).str.strip() != ""].reset_index(drop=True)
-        in_pdf = set(st.session_state.get("sprint_kpi_selection") or []) if st.session_state.get("include_sprint_kpis") else set()
-        if all_kpis_df.empty:
-            st.info("The KPI sources returned no values for this sprint.")
-        else:
-            per_row = 4
-            for start in range(0, len(all_kpis_df), per_row):
-                cols = st.columns(per_row)
-                for col, (_, row) in zip(cols, all_kpis_df.iloc[start:start + per_row].iterrows()):
-                    with col.container(border=True):
-                        label = f"📄 {row['KPI']}" if row["KPI"] in in_pdf else row["KPI"]
-                        st.metric(label, str(row["Value"]))
-        if in_pdf:
-            st.caption("📄 = included in the Sprint Review PDF. Change the selection in step 🔌 Ingestion.")
-        else:
-            st.caption("The KPI section is not included in the PDF. Enable it in step 🔌 Ingestion.")
 
 # ---------------------------------------------------------
 # STEP 3: Branding & Intro

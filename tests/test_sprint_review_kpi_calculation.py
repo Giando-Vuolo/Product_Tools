@@ -111,8 +111,19 @@ def test_workbook_shows_calculated_kpis():
     assert labels.get("Committed") == "2"
 
 
-def test_workbook_without_kpis_points_to_ingestion():
+def test_workbook_kpis_are_a_tab():
     at = AppTest.from_file(PAGE, default_timeout=60)
+    at.session_state["current_sprint_metrics"] = {"sprint_name": "Sprint 42", "total_sp": "8", "items": {}, "quality": {}}
+    at.session_state["active_tab"] = "✍️ Workbook"
+    at.run()
+    assert not at.exception
+    assert "📊 Sprint KPIs" in [t.label for t in at.tabs]
+
+
+def test_workbook_kpi_tab_without_kpis_points_to_ingestion():
+    at = AppTest.from_file(PAGE, default_timeout=60)
+    at.session_state["overview_df"] = pd.DataFrame(
+        {"Select": [False], "Key": ["P-1"], "Summary": ["s"], "Type": ["Task"], "Status": ["Done"], "Labels": [""]})
     at.session_state["active_tab"] = "✍️ Workbook"
     at.run()
     assert not at.exception
