@@ -201,6 +201,55 @@ def compute_sprint_metrics(res):
     }
 
 
+def calculate_current_sprint_metrics(server, token, auth_type, email, sprint_query, selected_types,
+                                     jira_enabled=True, quality_sources=()):
+    """Calculate one sprint's KPIs (Jira + enabled quality sources) without the Sprint KPIs page.
+
+    Returns (metrics, error, warnings): metrics is None when the sprint could not be calculated.
+    quality_sources is a collection of "sonar", "sbom" and "vanguard".
+    """
+    sprint_query = str(sprint_query or "").strip()
+    if not sprint_query:
+        return None, "Enter the sprint number or name to calculate its KPIs.", []
+    res = fetch_sprint_kpi_data(server, token, auth_type, email, sprint_query, selected_types)
+    if res.get("error"):
+        return None, res["error"], []
+    if res.get("df") is None or res["df"].empty:
+        return None, f"No issues found in sprint '{sprint_query}'.", []
+
+    metrics = compute_sprint_metrics(res)
+    if not jira_enabled:
+        metrics = without_jira_kpis(metrics)
+    metrics["sprint_name"] = res.get("sprint_name") or sprint_query
+
+    warnings = []
+    if res.get("scope_error"):
+        warnings.append(f"Committed/Added/Delivered: {res['scope_error']}")
+    quality = {}
+    sources = set(quality_sources or ())
+    if "sonar" in sources:
+        from utils.sonar_helpers import fetch_sonar_kpis, format_kpi_value
+        try:
+            sonar = fetch_sonar_kpis(res.get("sprint_end"))
+            quality.update({name: format_kpi_value(name, sonar.get(name)) for name in SONAR_KPIS.values()})
+        except Exception as e:
+            warnings.append(f"SonarQube: {e}")
+    if "sbom" in sources:
+        from utils.sbom_helpers import fetch_dependency_findings_by_severity
+        try:
+            quality[SBOM_KPI] = str(sum(fetch_dependency_findings_by_severity().values()))
+        except Exception as e:
+            warnings.append(f"SBOM Inventory: {e}")
+    if "vanguard" in sources:
+        from utils.vanguard_helpers import fetch_platform_findings_summary
+        try:
+            quality[VANGUARD_KPI] = str(fetch_platform_findings_summary()["total"])
+        except Exception as e:
+            warnings.append(f"Vanguard: {e}")
+    metrics["quality"] = quality
+    return metrics, None, warnings
+
+
 def metrics_to_table_row(sprint_name, metrics):
     """One row with the same column names as the Confluence KPI table."""
     row = dict(zip(BASE_KPI_HEADERS, [sprint_name] + [metrics.get(k, "") for k in BASE_METRIC_KEYS]))
