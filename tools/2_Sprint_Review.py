@@ -1132,17 +1132,22 @@ if st.session_state.active_tab == "🔌 Ingestion":
     st.caption("Calculate the sprint KPIs here (same calculation as the Sprint KPIs page, using the issue types selected above) "
                "and optionally include a compact KPI snapshot in the generated Sprint Review PDF. They are also shown in the Workbook step.")
 
-    # Sprint to calculate: defaults to the Overview sprint; kept in its own key so it survives tab switches.
-    if not st.session_state.get("sr_kpi_sprint"):
-        st.session_state.sr_kpi_sprint = ov_val if ov_is_sprint else ""
-    st.session_state.sr_kpi_sprint_widget = st.session_state.sr_kpi_sprint
-
-    def _sync_sr_kpi_sprint():
-        st.session_state.sr_kpi_sprint = st.session_state.sr_kpi_sprint_widget
-
+    # The KPIs use the single Sprint Number of the Overview query. Only when Overview is loaded with JQL
+    # (no sprint number on screen) is a sprint asked for here, kept in its own key so it survives tab switches.
     col_kpi_sprint, col_kpi_btn = st.columns([3, 1], vertical_alignment="bottom")
     with col_kpi_sprint:
-        st.text_input("Sprint for KPIs (number or name):", key="sr_kpi_sprint_widget", on_change=_sync_sr_kpi_sprint)
+        if ov_is_sprint:
+            kpi_sprint = str(ov_val or "").strip()
+            st.markdown(f"Sprint: **{kpi_sprint or '—'}** (Overview Sprint Number)")
+        else:
+            st.session_state.sr_kpi_sprint_widget = st.session_state.get("sr_kpi_sprint", "")
+
+            def _sync_sr_kpi_sprint():
+                st.session_state.sr_kpi_sprint = st.session_state.sr_kpi_sprint_widget
+
+            st.text_input("Sprint Number / Name for KPIs (Overview uses JQL):", key="sr_kpi_sprint_widget",
+                          on_change=_sync_sr_kpi_sprint)
+            kpi_sprint = st.session_state.get("sr_kpi_sprint", "")
     with col_kpi_btn:
         calc_kpis = st.button("🧮 Calculate Sprint KPIs", use_container_width=True, key="btn_calc_sprint_kpis")
     if calc_kpis:
@@ -1152,7 +1157,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
                 st.session_state.get("jira_token", ""),
                 st.session_state.get("jira_auth_method", ""),
                 st.session_state.get("jira_email", ""),
-                st.session_state.get("sr_kpi_sprint", ""),
+                kpi_sprint,
                 selected_types,
                 jira_enabled=kpi_source_enabled("jira"),
                 quality_sources=[key for key in ("sonar", "sbom", "vanguard") if kpi_source_enabled(key)],

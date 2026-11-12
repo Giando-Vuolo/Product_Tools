@@ -62,16 +62,38 @@ def test_helper_blanks_jira_kpis_when_source_off(monkeypatch):
     assert metrics["sprint_name"] == "Sprint 42"
 
 
-def test_ingestion_button_calculates_kpis(monkeypatch):
-    monkeypatch.setattr(kh, "fetch_sprint_kpi_data", lambda *a: _fake_result())
+def test_ingestion_button_uses_the_overview_sprint_number(monkeypatch):
+    queried = []
+
+    def fake_fetch(server, token, auth_type, email, sprint_query, selected_types):
+        queried.append(sprint_query)
+        return _fake_result()
+
+    monkeypatch.setattr(kh, "fetch_sprint_kpi_data", fake_fetch)
     at = AppTest.from_file(PAGE, default_timeout=60)
     at.run()
-    at.text_input(key="sr_kpi_sprint_widget").set_value("42").run()
+    # Single sprint number: no separate KPI sprint input while Overview is queried by sprint
+    assert not [t for t in at.text_input if t.key == "sr_kpi_sprint_widget"]
+    at.text_input(key="ov_sprint_num").set_value("42").run()
     at.button(key="btn_calc_sprint_kpis").click().run()
 
     assert not at.exception
+    assert queried == ["42"]
     assert at.session_state["current_sprint_metrics"]["sprint_name"] == "Sprint 42"
     assert any("Sprint 42" in s.value for s in at.success)
+
+
+def test_kpi_sprint_input_only_when_overview_uses_jql(monkeypatch):
+    queried = []
+    monkeypatch.setattr(kh, "fetch_sprint_kpi_data", lambda *a: queried.append(a[4]) or _fake_result())
+    at = AppTest.from_file(PAGE, default_timeout=60)
+    at.run()
+    at.radio(key="ov_query_type").set_value("Overview JQL Query").run()
+    at.text_input(key="sr_kpi_sprint_widget").set_value("77").run()
+    at.button(key="btn_calc_sprint_kpis").click().run()
+
+    assert not at.exception
+    assert queried == ["77"]
 
 
 def test_workbook_shows_calculated_kpis():
