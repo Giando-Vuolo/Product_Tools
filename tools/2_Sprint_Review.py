@@ -13,7 +13,12 @@ from utils.jira_helpers import (
     map_epic_status_for_completion_table,
 )
 from utils.sprint_review_jira import fetch_sprint_review_dataset, selected_issue_types, JiraFetchError
-from utils.kpi_helpers import default_sprint_review_kpis, SPRINT_REVIEW_KPI_OPTIONS, sprint_kpi_summary_df
+from utils.kpi_helpers import (
+    default_sprint_review_kpis, SPRINT_REVIEW_KPI_OPTIONS, sprint_kpi_summary_df, calculate_current_sprint_metrics,
+)
+from utils.sonar_helpers import sonar_configured
+from utils.sbom_helpers import sbom_configured
+from utils.vanguard_helpers import vanguard_configured
 from utils.stepper import render_stepper
 import requests
 import os
@@ -87,6 +92,14 @@ def rebuild_current_sprint_kpi_df():
     st.session_state.sprint_kpi_selection = valid_selection
     metrics = st.session_state.get("current_sprint_metrics") or {}
     st.session_state.current_sprint_kpi_df = sprint_kpi_summary_df(valid_selection, metrics)
+
+_KPI_SOURCE_CONFIGURED = {"jira": lambda: True, "sonar": sonar_configured, "sbom": sbom_configured, "vanguard": vanguard_configured}
+
+
+def kpi_source_enabled(key):
+    """Same rule as the Sprint KPIs page: configured and not switched off in its KPI Sources toggles."""
+    return bool(st.session_state.get(f"kpi_src_{key}", True)) and _KPI_SOURCE_CONFIGURED[key]()
+
 
 def check_any_selected(df_key, editor_key, display_df_indices):
     if st.session_state.get(df_key) is None:
@@ -1116,7 +1129,45 @@ if st.session_state.active_tab == "🔌 Ingestion":
 
     # Sprint KPI summary (optional section of the generated PDF)
     st.subheader("📊 Sprint KPIs (Optional)")
-    st.caption("Include a compact KPI snapshot in the generated Sprint Review PDF. This uses the current sprint metrics already calculated in the Sprint KPIs page.")
+    st.caption("Calculate the sprint KPIs here (same calculation as the Sprint KPIs page, using the issue types selected above) "
+               "and optionally include a compact KPI snapshot in the generated Sprint Review PDF. They are also shown in the Workbook step.")
+
+    # Sprint to calculate: defaults to the Overview sprint; kept in its own key so it survives tab switches.
+    if not st.session_state.get("sr_kpi_sprint"):
+        st.session_state.sr_kpi_sprint = ov_val if ov_is_sprint else ""
+    st.session_state.sr_kpi_sprint_widget = st.session_state.sr_kpi_sprint
+
+    def _sync_sr_kpi_sprint():
+        st.session_state.sr_kpi_sprint = st.session_state.sr_kpi_sprint_widget
+
+    col_kpi_sprint, col_kpi_btn = st.columns([3, 1], vertical_alignment="bottom")
+    with col_kpi_sprint:
+        st.text_input("Sprint for KPIs (number or name):", key="sr_kpi_sprint_widget", on_change=_sync_sr_kpi_sprint)
+    with col_kpi_btn:
+        calc_kpis = st.button("🧮 Calculate Sprint KPIs", use_container_width=True, key="btn_calc_sprint_kpis")
+    if calc_kpis:
+        with st.spinner("Calculating sprint KPIs from Jira..."):
+            metrics, kpi_error, kpi_warnings = calculate_current_sprint_metrics(
+                st.session_state.get("jira_server", ""),
+                st.session_state.get("jira_token", ""),
+                st.session_state.get("jira_auth_method", ""),
+                st.session_state.get("jira_email", ""),
+                st.session_state.get("sr_kpi_sprint", ""),
+                selected_types,
+                jira_enabled=kpi_source_enabled("jira"),
+                quality_sources=[key for key in ("sonar", "sbom", "vanguard") if kpi_source_enabled(key)],
+            )
+        if kpi_error:
+            st.error(f"❌ Could not calculate the sprint KPIs: {kpi_error}")
+        else:
+            st.session_state.current_sprint_metrics = metrics
+            rebuild_current_sprint_kpi_df()
+            st.success(f"🟢 KPIs calculated for **{metrics.get('sprint_name')}** ({metrics.get('dates')}).")
+            for warning in kpi_warnings:
+                st.warning(f"⚠️ {warning}")
+    elif st.session_state.get("current_sprint_metrics"):
+        current = st.session_state.current_sprint_metrics
+        st.caption(f"Current KPIs: **{current.get('sprint_name') or 'current sprint'}** ({current.get('dates', '')}).")
 
     def _sync_include_sprint_kpis():
         st.session_state.include_sprint_kpis = st.session_state.include_sprint_kpis_widget
@@ -1155,7 +1206,7 @@ if st.session_state.active_tab == "🔌 Ingestion":
         if st.session_state.get("current_sprint_metrics"):
             st.dataframe(st.session_state.get("current_sprint_kpi_df", pd.DataFrame(columns=["KPI", "Value"])), use_container_width=True, hide_index=True)
         else:
-            st.info("Run the KPI report first in the Sprint KPIs page to populate the current sprint metrics for this block.")
+            st.info("Click **🧮 Calculate Sprint KPIs** above (or run the Sprint KPIs page) to populate the current sprint metrics for this block.")
     else:
         st.caption("KPI section disabled for this export.")
 
@@ -2039,6 +2090,32 @@ elif st.session_state.active_tab == "✍️ Workbook":
                         st.session_state.custom_tables.pop(ext_idx)
                         st.toast(f"Custom table '{display_title}' deleted!", icon="🗑️")
                         st.rerun()
+
+    # Sprint KPIs: read-only view of the KPIs calculated in the Ingestion step (or the Sprint KPIs page)
+    st.divider()
+    st.markdown("#### 📊 Sprint KPIs")
+    workbook_metrics = st.session_state.get("current_sprint_metrics")
+    if not workbook_metrics:
+        st.info("No sprint KPIs yet. Calculate them in step **🔌 Ingestion** (section 📊 Sprint KPIs) with **🧮 Calculate Sprint KPIs**.")
+    else:
+        st.caption(f"Sprint **{workbook_metrics.get('sprint_name') or 'current sprint'}** · {workbook_metrics.get('dates', '')}")
+        all_kpis_df = sprint_kpi_summary_df(SPRINT_REVIEW_KPI_OPTIONS, workbook_metrics)
+        all_kpis_df = all_kpis_df[all_kpis_df["Value"].astype(str).str.strip() != ""].reset_index(drop=True)
+        in_pdf = set(st.session_state.get("sprint_kpi_selection") or []) if st.session_state.get("include_sprint_kpis") else set()
+        if all_kpis_df.empty:
+            st.info("The KPI sources returned no values for this sprint.")
+        else:
+            per_row = 4
+            for start in range(0, len(all_kpis_df), per_row):
+                cols = st.columns(per_row)
+                for col, (_, row) in zip(cols, all_kpis_df.iloc[start:start + per_row].iterrows()):
+                    with col.container(border=True):
+                        label = f"📄 {row['KPI']}" if row["KPI"] in in_pdf else row["KPI"]
+                        st.metric(label, str(row["Value"]))
+        if in_pdf:
+            st.caption("📄 = included in the Sprint Review PDF. Change the selection in step 🔌 Ingestion.")
+        else:
+            st.caption("The KPI section is not included in the PDF. Enable it in step 🔌 Ingestion.")
 
 # ---------------------------------------------------------
 # STEP 3: Branding & Intro
