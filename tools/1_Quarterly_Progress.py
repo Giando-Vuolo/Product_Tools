@@ -20,6 +20,9 @@ if 'quarterly_progress_df' not in st.session_state:
 if 'quarterly_progress_config' not in st.session_state:
     st.session_state.quarterly_progress_config = {}
 
+LAYOUT_ALL = "📋 All Epics in one table"
+LAYOUT_BY_INITIATIVE = "🧭 Grouped by initiative (Parent Link)"
+
 SLIDE_DEFAULTS = {
     "title": "Committed Epics Q3 - Status",
     "subtitle": "Detail overview of Epics Progress for Q3",
@@ -163,11 +166,21 @@ elif st.session_state.active_tab_qprog == STEPS[2]:
         config = {**SLIDE_DEFAULTS, **st.session_state.quarterly_progress_config}
         render_title_fields("🏷️ Report title and subtitle", "Report title", "Report subtitle", config, "qprog")
         st.session_state.quarterly_progress_config = config
+        layouts = [LAYOUT_ALL, LAYOUT_BY_INITIATIVE]
+        config["layout"] = st.radio(
+            "Report layout", layouts, horizontal=True, key="qprog_layout",
+            index=layouts.index(config.get("layout", LAYOUT_ALL)) if config.get("layout") in layouts else 0,
+            help="Grouped by initiative: the subtitle is \"Progress grouped by initiative\" (instead of the report "
+                 "subtitle above) and each Parent Link gets its own table under the heading \"Initiative: <Parent Link>\". "
+                 "Several initiatives share a slide when they fit.",
+        )
+        st.session_state.quarterly_progress_config = config
+        by_initiative = config["layout"] == LAYOUT_BY_INITIATIVE
         progress_title = config["title"].strip() or "Quarterly Epic Progress"
         progress_subtitle = config["subtitle"].strip()
         report_df = prepare_quarterly_progress_for_presentation(progress_df)
         primary = st.session_state.get("primary_color", "#0B2756")
-        progress_pdf = build_quarterly_progress_slide_pdf(report_df, progress_title, primary, progress_subtitle)
+        progress_pdf = build_quarterly_progress_slide_pdf(report_df, progress_title, primary, progress_subtitle, by_initiative=by_initiative)
         col_pdf, col_pptx = st.columns(2)
         with col_pdf:
             st.download_button(
@@ -177,7 +190,7 @@ elif st.session_state.active_tab_qprog == STEPS[2]:
         with col_pptx:
             st.download_button(
                 label="⬇️ Download Progress Report (PowerPoint)",
-                data=build_quarterly_progress_pptx(report_df, None, progress_title, progress_subtitle, "", "", primary),
+                data=build_quarterly_progress_pptx(report_df, None, progress_title, progress_subtitle, "", "", primary, by_initiative=by_initiative),
                 file_name="quarterly_epic_progress.pptx",
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 use_container_width=True,

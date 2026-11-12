@@ -210,3 +210,62 @@ class QuarterlyPptxTemplateTests(unittest.TestCase):
         table = next(shape for shape in Presentation(io.BytesIO(pptx)).slides[0].shapes if shape.has_table).table
         self.assertEqual(str(table.cell(0, 0).fill.fore_color.rgb), "0B2756")
         self.assertEqual({str(table.cell(1, 0).fill.fore_color.rgb), str(table.cell(2, 0).fill.fore_color.rgb)}, {"FFFFFF", "F1F5F9"})
+
+
+class ProgressByInitiativeTests(unittest.TestCase):
+    def _df(self):
+        rows = [{"Parent Link": "INIT-1 - Platform", "Key": f"A-{i}", "Summary": "Epic", "Completion": "50%", "Status": "In Progress"} for i in range(14)]
+        rows += [{"Parent Link": "INIT-2 - Customer", "Key": "B-1", "Summary": "Epic", "Completion": "10%", "Status": "To Do"},
+                 {"Parent Link": "-", "Key": "C-1", "Summary": "Epic", "Completion": "0%", "Status": "To Do"}]
+        return pd.DataFrame(rows)
+
+    def test_slides_per_initiative(self):
+        from utils.quarterly_planner_helpers import progress_slides
+        slides = progress_slides(self._df(), "Committed Epics Q4 - Status", "ignored", by_initiative=True)
+        headings = [[block["heading"] for block in slide["blocks"]] for slide in slides]
+        # INIT-1 has 14 Epics: a full slide, then its last 2 share a slide with the small initiatives
+        self.assertEqual(headings, [
+            ["Initiative: INIT-1 - Platform"],
+            ["Initiative: INIT-1 - Platform (cont.)", "Initiative: INIT-2 - Customer", "Initiative: No initiative"],
+        ])
+        self.assertEqual({slide["title"] for slide in slides}, {"Committed Epics Q4 - Status"})
+        self.assertEqual({slide["subtitle"] for slide in slides}, {"Progress grouped by initiative"})
+        self.assertEqual([len(b["df"]) for b in slides[1]["blocks"]], [2, 1, 1])
+        self.assertTrue(all("Parent Link" not in [c[1] for c in b["columns"]] for s in slides for b in s["blocks"]))
+
+    def test_initiatives_only_share_a_slide_when_they_fit(self):
+        from utils.quarterly_planner_helpers import progress_slides
+        rows = [{"Parent Link": f"INIT-{g}", "Key": f"K-{g}-{i}", "Summary": "E", "Completion": "0%", "Status": "To Do"}
+                for g, size in ((1, 6), (2, 5), (3, 3)) for i in range(size)]
+        slides = progress_slides(pd.DataFrame(rows), "T", by_initiative=True)
+        # 6+1 rows, then 1.3 gap + 5+1 rows = 14.3 > 13: INIT-2 starts a new slide; INIT-3 fits next to it
+        self.assertEqual([[len(b["df"]) for b in slide["blocks"]] for slide in slides], [[6], [5, 3]])
+
+    def test_slides_all_in_one_table(self):
+        from utils.quarterly_planner_helpers import progress_slides
+        slides = progress_slides(self._df(), "T", "Sub")
+        self.assertEqual([len(s["blocks"][0]["df"]) for s in slides], [12, 4])
+        self.assertEqual([s["title"] for s in slides], ["T", "T (cont. 2)"])
+        self.assertEqual({s["subtitle"] for s in slides}, {"Sub"})
+        self.assertEqual({s["blocks"][0]["heading"] for s in slides}, {""})
+        self.assertEqual(slides[0]["blocks"][0]["columns"][0][0], "Parent Link")
+
+    def test_pptx_and_pdf_by_initiative(self):
+        from pptx import Presentation
+        from pypdf import PdfReader
+        from utils.quarterly_planner_helpers import build_quarterly_progress_pptx, build_quarterly_progress_slide_pdf
+        prs = Presentation(io.BytesIO(build_quarterly_progress_pptx(self._df(), None, "T", "Sub", "", "", "#0B2756", by_initiative=True)))
+        self.assertEqual(len(prs.slides), 2)
+        second = prs.slides[1]
+        texts = [shape.text_frame.text for shape in second.shapes if shape.has_text_frame]
+        self.assertIn("Initiative: INIT-2 - Customer", texts)
+        self.assertIn("Initiative: No initiative", texts)
+        self.assertIn("Progress grouped by initiative", texts)
+        self.assertEqual(sum(1 for shape in second.shapes if shape.has_table), 3)
+        # The first initiative heading is its own text box, not the slide subtitle
+        first_texts = [shape.text_frame.text for shape in prs.slides[0].shapes if shape.has_text_frame]
+        self.assertIn("Progress grouped by initiative", first_texts)
+        self.assertIn("Initiative: INIT-1 - Platform", first_texts)
+        reader = PdfReader(io.BytesIO(build_quarterly_progress_slide_pdf(self._df(), "T", "#0B2756", "Sub", by_initiative=True)))
+        self.assertEqual(len(reader.pages), 2)
+        self.assertIn("Initiative: No initiative", reader.pages[1].extract_text())
