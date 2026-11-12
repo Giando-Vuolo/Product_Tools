@@ -429,7 +429,7 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle=""
     from reportlab.lib.pagesizes import letter, landscape
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, PageBreak
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, PageBreak, Spacer
     from utils.pdf_helpers import get_progress_bar_drawing
 
     buffer = io.BytesIO()
@@ -499,12 +499,19 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle=""
         # One page per initiative table, like the PowerPoint slides
         story = []
         slides = progress_slides(df, title, subtitle, by_initiative=True)
+        heading_style = ParagraphStyle("QuarterlyInitiativeHeading", parent=subtitle_style, fontName="Helvetica-Bold",
+                                       fontSize=11, leading=14, textColor=primary, spaceAfter=6)
         for index, spec in enumerate(slides):
             story += [
                 Paragraph(html.escape(spec["title"]), title_style),
-                Paragraph(f"<b>{html.escape(spec['subtitle'])}</b> &nbsp; | &nbsp; <b>Generated:</b> {generated} &nbsp; | &nbsp; <b>Epics:</b> {len(spec['df'])}", subtitle_style),
-                progress_table(spec["df"]),
+                Paragraph(f"{html.escape(spec['subtitle'])} &nbsp; | &nbsp; <b>Generated:</b> {generated}", subtitle_style),
             ]
+            for block in spec["blocks"]:
+                story += [
+                    Paragraph(f"{html.escape(block['heading'])} &nbsp; <font color='#64748B' size='9'>({len(block['df'])} Epics)</font>", heading_style),
+                    progress_table(block["df"]),
+                    Spacer(1, 12),
+                ]
             if index < len(slides) - 1:
                 story.append(PageBreak())
     else:
@@ -583,6 +590,7 @@ def _progress_columns(df):
 
 
 NO_INITIATIVE_LABEL = "No initiative"
+GROUPED_BY_INITIATIVE_SUBTITLE = "Progress grouped by initiative"
 
 
 def _natural_key(text):
@@ -590,37 +598,60 @@ def _natural_key(text):
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", str(text))]
 
 
-def progress_slides(df, title, subtitle="", by_initiative=False):
-    """Plan the progress report slides: [{"title", "subtitle", "df", "columns"}].
+# Space between two initiative tables on one slide (their subtitle), in table rows
+INITIATIVE_GAP_ROWS = 1.3
 
-    All Epics in one table (paged by PROGRESS_ROWS_PER_SLIDE), or with
-    by_initiative one table per Parent Link: subtitle "Initiative: <Parent Link>"
-    and no Parent Link column. Continuation slides get "(cont. N)" in the title.
+
+def progress_slides(df, title, subtitle="", by_initiative=False):
+    """Plan the progress report slides: [{"title", "subtitle", "blocks": [{"heading", "df", "columns"}]}].
+
+    All Epics in one table (paged by PROGRESS_ROWS_PER_SLIDE rows) under the
+    report subtitle, or with by_initiative the subtitle "Progress grouped by
+    initiative" and one table per Parent Link, each under its own heading
+    "Initiative: <Parent Link>" (drawn above the table, not in the template's
+    subtitle) and without the Parent Link column. Several initiatives share a
+    slide while they fit: a slide holds the room of a full table
+    (PROGRESS_ROWS_PER_SLIDE rows plus header); the first heading sits in the
+    space above the table area and every further one needs INITIATIVE_GAP_ROWS.
     """
     df = prepare_quarterly_progress_for_presentation(df) if df is not None else pd.DataFrame()
     title = (title or "").strip()
     subtitle = (subtitle or "").strip()
-    if by_initiative:
-        parents = df["Parent Link"] if "Parent Link" in df.columns else pd.Series("-", index=df.index)
-        parents = parents.fillna("-").astype(str).str.strip().replace({"": "-"})
-        groups = [
-            (f"Initiative: {NO_INITIATIVE_LABEL if parent == '-' else parent}",
-             df[parents == parent].drop(columns=["Parent Link"], errors="ignore"))
-            # Initiatives by name (keys sort naturally: INIT-2 before INIT-10), Epics without one last
-            for parent in sorted(set(parents), key=lambda p: (p == "-", _natural_key(p)))
+    rows = PROGRESS_ROWS_PER_SLIDE
+
+    if not by_initiative:
+        columns = _progress_columns(df)
+        return [
+            {"title": title if page == 1 else f"{title} (cont. {page})", "subtitle": subtitle,
+             "blocks": [{"heading": "", "df": df.iloc[start:start + rows].reset_index(drop=True), "columns": columns}]}
+            for page, start in enumerate(range(0, len(df), rows), start=1)
         ]
-    else:
-        groups = [(subtitle, df)]
-    slides = []
-    for group_subtitle, group_df in groups:
+
+    parents = df["Parent Link"] if "Parent Link" in df.columns else pd.Series("-", index=df.index)
+    parents = parents.fillna("-").astype(str).str.strip().replace({"": "-"})
+    blocks = []
+    # Initiatives by name (keys sort naturally: INIT-2 before INIT-10), Epics without one last
+    for parent in sorted(set(parents), key=lambda p: (p == "-", _natural_key(p))):
+        group_df = df[parents == parent].drop(columns=["Parent Link"], errors="ignore")
         columns = _progress_columns(group_df)
-        for page, start in enumerate(range(0, len(group_df), PROGRESS_ROWS_PER_SLIDE), start=1):
-            slides.append({
-                "title": title if page == 1 else f"{title} (cont. {page})",
-                "subtitle": group_subtitle,
-                "df": group_df.iloc[start:start + PROGRESS_ROWS_PER_SLIDE].reset_index(drop=True),
+        label = f"Initiative: {NO_INITIATIVE_LABEL if parent == '-' else parent}"
+        for part, start in enumerate(range(0, len(group_df), rows)):
+            blocks.append({
+                "heading": label if part == 0 else f"{label} (cont.)",
+                "df": group_df.iloc[start:start + rows].reset_index(drop=True),
                 "columns": columns,
             })
+
+    capacity = rows + 1
+    slides, used = [], 0.0
+    for block in blocks:
+        cost = len(block["df"]) + 1
+        if slides and used + INITIATIVE_GAP_ROWS + cost <= capacity:
+            slides[-1]["blocks"].append(block)
+            used += INITIATIVE_GAP_ROWS + cost
+        else:
+            slides.append({"title": title, "subtitle": GROUPED_BY_INITIATIVE_SUBTITLE, "blocks": [block]})
+            used = cost
     return slides
 
 
@@ -690,7 +721,7 @@ def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiati
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.utils import ImageReader
-    from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate, Paragraph, Table, TableStyle, PageBreak
+    from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate, Paragraph, Table, TableStyle, PageBreak, Spacer
 
     chrome = _template_chrome(template_path)
     point = 72
@@ -699,7 +730,8 @@ def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiati
     teal = colors.HexColor(TEMPLATE_TEAL_HEX)
     background = colors.HexColor(TEMPLATE_BACKGROUND_HEX)
     slides = progress_slides(df, title, subtitle, by_initiative) or [
-        {"title": (title or "").strip(), "subtitle": (subtitle or "").strip(), "df": pd.DataFrame(), "columns": _progress_columns(df)}
+        {"title": (title or "").strip(), "subtitle": (subtitle or "").strip(),
+         "blocks": [{"heading": "", "df": pd.DataFrame(), "columns": _progress_columns(df)}]}
     ]
     logo = ImageReader(io.BytesIO(chrome["logo"][0])) if chrome["logo"] else None
 
@@ -731,8 +763,12 @@ def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiati
         canvas.restoreState()
 
     table_left, table_top, table_width, table_height = 0.42, 1.90, 12.45, 4.92
+    # Same row height on every slide (that of a full table), so stacked tables line up with the PowerPoint
+    row_height = table_height * point / (PROGRESS_ROWS_PER_SLIDE + 1)
+    gap = INITIATIVE_GAP_ROWS * row_height
+    # The frame starts one gap above the table area: room for the first initiative heading
     frame = Frame(table_left * point, y_from_top(table_top + table_height) - 4, table_width * point + 2,
-                  table_height * point + 8, leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+                  table_height * point + gap + 8, leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
     buffer = io.BytesIO()
     doc = BaseDocTemplate(buffer, pagesize=(page_width, page_height), leftMargin=0, rightMargin=0, topMargin=0, bottomMargin=0)
     doc.addPageTemplates([PageTemplate(id="slide", frames=[frame], onPage=draw_page)])
@@ -740,14 +776,12 @@ def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiati
     header_style = ParagraphStyle("TplHeader", fontName="Helvetica-Bold", fontSize=8, leading=9.5, textColor=white)
     body_style = ParagraphStyle("TplBody", fontName="Helvetica", fontSize=7.2, leading=8.6, textColor=white)
     key_style = ParagraphStyle("TplKey", parent=body_style, fontName="Helvetica-Bold")
-    story = []
-    for page, spec in enumerate(slides):
-        chunk, columns = spec["df"], spec["columns"]
+    block_subtitle_style = ParagraphStyle("TplBlockSubtitle", fontName="Helvetica", fontSize=13, leading=16, textColor=white, leftIndent=0.10 * point)
+
+    def template_table(chunk, columns):
         # PowerPoint stretches the columns to the full table width; do the same
         scale = table_width / sum(c[2] for c in columns)
         widths = [c[2] * scale * point for c in columns]
-        # Rows never get taller than on a full slide, so a short table stays compact
-        row_height = table_height * point / (max(len(chunk), PROGRESS_ROWS_PER_SLIDE) + 1)
         data = [[Paragraph(html.escape(header), header_style) for header, _, _ in columns]]
         for _, row in chunk.iterrows():
             cells = []
@@ -770,7 +804,17 @@ def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiati
             ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
             ("GRID", (0, 0), (-1, -1), 1, white),
         ]))
-        story.append(table)
+        return table
+
+    story = []
+    for page, spec in enumerate(slides):
+        for block in spec["blocks"]:
+            if block["heading"]:
+                # Initiative heading in the gap above its table (the frame starts one gap above the table area)
+                story += [Spacer(1, gap - 16 - 6), Paragraph(html.escape(block["heading"]), block_subtitle_style), Spacer(1, 6)]
+            else:
+                story.append(Spacer(1, gap))
+            story.append(template_table(block["df"], block["columns"]))
         if page < len(slides) - 1:
             story.append(PageBreak())
     doc.build(story)
@@ -857,85 +901,97 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progr
         if subtitle:
             add_text(slide, subtitle, 0.7, 0.82, 11.7, 0.24, size=10, color=muted)
 
-    # One slide per table: all Epics, or one table per initiative (Parent Link)
+    # One slide per table, or with by_initiative several initiative tables stacked on a slide
     for slide_spec in progress_slides(progress_df, progress_title, progress_subtitle, by_initiative):
-        chunk, progress_columns = slide_spec["df"], slide_spec["columns"]
         slide = prs.slides.add_slide(content_layout)
         add_chrome(slide, slide_spec["title"], slide_spec["subtitle"])
         table_left, table_top, table_width = 0.42, 1.90, 12.45
-        table_height = 4.92 if using_template else 5.85
-        # Rows never get taller than on a full slide, so a short table (e.g. one initiative) stays compact
-        row_height = table_height / (max(len(chunk), PROGRESS_ROWS_PER_SLIDE) + 1)
-        table_height = row_height * (len(chunk) + 1)
-        table_shape = slide.shapes.add_table(len(chunk) + 1, len(progress_columns), Inches(table_left), Inches(table_top), Inches(table_width), Inches(table_height))
-        table = table_shape.table
-        for row in table.rows:
-            row.height = Inches(row_height)
-        for index, (_, _, column_width) in enumerate(progress_columns):
-            table.columns[index].width = Inches(column_width)
-            cell = table.cell(0, index)
-            cell.fill.solid()
-            cell.fill.fore_color.rgb = template_teal if using_template else navy
-            cell.text = progress_columns[index][0]
-            paragraph = cell.text_frame.paragraphs[0]
-            paragraph.runs[0].font.name = "Arial"
-            paragraph.runs[0].font.size = Pt(8)
-            paragraph.runs[0].font.bold = True
-            paragraph.runs[0].font.color.rgb = white
-        for row_index, (_, row) in enumerate(chunk.iterrows(), start=1):
-            for col_index, (_, source, _) in enumerate(progress_columns):
-                cell = table.cell(row_index, col_index)
+        # Same row height on every slide (that of a full table), so short tables stay compact
+        row_height = (4.92 if using_template else 5.20) / (PROGRESS_ROWS_PER_SLIDE + 1)
+        gap = INITIATIVE_GAP_ROWS * row_height
+        block_top = table_top
+        for block_index, block in enumerate(slide_spec["blocks"]):
+            chunk, progress_columns = block["df"], block["columns"]
+            if block_index:
+                block_top += gap
+            if block["heading"]:
+                # Initiative heading in the gap above its table (for the first table, the space under the
+                # slide subtitle); a text box of its own, not the template's subtitle placeholder
+                if using_template:
+                    add_text(slide, block["heading"], 0.43, block_top - gap + 0.10, 11.4, 0.27, size=13, color=white)
+                else:
+                    add_text(slide, block["heading"], 0.7, block_top - gap + 0.12, 11.7, 0.24, size=10, color=muted)
+            table_height = row_height * (len(chunk) + 1)
+            table_shape = slide.shapes.add_table(len(chunk) + 1, len(progress_columns), Inches(table_left), Inches(block_top), Inches(table_width), Inches(table_height))
+            table = table_shape.table
+            for row in table.rows:
+                row.height = Inches(row_height)
+            for index, (_, _, column_width) in enumerate(progress_columns):
+                table.columns[index].width = Inches(column_width)
+                cell = table.cell(0, index)
                 cell.fill.solid()
-                cell.fill.fore_color.rgb = template_background if using_template else (RGBColor(255, 255, 255) if row_index % 2 else light)
-                cell.margin_left = Inches(0.05)
-                cell.margin_right = Inches(0.05)
-                cell.vertical_anchor = MSO_ANCHOR.MIDDLE
-                value = row.get(source, "-")
-                value = "-" if pd.isna(value) or str(value).strip() == "" else str(value)
-                cell.text = "" if source == "Completion" else value
-                if source != "Completion":
-                    paragraph = cell.text_frame.paragraphs[0]
-                    paragraph.runs[0].font.name = "Arial"
-                    paragraph.runs[0].font.size = Pt(7.2)
-                    paragraph.runs[0].font.color.rgb = white if using_template else dark
-                    if source == "Key":
-                        paragraph.runs[0].font.bold = True
+                cell.fill.fore_color.rgb = template_teal if using_template else navy
+                cell.text = progress_columns[index][0]
+                paragraph = cell.text_frame.paragraphs[0]
+                paragraph.runs[0].font.name = "Arial"
+                paragraph.runs[0].font.size = Pt(8)
+                paragraph.runs[0].font.bold = True
+                paragraph.runs[0].font.color.rgb = white
+            for row_index, (_, row) in enumerate(chunk.iterrows(), start=1):
+                for col_index, (_, source, _) in enumerate(progress_columns):
+                    cell = table.cell(row_index, col_index)
+                    cell.fill.solid()
+                    cell.fill.fore_color.rgb = template_background if using_template else (RGBColor(255, 255, 255) if row_index % 2 else light)
+                    cell.margin_left = Inches(0.05)
+                    cell.margin_right = Inches(0.05)
+                    cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+                    value = row.get(source, "-")
+                    value = "-" if pd.isna(value) or str(value).strip() == "" else str(value)
+                    cell.text = "" if source == "Completion" else value
+                    if source != "Completion":
+                        paragraph = cell.text_frame.paragraphs[0]
+                        paragraph.runs[0].font.name = "Arial"
+                        paragraph.runs[0].font.size = Pt(7.2)
+                        paragraph.runs[0].font.color.rgb = white if using_template else dark
+                        if source == "Key":
+                            paragraph.runs[0].font.bold = True
 
-                if source == "Completion":
-                    try:
-                        percentage = max(0, min(100, int(float(value.replace("%", "")))))
-                    except Exception:
-                        percentage = 0
-                    # Keep the percentage and its visual bar *inside* the table
-                    # cell.  Separate shapes drift when PowerPoint recalculates
-                    # table-row heights, while text runs remain attached to the row.
-                    text_frame = cell.text_frame
-                    text_frame.clear()
-                    text_frame.word_wrap = False
-                    text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
-                    label = text_frame.paragraphs[0]
-                    label.alignment = PP_ALIGN.CENTER
-                    label_run = label.add_run()
-                    label_run.text = f"{percentage}%"
-                    label_run.font.name = "Arial"
-                    label_run.font.size = Pt(6.5)
-                    label_run.font.bold = True
-                    label_run.font.color.rgb = white if using_template else dark
-                    bar = text_frame.add_paragraph()
-                    bar.alignment = PP_ALIGN.CENTER
-                    # Five compact segments fit in the narrow Progress column in
-                    # PowerPoint without wrapping onto a second line.
-                    filled_blocks = int(round(percentage / 20))
-                    filled_run = bar.add_run()
-                    filled_run.text = "▬" * filled_blocks
-                    filled_run.font.name = "Arial"
-                    filled_run.font.size = Pt(7)
-                    filled_run.font.color.rgb = RGBColor(170, 255, 0) if using_template and percentage == 100 else (template_teal if using_template else (green if percentage == 100 else navy))
-                    remaining_run = bar.add_run()
-                    remaining_run.text = "▬" * (5 - filled_blocks)
-                    remaining_run.font.name = "Arial"
-                    remaining_run.font.size = Pt(7)
-                    remaining_run.font.color.rgb = RGBColor(0, 98, 110) if using_template else RGBColor(226, 232, 240)
+                    if source == "Completion":
+                        try:
+                            percentage = max(0, min(100, int(float(value.replace("%", "")))))
+                        except Exception:
+                            percentage = 0
+                        # Keep the percentage and its visual bar *inside* the table
+                        # cell.  Separate shapes drift when PowerPoint recalculates
+                        # table-row heights, while text runs remain attached to the row.
+                        text_frame = cell.text_frame
+                        text_frame.clear()
+                        text_frame.word_wrap = False
+                        text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+                        label = text_frame.paragraphs[0]
+                        label.alignment = PP_ALIGN.CENTER
+                        label_run = label.add_run()
+                        label_run.text = f"{percentage}%"
+                        label_run.font.name = "Arial"
+                        label_run.font.size = Pt(6.5)
+                        label_run.font.bold = True
+                        label_run.font.color.rgb = white if using_template else dark
+                        bar = text_frame.add_paragraph()
+                        bar.alignment = PP_ALIGN.CENTER
+                        # Five compact segments fit in the narrow Progress column in
+                        # PowerPoint without wrapping onto a second line.
+                        filled_blocks = int(round(percentage / 20))
+                        filled_run = bar.add_run()
+                        filled_run.text = "▬" * filled_blocks
+                        filled_run.font.name = "Arial"
+                        filled_run.font.size = Pt(7)
+                        filled_run.font.color.rgb = RGBColor(170, 255, 0) if using_template and percentage == 100 else (template_teal if using_template else (green if percentage == 100 else navy))
+                        remaining_run = bar.add_run()
+                        remaining_run.text = "▬" * (5 - filled_blocks)
+                        remaining_run.font.name = "Arial"
+                        remaining_run.font.size = Pt(7)
+                        remaining_run.font.color.rgb = RGBColor(0, 98, 110) if using_template else RGBColor(226, 232, 240)
+            block_top += table_height
 
     if roadmap_df is not None and not roadmap_df.empty:
         slide = prs.slides.add_slide(content_layout)

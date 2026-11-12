@@ -21,7 +21,7 @@ if 'quarterly_progress_config' not in st.session_state:
     st.session_state.quarterly_progress_config = {}
 
 LAYOUT_ALL = "📋 All Epics in one table"
-LAYOUT_BY_INITIATIVE = "🧭 One slide per initiative (Parent Link)"
+LAYOUT_BY_INITIATIVE = "🧭 Grouped by initiative (Parent Link)"
 
 SLIDE_DEFAULTS = {
     "title": "Committed Epics Q3 - Status",
@@ -170,8 +170,9 @@ elif st.session_state.active_tab_qprog == STEPS[2]:
         config["layout"] = st.radio(
             "Report layout", layouts, horizontal=True, key="qprog_layout",
             index=layouts.index(config.get("layout", LAYOUT_ALL)) if config.get("layout") in layouts else 0,
-            help="By initiative: one slide per Parent Link, with the subtitle \"Initiative: <Parent Link>\" "
-                 "and a table of that initiative's Epics. The report subtitle above is then not used.",
+            help="Grouped by initiative: the subtitle is \"Progress grouped by initiative\" (instead of the report "
+                 "subtitle above) and each Parent Link gets its own table under the heading \"Initiative: <Parent Link>\". "
+                 "Several initiatives share a slide when they fit.",
         )
         st.session_state.quarterly_progress_config = config
         by_initiative = config["layout"] == LAYOUT_BY_INITIATIVE
