@@ -492,15 +492,31 @@ def _inject_home_styles():
                 background-color: #60A5FA22; color: #60A5FA; border: 1px solid #60A5FA;
                 padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 600;
             }
+            /* Card buttons: same size, side by side with a 10px gap, at the same height in every card */
+            [class*="st-key-poLinks_"] { gap: 10px !important; flex-wrap: nowrap !important; }
+            [class*="st-key-poLinks_"] > div { flex: 0 0 calc(50% - 5px) !important; width: calc(50% - 5px) !important; min-width: 0 !important; }
+            [class*="st-key-poLinks_"] [data-testid="stPageLink"] a {
+                width: 100% !important; height: 2.25rem !important; padding: 0 0.75rem !important; margin-top: 0 !important;
+            }
+            [class*="st-key-poLinks_"] [data-testid="stPageLink"] a p {
+                white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;
+            }
             .po-card h3 { margin: 0 0 0.2rem 0 !important; padding: 0 !important; font-size: 1.05rem !important; }
-            .po-card p { margin: 0 !important; color: #CBD5E1 !important; font-size: 0.85rem; line-height: 1.35; }
+            /* Fixed three-line description so the buttons start at the same height in every card */
+            .po-card p {
+                margin: 0 !important; color: #CBD5E1 !important; font-size: 0.85rem; line-height: 1.35;
+                height: calc(0.85rem * 1.35 * 3); overflow: hidden; margin-bottom: 10px !important;
+            }
         </style>
     """, unsafe_allow_html=True)
 
 
-def _home_card(key, icon, title, desc, badge, page, link_label):
-    """One home card: fixed height so every card has the same size regardless of text length."""
-    with st.container(border=True, height=190, key=f"poCard_{key}"):
+def _home_card(key, icon, title, desc, badge, links):
+    """One home card: fixed height so every card has the same size regardless of text length.
+
+    links is a list of (page, label, icon); several links sit side by side.
+    """
+    with st.container(border=True, height=215, key=f"poCard_{key}"):
         st.markdown(f"""
             <div class="po-card">
                 <div class="po-card-top"><div class="po-icon">{icon}</div><span class="po-badge">{badge}</span></div>
@@ -508,7 +524,9 @@ def _home_card(key, icon, title, desc, badge, page, link_label):
                 <p>{desc}</p>
             </div>
         """, unsafe_allow_html=True)
-        st.page_link(page, label=link_label, icon=icon)
+        with st.container(horizontal=True, key=f"poLinks_{key}"):
+            for page, label, link_icon in links:
+                st.page_link(page, label=label, icon=link_icon)
 
 
 def show_home():
@@ -525,32 +543,24 @@ def show_home():
     st.markdown('<div class="po-section">Planning, reviews & releases</div>', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3, gap="medium")
     with c1:
-        _home_card("planner", "📅", "Quarterly Review",
-                   "Progress: track committed Epics and export the progress report. Planning: edit the backlog, its Gantt and the delivery roadmap.",
-                   "ACTIVE 🚀", progress_page, "Open Progress")
+        _home_card("quarterly", "📅", "Quarterly Review",
+                   "Track committed Epics and export the progress report, or plan the backlog, Gantt and delivery roadmap.",
+                   "ACTIVE 🚀", [(progress_page, "Progress", "📈"), (planner_page, "Planning", "🗓️")])
     with c2:
-        _home_card("review", "📋", "Sprint Review",
-                   "Extract Jira sprint data, edit items in a workbook, apply custom branding and export PDF Sprint Review reports.",
-                   "ACTIVE 🚀", sprint_review_page, "Open Sprint Review")
+        _home_card("sprint", "🏃", "Sprint",
+                   "Build branded Sprint Review reports from Jira, or calculate KPIs such as cycle times and committed vs achieved points.",
+                   "ACTIVE 🚀", [(sprint_review_page, "Review", "📋"), (sprint_kpis_page, "KPIs", "📊")])
     with c3:
-        _home_card("notes", "📣", "Release Notes",
-                   "Create a Release Note from a Jira version: load release data, review the tables, then export or publish the PDF.",
-                   "ACTIVE 🚀", release_notes_page, "Open Release Notes")
+        _home_card("releases", "🚀", "Releases",
+                   "Create and publish Release Notes from a Jira version, or check a release plan before go-live.",
+                   "ACTIVE 🚀", [(release_notes_page, "Notes", "📣"), (rr_overview_page, "Plan", "🎯")])
 
-    st.markdown('<div class="po-section">Metrics, AI & quality</div>', unsafe_allow_html=True)
-    c4, c5, c6 = st.columns(3, gap="medium")
+    st.markdown('<div class="po-section">AI</div>', unsafe_allow_html=True)
+    c4, _, _ = st.columns(3, gap="medium")
     with c4:
-        _home_card("kpis", "📊", "Sprint KPIs",
-                   "Calculate KPIs from Jira such as cycle times, committed vs achieved points and releases.",
-                   "ACTIVE 🚀", sprint_kpis_page, "Open Sprint KPIs")
-    with c5:
         _home_card("ai", "🤖", "AI Issue Creator",
                    "Draft, format and upload Jira issues effortlessly using a local Ollama AI model.",
-                   "NEW ✨", ai_creator_page, "Open AI Creator")
-    with c6:
-        _home_card("readiness", "✅", "Release Readiness",
-                   "Check a release before go-live: scope, approvals, documentation, critical changes, PRE testing and unassigned issues. Read-only.",
-                   "NEW ✨", rr_overview_page, "Open Release Overview")
+                   "NEW ✨", [(ai_creator_page, "AI Creator", "🤖")])
 
 
 
