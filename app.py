@@ -244,7 +244,8 @@ if "jira_connection_status" not in st.session_state:
     check_quality_integrations(quality_integration_args(), skip_unconfigured=True)
 
 # 1. Define the page objects first so they are globally accessible
-planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Quarterly Planning", icon="📅")
+progress_page = st.Page("tools/1_Quarterly_Progress.py", title="Progress", icon="📈")
+planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Planning", icon="🗓️")
 sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", icon="📋")
 release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
@@ -524,9 +525,9 @@ def show_home():
     st.markdown('<div class="po-section">Planning, reviews & releases</div>', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3, gap="medium")
     with c1:
-        _home_card("planner", "🎯", "Quarterly Planner",
-                   "Track committed quarterly Epics from Jira, add delivery context and milestones, then export progress and roadmap slides.",
-                   "ACTIVE 🚀", planner_page, "Open Planner")
+        _home_card("planner", "📅", "Quarterly Review",
+                   "Progress: track committed Epics and export the progress report. Planning: edit the backlog, its Gantt and the delivery roadmap.",
+                   "ACTIVE 🚀", progress_page, "Open Progress")
     with c2:
         _home_card("review", "📋", "Sprint Review",
                    "Extract Jira sprint data, edit items in a workbook, apply custom branding and export PDF Sprint Review reports.",
@@ -864,9 +865,10 @@ pg = st.navigation(
     {
         # Single pages are direct links; Streamlit renders them before the dropdown sections,
         # so the final order is set with CSS in the top menu styles below
-        "": [home_page, planner_page, ai_creator_page, ai_agent_page, configuration_page],
+        "": [home_page, ai_creator_page, ai_agent_page, configuration_page],
         "🏃 Sprint": [sprint_review_page, sprint_kpis_page],
         "🚀 Releases": [release_notes_page, *release_plan_nav_pages],
+        "📅 Quarterly Review": [progress_page, planner_page],
     },
     position="top",
 )
@@ -931,15 +933,15 @@ st.markdown("""
             margin: 0.5rem 0;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
         }
-        /* Menu order: Home, Sprint, Releases, Quarterly Planning, Issue Creator, Configuration.
-           Streamlit renders the individual pages first (Home, Quarterly Planning, Issue Creator,
-           Configuration; AI Agent is hidden) and then the sections in dict order (Sprint, Releases). */
+        /* Menu order: Home, Sprint, Releases, Quarterly Review, Issue Creator, Configuration.
+           Streamlit renders the individual pages first (Home, Issue Creator, Configuration;
+           AI Agent is hidden) and then the sections in dict order (Sprint, Releases, Quarterly Review). */
         nav[data-testid="stTopNav"] > :nth-child(1) { order: 1 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(2) { order: 4 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(3) { order: 5 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(4) { order: 6 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(5) { order: 2 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(6) { order: 3 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(2) { order: 5 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(3) { order: 6 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(4) { order: 2 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(5) { order: 3 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(6) { order: 4 !important; }
         nav[data-testid="stTopNav"] > :nth-child(n+7) { order: 7 !important; }
         nav[data-testid="stTopNav"] [data-testid="stTopNavLinkContainer"],
         nav[data-testid="stTopNav"] [data-testid="stTopNavSection"] {
@@ -978,6 +980,7 @@ _SBOM = ("SBOM", "sbom", _quality_configured("sbom"),
          lambda: ("Application", f"{_ss('sbom_app_id')} on {_ss('sbom_server')}"))
 _VANGUARD = ("Vanguard", "vanguard", _quality_configured("vanguard"), lambda: ("Project", _ss("vanguard_project_id")))
 PAGE_CONNECTIONS = {
+    progress_page.url_path: [_JIRA],
     planner_page.url_path: [_JIRA],
     sprint_review_page.url_path: [_JIRA, _CONFLUENCE],
     sprint_kpis_page.url_path: [_JIRA, _CONFLUENCE, _SONAR, _SBOM, _VANGUARD],

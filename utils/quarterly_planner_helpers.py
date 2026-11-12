@@ -86,6 +86,74 @@ def get_quarterly_team_label(labels):
     return next((label for label in configured_labels if label.lower() in item_labels), "-")
 
 
+PROGRESS_CSV_COLUMNS = [
+    "Parent Link", "Key", "Summary", "Completion", "Closed / Resolved", "To Do", "In progress",
+    "Status", "Labels", "Presentation update",
+]
+
+PROGRESS_CSV_TEMPLATE = (
+    "Parent Link,Key,Summary,Completion,Closed / Resolved,To Do,In progress,Status,Labels,Presentation update\n"
+    "INIT-1 - Platform foundations,PROJ-101,Single sign-on,100%,6,0,0,Done,Backend_Team,Live in production\n"
+    "INIT-1 - Platform foundations,PROJ-102,Audit log,50%,2,1,3,In Progress,Backend_Team,\n"
+    "INIT-2 - Customer experience,PROJ-103,New onboarding flow,0%,0,4,0,To Do,Frontend_Team,Starts next sprint\n"
+)
+
+_PROGRESS_CSV_ALIASES = {
+    "parent link": "Parent Link", "parent": "Parent Link",
+    "key": "Key", "issue key": "Key", "id": "Key",
+    "summary": "Summary", "epic": "Summary", "epic name": "Summary", "title": "Summary",
+    "completion": "Completion", "progress": "Completion", "% complete": "Completion",
+    "closed / resolved": "Closed / Resolved", "closed": "Closed / Resolved",
+    "to do": "To Do", "todo": "To Do",
+    "in progress": "In progress",
+    "status": "Status",
+    "labels": "Labels", "label": "Labels", "team": "Labels",
+    "presentation update": "Presentation update", "update": "Presentation update", "update / context": "Presentation update",
+}
+
+
+def normalize_progress_csv(df):
+    """Turn an uploaded CSV into the Quarterly Progress table.
+
+    Needs at least Key and Summary (or Epic). Completion accepts 50, 50% or 0.5
+    and is shown as "50%"; a missing value shows "-". Count columns default to 0.
+    Raises ValueError when a required column is missing.
+    """
+    from utils.jira_helpers import map_epic_status_for_completion_table
+
+    renamed = {}
+    for column in df.columns:
+        target = _PROGRESS_CSV_ALIASES.get(str(column).strip().lower())
+        if target and target not in renamed.values():
+            renamed[column] = target
+    out = df.rename(columns=renamed)[list(renamed.values())].dropna(how="all").copy()
+    missing = [c for c in ("Key", "Summary") if c not in out.columns]
+    if missing:
+        raise ValueError(f"The CSV needs the column(s): {', '.join(missing)}.")
+
+    def _completion(value):
+        if pd.isna(value) or str(value).strip() in ("", "-"):
+            return "-"
+        try:
+            number = float(str(value).replace("%", "").strip())
+        except ValueError:
+            return "-"
+        if 0 < number <= 1 and "%" not in str(value):
+            number *= 100
+        return f"{round(max(0, min(100, number)))}%"
+
+    out["Completion"] = out["Completion"].apply(_completion) if "Completion" in out.columns else "-"
+    for column in ("Closed / Resolved", "To Do", "In progress"):
+        out[column] = pd.to_numeric(out[column], errors="coerce").fillna(0).astype(int) if column in out.columns else 0
+    out["Status"] = out["Status"].apply(map_epic_status_for_completion_table) if "Status" in out.columns else "To Do"
+    for column in ("Parent Link", "Labels", "Presentation update"):
+        out[column] = blank_if_missing(out[column]) if column in out.columns else ""
+    out["Parent Link"] = out["Parent Link"].replace("", "-")
+    out["Key"] = out["Key"].astype(str).str.strip()
+    out["Summary"] = blank_if_missing(out["Summary"])
+    return out[PROGRESS_CSV_COLUMNS].reset_index(drop=True)
+
+
 def prepare_quarterly_progress_for_presentation(df):
     """Add presentation fields and prioritize open, lower-progress Epics for review."""
     prepared = df.copy()
@@ -126,6 +194,51 @@ def delivery_month_options():
     """Provide a simple rolling set of month choices for approximate delivery milestones."""
     start = pd.Timestamp.today().replace(day=1)
     return ["-"] + [(start + pd.DateOffset(months=offset)).strftime("%b %Y") for offset in range(18)]
+
+
+ROADMAP_COLUMNS = ["Include in delivery roadmap", "Release version", "Delivery month", "Delivery timing"]
+
+
+def ensure_roadmap_columns(df):
+    """Add the delivery roadmap fields to a Planning backlog and clean their types.
+
+    The backlog is round-tripped through CSV, so empty values come back as NaN;
+    this keeps the checkbox boolean and the text/select columns as strings.
+    """
+    out = df.copy()
+    if "Include in delivery roadmap" not in out.columns:
+        out["Include in delivery roadmap"] = False
+    out["Include in delivery roadmap"] = (
+        out["Include in delivery roadmap"].map(lambda v: str(v).strip().lower() in {"true", "1", "yes"} if not isinstance(v, bool) else v)
+    ).astype(bool)
+    for column in ("Release version", "Delivery month"):
+        out[column] = blank_if_missing(out[column]).astype(str) if column in out.columns else ""
+    timing = blank_if_missing(out["Delivery timing"]).astype(str) if "Delivery timing" in out.columns else pd.Series("", index=out.index)
+    out["Delivery timing"] = timing.where(timing.isin(["Beginning", "Mid", "End"]), "Mid")
+    return out
+
+
+def backlog_roadmap_source(backlog, progress_df=None):
+    """Shape the Planning backlog for the delivery roadmap builders.
+
+    Uses Epic Name as Summary. Completion and the update text come from the
+    Progress page when the same Epic is loaded there; otherwise "-" and "".
+    """
+    df = ensure_roadmap_columns(backlog)
+    df["Summary"] = blank_if_missing(df["Epic Name"]) if "Epic Name" in df.columns else ""
+    completion, updates = {}, {}
+    if isinstance(progress_df, pd.DataFrame) and not progress_df.empty and "Key" in progress_df.columns:
+        by_key = progress_df.drop_duplicates("Key").set_index(progress_df.drop_duplicates("Key")["Key"].astype(str))
+        if "Completion" in by_key.columns:
+            completion = by_key["Completion"].to_dict()
+        if "Presentation update" in by_key.columns:
+            updates = blank_if_missing(by_key["Presentation update"]).to_dict()
+    keys = df["Key"].astype(str) if "Key" in df.columns else pd.Series("", index=df.index)
+    df["Completion"] = keys.map(lambda key: completion.get(key, "-"))
+    df["Presentation update"] = keys.map(lambda key: updates.get(key, ""))
+    if "Status" not in df.columns:
+        df["Status"] = "-"
+    return df
 
 
 def build_delivery_roadmap_timeline(df):
@@ -333,10 +446,16 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex):
     )
     key_style = ParagraphStyle("QuarterlyProgressKey", parent=body_style, fontName="Helvetica-Bold")
 
-    visible_columns = [
-        ("Key", 55), ("Epic", 150), ("Progress", 60), ("Closed / Resolved", 56),
-        ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 75), ("Update", 123)
-    ]
+    if "Parent Link" in df.columns:
+        visible_columns = [
+            ("Parent Link", 90), ("Key", 55), ("Epic", 120), ("Progress", 60), ("Closed / Resolved", 56),
+            ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 60), ("Update", 78)
+        ]
+    else:
+        visible_columns = [
+            ("Key", 55), ("Epic", 150), ("Progress", 60), ("Closed / Resolved", 56),
+            ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 75), ("Update", 123)
+        ]
     column_sources = {"Epic": "Summary", "Progress": "Completion", "Update": "Presentation update"}
     table_data = [[Paragraph(name, header_style) for name, _ in visible_columns]]
     for _, row in df.iterrows():
@@ -452,12 +571,20 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progr
         if subtitle:
             add_text(slide, subtitle, 0.7, 0.82, 11.7, 0.24, size=10, color=muted)
 
-    progress_columns = [
-        ("Key", "Key", 0.85), ("Epic", "Summary", 2.70), ("Progress", "Completion", 0.85),
-        ("Closed / Resolved", "Closed / Resolved", 0.90), ("To Do", "To Do", 0.65),
-        ("In progress", "In progress", 0.90), ("Status", "Status", 0.90), ("Team", "Team", 1.10),
-        ("Update", "Presentation update", 3.13),
-    ]
+    if progress_df is not None and "Parent Link" in progress_df.columns:
+        progress_columns = [
+            ("Parent Link", "Parent Link", 1.40), ("Key", "Key", 0.85), ("Epic", "Summary", 2.20),
+            ("Progress", "Completion", 0.85), ("Closed / Resolved", "Closed / Resolved", 0.90),
+            ("To Do", "To Do", 0.65), ("In progress", "In progress", 0.90), ("Status", "Status", 0.80),
+            ("Team", "Team", 1.00), ("Update", "Presentation update", 2.43),
+        ]
+    else:
+        progress_columns = [
+            ("Key", "Key", 0.85), ("Epic", "Summary", 2.70), ("Progress", "Completion", 0.85),
+            ("Closed / Resolved", "Closed / Resolved", 0.90), ("To Do", "To Do", 0.65),
+            ("In progress", "In progress", 0.90), ("Status", "Status", 0.90), ("Team", "Team", 1.10),
+            ("Update", "Presentation update", 3.13),
+        ]
     rows_per_slide = 12
     progress_df = prepare_quarterly_progress_for_presentation(progress_df)
     for start in range(0, len(progress_df), rows_per_slide):

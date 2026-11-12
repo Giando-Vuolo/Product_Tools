@@ -492,7 +492,7 @@ async def search_jira_api(req: SearchJiraRequest, api_key: str = Depends(get_api
     jira_token = os.getenv("JIRA_API_TOKEN", "")
     jira_auth_method = os.getenv("JIRA_AUTH_METHOD", "Personal Access Token (Bearer PAT)")
     jira_email = os.getenv("JIRA_EMAIL", "")
-    project_key = os.getenv("AI_ISSUE_PROJECT_KEY") or os.getenv("PROJECT_NAME")
+    project_key = os.getenv("AI_ISSUE_PROJECT_KEY") or os.getenv("JIRA_PROJECT_KEY") or os.getenv("PROJECT_NAME")
 
     if not jira_server or not jira_token:
         raise HTTPException(status_code=400, detail="Jira Server or Token not configured.")

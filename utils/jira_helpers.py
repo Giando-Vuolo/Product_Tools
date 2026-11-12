@@ -376,23 +376,134 @@ def fetch_epic_completion(server, token, epic_keys, epic_link_field, auth_type="
 
     return (completion_by_epic, issue_status_counts_by_epic) if return_issue_counts else completion_by_epic
 
-def build_quarterly_epic_progress_table(server, token, committed_label, quarter_label, title, position, auth_type, email, project_key="MYPROJECT"):
+def _extract_parent_link_value(value):
+    """Return (key, summary, issue_id) from a Jira "Parent Link" field value.
+
+    Advanced Roadmaps exposes this field in different shapes depending on the
+    Jira version: a plain key string, {"key": ...}, or {"id": ..., "data": {...}}.
     """
-    Query committed quarterly epics strictly requiring both configured labels.
-    Calculates progress for each Epic from child issues linked via parent or Epic Link.
+    if value is None or value == "":
+        return None, None, None
+    if isinstance(value, str):
+        return value.strip() or None, None, None
+    if isinstance(value, (int, float)):
+        return None, None, str(int(value))
+    if isinstance(value, dict):
+        data = value.get("data") if isinstance(value.get("data"), dict) else {}
+        key = value.get("key") or data.get("key")
+        summary = value.get("summary") or data.get("summary") or (value.get("fields") or {}).get("summary")
+        issue_id = value.get("id") or data.get("id")
+        return key, summary, (str(issue_id) if issue_id not in (None, "") else None)
+    return None, None, None
+
+
+def fetch_epic_parent_links(server, token, epic_keys, auth_type="Personal Access Token (Bearer PAT)", email=""):
+    """Map each Epic key to its "Parent Link" as "KEY - Summary".
+
+    Uses the Advanced Roadmaps "Parent Link" field when it exists and falls back
+    to the standard "parent" field (Jira Cloud hierarchy). Epics without a
+    parent map to "-".
     """
+    parent_by_epic = {str(key): "-" for key in epic_keys}
+    if not epic_keys or not server or not token:
+        return parent_by_epic
+
+    headers, auth = get_jira_auth_headers(token, auth_type, email)
+    base = server.rstrip("/")
+
+    def _get(url, params=None, timeout=15):
+        return requests.get(url, headers=headers, params=params, auth=auth, timeout=timeout)
+
+    try:
+        parent_link_id = None
+        field_resp = _get(f"{base}/rest/api/2/field", timeout=10)
+        if field_resp.status_code == 200:
+            for field in field_resp.json():
+                if str(field.get("name", "")).strip().lower() == "parent link":
+                    parent_link_id = field.get("id")
+                    break
+
+        keys_str = ",".join(f'"{key}"' for key in epic_keys)
+        requested = ["parent"] + ([parent_link_id] if parent_link_id else [])
+        resp = _get(f"{base}/rest/api/2/search", {"jql": f"key in ({keys_str})", "maxResults": 1000, "fields": ",".join(requested)})
+        if resp.status_code != 200:
+            return parent_by_epic
+
+        found = {}  # epic key -> (parent key, parent summary, parent id)
+        for issue in resp.json().get("issues", []):
+            fields = issue.get("fields") or {}
+            key, summary, issue_id = _extract_parent_link_value(fields.get(parent_link_id)) if parent_link_id else (None, None, None)
+            if not key and not issue_id:
+                key, summary, issue_id = _extract_parent_link_value(fields.get("parent"))
+            if key or issue_id:
+                found[issue.get("key")] = (key, summary, issue_id)
+
+        # Resolve missing keys/summaries with one extra lookup.
+        missing_keys = sorted({k for k, s, _ in found.values() if k and not s})
+        missing_ids = sorted({i for k, _, i in found.values() if i and not k})
+        clauses = []
+        if missing_keys:
+            clauses.append("key in (" + ",".join(f'"{k}"' for k in missing_keys) + ")")
+        if missing_ids:
+            clauses.append("id in (" + ",".join(missing_ids) + ")")
+        lookup = {}
+        if clauses:
+            lookup_resp = _get(f"{base}/rest/api/2/search", {"jql": " OR ".join(clauses), "maxResults": 1000, "fields": "summary"})
+            if lookup_resp.status_code == 200:
+                for issue in lookup_resp.json().get("issues", []):
+                    entry = (issue.get("key"), (issue.get("fields") or {}).get("summary"))
+                    lookup[issue.get("key")] = entry
+                    lookup[str(issue.get("id"))] = entry
+
+        for epic_key, (key, summary, issue_id) in found.items():
+            if not key or not summary:
+                resolved = lookup.get(key) or lookup.get(issue_id) or (None, None)
+                key = key or resolved[0]
+                summary = summary or resolved[1]
+            if key:
+                parent_by_epic[str(epic_key)] = f"{key} - {summary}" if summary else key
+    except Exception as e:
+        logger.exception(f"fetch_epic_parent_links EXCEPTION: {e}")
+
+    return parent_by_epic
+
+
+def quarterly_epics_jql(project_key, committed_label, quarter_label):
+    """JQL for the Epics of a project that carry both the committed and the quarter label."""
     escaped_quarter_label = quarter_label.replace('"', '\\"')
     escaped_committed_label = committed_label.replace('"', '\\"')
-    
-    proj_jql = f'project = "{project_key.strip()}" AND ' if project_key.strip() else ''
-    
-    jql = (
+    project_key = (project_key or "").strip()
+    proj_jql = f'project = "{project_key}" AND ' if project_key else ''
+    return (
         f'{proj_jql}issuetype = Epic '
         f'AND labels = "{escaped_committed_label}" '
         f'AND labels = "{escaped_quarter_label}" '
         'ORDER BY priority DESC, updated DESC'
     )
-    
+
+
+def fetch_quarterly_epics_backlog(server, token, committed_label, quarter_label, auth_type, email, project_key=""):
+    """Committed quarterly Epics as a backlog DataFrame for the Planning page.
+
+    Columns: Key, Summary, Status, Labels, Description, Start Date, Due Date
+    (dates from Jira's Target start/end). Returns None if the query fails.
+    """
+    jql = quarterly_epics_jql(project_key, committed_label, quarter_label)
+    df = fetch_jira_tickets_dataset(server, token, jql, is_sprint=False, auth_type=auth_type, email=email, include_description=True)
+    if df is None or df.empty:
+        return df
+    df = df.rename(columns={"Target start date": "Start Date", "Target end date": "Due Date"})
+    return df[[c for c in ["Key", "Summary", "Status", "Labels", "Description", "Start Date", "Due Date"] if c in df.columns]]
+
+
+def build_quarterly_epic_progress_table(server, token, committed_label, quarter_label, title, position, auth_type, email, project_key="MYPROJECT", include_parent_link=False):
+    """
+    Query committed quarterly epics strictly requiring both configured labels.
+    Calculates progress for each Epic from child issues linked via parent or Epic Link.
+    With include_parent_link, adds the Epic's "Parent Link" as the first data column.
+    """
+    jql = quarterly_epics_jql(project_key, committed_label, quarter_label)
+
     try:
         # Query matching epics
         logger.debug(f"build_quarterly_epic_progress_table JQL: {jql}")
@@ -433,9 +544,13 @@ def build_quarterly_epic_progress_table(server, token, committed_label, quarter_
                 res_df[count_column] = res_df["Key"].map(
                     lambda epic_key: issue_status_counts_by_epic.get(str(epic_key), {}).get(count_column, 0)
                 )
+            if include_parent_link:
+                parent_by_epic = fetch_epic_parent_links(server, token, epic_keys, auth_type=auth_type, email=email)
+                res_df["Parent Link"] = res_df["Key"].astype(str).map(parent_by_epic).fillna("-")
+                cols_to_keep = ["Parent Link"] + cols_to_keep
             extra_df = res_df[[col for col in cols_to_keep if col in res_df.columns]].copy()
         else:
-            extra_df = pd.DataFrame(columns=cols_to_keep)
+            extra_df = pd.DataFrame(columns=(["Parent Link"] if include_parent_link else []) + cols_to_keep)
     
         extra_df.insert(0, "Select", False)
         if "Labels" not in extra_df.columns:
