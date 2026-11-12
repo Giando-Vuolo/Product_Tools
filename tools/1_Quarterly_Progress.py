@@ -167,7 +167,7 @@ elif st.session_state.active_tab_qprog == STEPS[2]:
         progress_subtitle = config["subtitle"].strip()
         report_df = prepare_quarterly_progress_for_presentation(progress_df)
         primary = st.session_state.get("primary_color", "#0B2756")
-        progress_pdf = build_quarterly_progress_slide_pdf(report_df, progress_title, primary)
+        progress_pdf = build_quarterly_progress_slide_pdf(report_df, progress_title, primary, progress_subtitle)
         col_pdf, col_pptx = st.columns(2)
         with col_pdf:
             st.download_button(

@@ -44,3 +44,9 @@ htmlcov/
 
 # Local tokens
 Tokem
+
+# Local-only assets (corporate templates, private logos...)
+assets/templates/
+assets/local/
+# Office lock files
+~$*

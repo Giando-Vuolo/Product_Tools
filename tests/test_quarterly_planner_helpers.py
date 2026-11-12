@@ -139,3 +139,74 @@ class QuarterlyPlannerHelpersTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuarterlyPptxTemplateTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self._dir = tempfile.TemporaryDirectory()
+        self.dir = self._dir.name
+        self._env = os.environ.pop("QUARTERLY_PPTX_TEMPLATE", None)
+
+    def tearDown(self):
+        self._dir.cleanup()
+        os.environ.pop("QUARTERLY_PPTX_TEMPLATE", None)
+        if self._env is not None:
+            os.environ["QUARTERLY_PPTX_TEMPLATE"] = self._env
+
+    def _touch(self, name):
+        path = os.path.join(self.dir, name)
+        open(path, "wb").close()
+        return path
+
+    def test_no_template(self):
+        from utils.quarterly_planner_helpers import find_quarterly_pptx_template
+        self.assertIsNone(find_quarterly_pptx_template(self.dir))
+        self.assertIsNone(find_quarterly_pptx_template(os.path.join(self.dir, "missing")))
+
+    def test_preferred_name_and_lock_files(self):
+        from utils.quarterly_planner_helpers import find_quarterly_pptx_template
+        self._touch("~$Template QP.pptx")
+        self.assertIsNone(find_quarterly_pptx_template(self.dir))
+        other = self._touch("A corporate deck.pptx")
+        self.assertEqual(find_quarterly_pptx_template(self.dir), other)
+        preferred = self._touch("Template QP.pptx")
+        self.assertEqual(find_quarterly_pptx_template(self.dir), preferred)
+
+    def test_env_override(self):
+        from utils.quarterly_planner_helpers import find_quarterly_pptx_template
+        self._touch("Template QP.pptx")
+        chosen = self._touch("Other.pptx")
+        os.environ["QUARTERLY_PPTX_TEMPLATE"] = "Other.pptx"
+        self.assertEqual(find_quarterly_pptx_template(self.dir), chosen)
+
+    def test_progress_pdf_uses_template_design(self):
+        from unittest import mock
+        import utils.quarterly_planner_helpers as helpers
+        df = pd.DataFrame([{"Key": f"K-{i}", "Summary": "Epic", "Completion": "50%", "Status": "In Progress"} for i in range(13)])
+        with mock.patch.object(helpers, "find_quarterly_pptx_template", return_value="t.pptx"), \
+             mock.patch.object(helpers, "_template_chrome", return_value={"width": 13.333, "height": 7.5, "logo": None, "texts": [("CONFIDENTIAL", 0.07, 7.3, 0.85, 8, "#000000", False)]}):
+            pdf = helpers.build_quarterly_progress_slide_pdf(df, "Title", "#0B2756", "Subtitle")
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(pdf))
+        self.assertEqual(len(reader.pages), 2)  # 12 Epics per slide, like the PowerPoint
+        self.assertEqual(round(float(reader.pages[0].mediabox.width)), 960)
+        text = reader.pages[1].extract_text()
+        self.assertIn("Title (cont. 2)", text)
+        self.assertIn("CONFIDENTIAL", text)
+
+    def test_without_template_keeps_the_built_in_colours(self):
+        from unittest import mock
+        import utils.quarterly_planner_helpers as helpers
+        from pptx import Presentation
+        from pypdf import PdfReader
+        df = pd.DataFrame([{"Key": "K-1", "Summary": "Epic", "Completion": "50%", "Status": "In Progress"},
+                           {"Key": "K-2", "Summary": "Epic", "Completion": "10%", "Status": "To Do"}])
+        with mock.patch.object(helpers, "TEMPLATES_DIR", os.path.join(self.dir, "missing")):
+            self.assertIsNone(helpers.find_quarterly_pptx_template())
+            pdf = helpers.build_quarterly_progress_slide_pdf(df, "Title", "#0B2756", "Subtitle")
+            pptx = helpers.build_quarterly_progress_pptx(df, None, "Title", "Subtitle", "", "", "#0B2756")
+        self.assertEqual(round(float(PdfReader(io.BytesIO(pdf)).pages[0].mediabox.width)), 792)  # landscape letter
+        table = next(shape for shape in Presentation(io.BytesIO(pptx)).slides[0].shapes if shape.has_table).table
+        self.assertEqual(str(table.cell(0, 0).fill.fore_color.rgb), "0B2756")
+        self.assertEqual({str(table.cell(1, 0).fill.fore_color.rgb), str(table.cell(2, 0).fill.fore_color.rgb)}, {"FFFFFF", "F1F5F9"})

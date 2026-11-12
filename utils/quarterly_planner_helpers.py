@@ -413,8 +413,18 @@ def build_delivery_roadmap_slide_pdf(roadmap_df, title, primary_color_hex):
     return buffer.getvalue()
 
 
-def build_quarterly_progress_slide_pdf(df, title, primary_color_hex):
-    """Create a presentation-style landscape slide for the quarterly Epic progress."""
+def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle=""):
+    """Create a presentation-style landscape slide for the quarterly Epic progress.
+
+    With a local PowerPoint template in assets/templates the PDF copies its look
+    (same design as the PowerPoint export), so the on-screen preview matches it.
+    """
+    template_path = find_quarterly_pptx_template()
+    if template_path is not None:
+        try:
+            return _build_template_progress_pdf(df, title, subtitle, template_path)
+        except Exception:
+            pass  # unreadable template: fall back to the built-in design
     from reportlab.lib.pagesizes import letter, landscape
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -491,6 +501,227 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex):
     return buffer.getvalue()
 
 
+TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "templates")
+# Preferred file names, checked in order; otherwise the first .pptx in assets/templates is used.
+QUARTERLY_PPTX_TEMPLATE_NAMES = ("Template QP.pptx", "quarterly_planning_template.pptx")
+# Layouts of the corporate template that match the dark slide design, by preference.
+QUARTERLY_PPTX_LAYOUT_NAMES = ("03 Inhalt – Nur Titel, Deep Space Blue", "1_Title Only Deep Space Blue", "Title only Deep Space Blue")
+
+
+def find_quarterly_pptx_template(templates_dir=None):
+    """Path of the local PowerPoint template for the Quarterly exports, or None.
+
+    QUARTERLY_PPTX_TEMPLATE in .env can name a file (absolute, or relative to
+    assets/templates). Templates are local only: assets/templates is gitignored.
+    """
+    templates_dir = templates_dir or TEMPLATES_DIR
+    configured = os.getenv("QUARTERLY_PPTX_TEMPLATE", "").strip()
+    candidates = []
+    if configured:
+        candidates.append(configured if os.path.isabs(configured) else os.path.join(templates_dir, configured))
+    candidates += [os.path.join(templates_dir, name) for name in QUARTERLY_PPTX_TEMPLATE_NAMES]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    if os.path.isdir(templates_dir):
+        for name in sorted(os.listdir(templates_dir)):
+            # Skip Office lock files (~$...) left while the template is open in PowerPoint
+            if name.lower().endswith(".pptx") and not name.startswith("~$"):
+                return os.path.join(templates_dir, name)
+    return None
+
+
+def _template_content_layout(prs):
+    """Dark title-only layout of the corporate template, found by name; layout 3 as a fallback."""
+    by_name = {layout.name.strip(): layout for layout in prs.slide_layouts}
+    for name in QUARTERLY_PPTX_LAYOUT_NAMES:
+        if name in by_name:
+            return by_name[name]
+    return prs.slide_layouts[2] if len(prs.slide_layouts) > 2 else prs.slide_layouts[0]
+
+
+# Colours of the corporate template design, shared by the PowerPoint export and its PDF preview
+TEMPLATE_BACKGROUND_HEX = "#002D37"
+TEMPLATE_TEAL_HEX = "#00978F"
+TEMPLATE_BAR_REMAINING_HEX = "#00626E"
+TEMPLATE_BAR_COMPLETE_HEX = "#AAFF00"
+PROGRESS_ROWS_PER_SLIDE = 12
+
+
+def _progress_columns(df):
+    """(header, source column, width in inches) of the progress table, as in the PowerPoint export."""
+    if df is not None and "Parent Link" in df.columns:
+        return [
+            ("Parent Link", "Parent Link", 1.40), ("Key", "Key", 0.85), ("Epic", "Summary", 2.20),
+            ("Progress", "Completion", 0.85), ("Closed / Resolved", "Closed / Resolved", 0.90),
+            ("To Do", "To Do", 0.65), ("In progress", "In progress", 0.90), ("Status", "Status", 0.80),
+            ("Team", "Team", 1.00), ("Update", "Presentation update", 2.43),
+        ]
+    return [
+        ("Key", "Key", 0.85), ("Epic", "Summary", 2.70), ("Progress", "Completion", 0.85),
+        ("Closed / Resolved", "Closed / Resolved", 0.90), ("To Do", "To Do", 0.65),
+        ("In progress", "In progress", 0.90), ("Status", "Status", 0.90), ("Team", "Team", 1.10),
+        ("Update", "Presentation update", 3.13),
+    ]
+
+
+def _template_chrome(template_path):
+    """Logo and footer texts of the template's content layout, for drawing them into the PDF.
+
+    Returns {"width", "height" (inches), "logo": (png bytes, left, top, width, height) or None,
+    "texts": [(text, left, top, width, size pt, hex colour, right aligned)]}.
+    """
+    from pptx import Presentation
+    from pptx.util import Emu
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    from pptx.enum.text import PP_ALIGN
+
+    prs = Presentation(template_path)
+    layout = _template_content_layout(prs)
+    inches = lambda value: Emu(value or 0).inches
+    chrome = {"width": inches(prs.slide_width), "height": inches(prs.slide_height), "logo": None, "texts": []}
+    for part in (layout.slide_master, layout):
+        for shape in part.shapes:
+            if shape.is_placeholder:
+                continue
+            left, top, width, height = inches(shape.left), inches(shape.top), inches(shape.width), inches(shape.height)
+            on_slide = 0 <= left < chrome["width"] and 0 <= top < chrome["height"] and width > 0
+            if not on_slide:
+                continue  # guide marks around the slide edge
+            if shape.shape_type == MSO_SHAPE_TYPE.PICTURE and top < 1.0:
+                chrome["logo"] = (shape.image.blob, left, top, width, height)  # the layout's logo wins
+            elif shape.has_text_frame and shape.text_frame.text.strip() and top > chrome["height"] - 0.5:
+                paragraph = shape.text_frame.paragraphs[0]
+                run = paragraph.runs[0] if paragraph.runs else None
+                size = run.font.size.pt if run is not None and run.font.size else 7
+                color = "#A3B5B9"
+                try:
+                    if run is not None and run.font.color and run.font.color.type == 1:
+                        color = f"#{run.font.color.rgb}"
+                except Exception:
+                    pass
+                right = paragraph.alignment == PP_ALIGN.RIGHT or (left + width > chrome["width"] * 0.55 and paragraph.alignment is None)
+                chrome["texts"].append((shape.text_frame.text.strip(), left, top, width, size, color, right))
+    return chrome
+
+
+def _template_progress_bar(value, width, height):
+    """Percentage label over a bar, in the template colours (lime at 100%)."""
+    from reportlab.graphics.shapes import Drawing, Rect, String
+    from reportlab.lib import colors
+
+    try:
+        percentage = max(0, min(100, int(float(str(value).replace("%", "")))))
+    except Exception:
+        percentage = 0
+    drawing = Drawing(width, height)
+    drawing.add(String(width / 2, height - 7.5, f"{percentage}%", fontName="Helvetica-Bold", fontSize=6.5,
+                       fillColor=colors.white, textAnchor="middle"))
+    bar_width, bar_height = width * 0.78, 2.2
+    bar_left = (width - bar_width) / 2
+    drawing.add(Rect(bar_left, 2, bar_width, bar_height, fillColor=colors.HexColor(TEMPLATE_BAR_REMAINING_HEX), strokeColor=None))
+    if percentage:
+        filled = colors.HexColor(TEMPLATE_BAR_COMPLETE_HEX if percentage == 100 else TEMPLATE_TEAL_HEX)
+        drawing.add(Rect(bar_left, 2, bar_width * percentage / 100, bar_height, fillColor=filled, strokeColor=None))
+    return drawing
+
+
+def _build_template_progress_pdf(df, title, subtitle, template_path):
+    """PDF version of the template-styled PowerPoint progress slides (same layout, colours and paging)."""
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate, Paragraph, Table, TableStyle, PageBreak
+
+    chrome = _template_chrome(template_path)
+    point = 72
+    page_width, page_height = chrome["width"] * point, chrome["height"] * point
+    white = colors.white
+    teal = colors.HexColor(TEMPLATE_TEAL_HEX)
+    background = colors.HexColor(TEMPLATE_BACKGROUND_HEX)
+    title = (title or "").strip()
+    subtitle = (subtitle or "").strip()
+
+    df = prepare_quarterly_progress_for_presentation(df)
+    columns = _progress_columns(df)
+    pages = max(1, -(-len(df) // PROGRESS_ROWS_PER_SLIDE))
+    logo = ImageReader(io.BytesIO(chrome["logo"][0])) if chrome["logo"] else None
+
+    def y_from_top(inches_from_top):
+        return page_height - inches_from_top * point
+
+    def draw_page(canvas, doc):
+        canvas.saveState()
+        canvas.setFillColor(background)
+        canvas.rect(0, 0, page_width, page_height, stroke=0, fill=1)
+        if logo is not None:
+            _, left, top, width, height = chrome["logo"]
+            canvas.drawImage(logo, left * point, y_from_top(top + height), width * point, height * point, mask="auto")
+        page_number = canvas.getPageNumber()
+        suffix = "" if page_number == 1 else f" (cont. {page_number})"
+        canvas.setFillColor(white)
+        canvas.setFont("Helvetica", 24)
+        canvas.drawString(0.52 * point, y_from_top(0.93), f"{title}{suffix}")
+        if subtitle:
+            canvas.setFont("Helvetica", 13)
+            canvas.drawString(0.52 * point, y_from_top(1.36), subtitle)
+        for text, left, top, width, size, color, right in chrome["texts"]:
+            canvas.setFillColor(colors.HexColor(color))
+            canvas.setFont("Helvetica", size)
+            baseline = y_from_top(top + 0.11)
+            if right:
+                canvas.drawRightString((left + width) * point, baseline, text)
+            else:
+                canvas.drawString(left * point, baseline, text)
+        canvas.restoreState()
+
+    table_left, table_top, table_width, table_height = 0.42, 1.90, 12.45, 4.92
+    frame = Frame(table_left * point, y_from_top(table_top + table_height) - 4, table_width * point + 2,
+                  table_height * point + 8, leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+    buffer = io.BytesIO()
+    doc = BaseDocTemplate(buffer, pagesize=(page_width, page_height), leftMargin=0, rightMargin=0, topMargin=0, bottomMargin=0)
+    doc.addPageTemplates([PageTemplate(id="slide", frames=[frame], onPage=draw_page)])
+
+    header_style = ParagraphStyle("TplHeader", fontName="Helvetica-Bold", fontSize=8, leading=9.5, textColor=white)
+    body_style = ParagraphStyle("TplBody", fontName="Helvetica", fontSize=7.2, leading=8.6, textColor=white)
+    key_style = ParagraphStyle("TplKey", parent=body_style, fontName="Helvetica-Bold")
+    # PowerPoint stretches the columns to the full table width; do the same
+    scale = table_width / sum(c[2] for c in columns)
+    widths = [c[2] * scale * point for c in columns]
+
+    story = []
+    for page in range(pages):
+        chunk = df.iloc[page * PROGRESS_ROWS_PER_SLIDE:(page + 1) * PROGRESS_ROWS_PER_SLIDE]
+        row_height = table_height * point / (len(chunk) + 1)
+        data = [[Paragraph(html.escape(header), header_style) for header, _, _ in columns]]
+        for _, row in chunk.iterrows():
+            cells = []
+            for header, source, width in columns:
+                value = row.get(source, "-")
+                value = "-" if pd.isna(value) or str(value).strip() == "" else str(value)
+                if source == "Completion":
+                    cells.append(_template_progress_bar(value, width * scale * point - 8, min(row_height - 6, 18)))
+                else:
+                    cells.append(Paragraph(html.escape(value), key_style if source == "Key" else body_style))
+            data.append(cells)
+        table = Table(data, colWidths=widths, rowHeights=[row_height] * len(data))
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), teal),
+            ("BACKGROUND", (0, 1), (-1, -1), background),
+            ("VALIGN", (0, 0), (-1, 0), "TOP"),
+            ("VALIGN", (0, 1), (-1, -1), "MIDDLE"),
+            ("ALIGN", (3, 1), (3, -1), "CENTER") if columns[3][1] == "Completion" else ("ALIGN", (2, 1), (2, -1), "CENTER"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("GRID", (0, 0), (-1, -1), 1, white),
+        ]))
+        story.append(table)
+        if page < pages - 1:
+            story.append(PageBreak())
+    doc.build(story)
+    return buffer.getvalue()
+
+
 def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progress_subtitle, roadmap_title, roadmap_subtitle, primary_color_hex):
     """Build editable PowerPoint slides for quarterly progress and delivery milestones."""
     from pptx import Presentation
@@ -515,8 +746,8 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progr
     white = RGBColor(255, 255, 255)
     template_muted = RGBColor(113, 190, 187)
 
-    template_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "templates", "quarterly_planning_template.pptx")
-    using_template = os.path.exists(template_path)
+    template_path = find_quarterly_pptx_template()
+    using_template = template_path is not None
     prs = Presentation(template_path) if using_template else Presentation()
     if using_template:
         for slide_id in list(prs.slides._sldIdLst):
@@ -526,7 +757,7 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progr
         prs.slide_width = Inches(13.333)
         prs.slide_height = Inches(7.5)
     blank_layout = prs.slide_layouts[6]
-    content_layout = prs.slide_layouts[2] if using_template and len(prs.slide_layouts) > 2 else blank_layout
+    content_layout = _template_content_layout(prs) if using_template else blank_layout
 
     def add_text(slide, text, left, top, width, height, size=12, color=dark, bold=False, align=PP_ALIGN.LEFT):
         shape = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
