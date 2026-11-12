@@ -14,7 +14,7 @@ You can connect directly to your corporate **Jira Server / Cloud** to automatica
 * **🤝 Live Collaboration**: Automatically spins up a secure, free Cloudflare tunnel on startup, displaying a shareable public link in the sidebar so team members can view and edit the roadmap together in real time.
 * **✍️ Commercial Workspace Workbook**: Refine technical Jira summaries into elegant commercial feature descriptions, schedule live product demos with presenters, and toggle report targets.
 * **🎨 Visual Branding**: Customize document primary theme colors with premium corporate presets, upload corporate logos, and add custom welcome intros.
-* **📈 Jira Quarterly Epic Progress**: Load and calculate progress stats for committed Epics (filtered by committed label + quarter label) directly inside both the Quarterly Planner and the Sprint Review modules.
+* **📈 Jira Quarterly Epic Progress**: Load and calculate progress stats for committed Epics (filtered by committed label + quarter label) directly inside Quarterly Review → Progress and the Sprint Review module. Quarterly Review → Planning holds the CSV backlog workbook and Gantt.
 * **💾 Export Presentation Slide Decks & PDFs**: Export compact, high-density, beautifully styled landscape slide presentation decks and portrait documents.
 * **📊 Interactive Gantt Chart & Velocity Reports**: Track delivery speed, complete/rollover story points, and visualize hierarchical timelines at a glance.
 
@@ -141,7 +141,7 @@ pytest --cov=utils --cov-branch --cov-report=term-missing
 |------|----------|
 | `app.py` | Streamlit entry point: Home Hub, navigation, settings, remote-access gate and collaboration tunnel. |
 | `api.py` | Local FastAPI service used by the AI Agent (`X-API-Key` protected). |
-| `tools/` | One Streamlit page per tool (`1_Quarterly_Planner.py` … `7_Release_Plan.py`); `tools/release_plan/` holds the Release Plan sub-pages. |
+| `tools/` | One Streamlit page per tool (`1_Quarterly_Progress.py`, `1_Quarterly_Planner.py` … `7_Release_Plan.py`); `tools/release_plan/` holds the Release Plan sub-pages. |
 | `utils/` | Business logic shared by the pages (Jira, Confluence, KPIs, PDF/PPTX export, release checks, persistence). Keep new logic here, free of Streamlit calls, so it can be unit-tested. |
 | `tests/` | Unit tests and fixtures. |
 | `data/` | Local workbook state saved by the app (CSV/JSON). |

@@ -4,11 +4,9 @@ from utils.df_helpers import blank_if_missing
 import plotly.express as px
 import re
 import os
-import io
-import html
-import base64
-from dotenv import load_dotenv
-from utils.jira_helpers import build_quarterly_epic_progress_table
+from utils.quarterly_theme import apply_quarterly_page_setup
+from utils.quarterly_load import render_load_source, render_title_fields, jira_auth_args, show_jira_error, show_flash
+from utils.jira_helpers import fetch_quarterly_epics_backlog
 from utils.stepper import render_stepper
 
 # Shared file paths for live collaboration
@@ -50,13 +48,7 @@ def sync_from_disk_if_modified():
 # Run initial disk sync check
 sync_from_disk_if_modified()
 
-# Load environment variables
-load_dotenv(override=True)
-default_primary_color = os.getenv("PRIMARY_COLOR", "#3B82F6")
-if 'primary_color' not in st.session_state or st.session_state.get('prev_env_color') != default_primary_color:
-    st.session_state.primary_color = default_primary_color
-    st.session_state.prev_env_color = default_primary_color
-
+apply_quarterly_page_setup()
 
 if 'selected_epic_key' not in st.session_state:
     st.session_state.selected_epic_key = None
@@ -68,181 +60,14 @@ if 'editor_key_counter' not in st.session_state:
     st.session_state.editor_key_counter = 0
 if 'just_reset_selection' not in st.session_state:
     st.session_state.just_reset_selection = False
-if 'quarterly_progress_df' not in st.session_state:
-    st.session_state.quarterly_progress_df = None
-if 'quarterly_progress_config' not in st.session_state:
-    st.session_state.quarterly_progress_config = {}
-
-# Custom CSS for Premium Dark Mode Theme
-st.markdown("""
-    <style>
-        /* General dark theme override */
-        .main, .block-container, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
-            background-color: #27272E !important;
-            color: #F8FAFC !important;
-        }
-        
-        /* High visibility and premium SaaS styling for file uploader */
-        [data-testid="stFileUploadDropzone"] {
-            background-color: #18181D !important;
-            border: 1px dashed #60A5FA !important;
-            border-radius: 12px !important;
-        }
-        [data-testid="stFileUploadDropzone"] * {
-            color: #F8FAFC !important;
-        }
-        [data-testid="stFileUploaderFileName"], 
-        .stFileUploaderFileName, 
-        .uploadedFileName {
-            color: #FFFFFF !important;
-            font-weight: 600 !important;
-        }
-        [data-testid="stFileUploader"] section {
-            background-color: #18181D !important;
-            border: 1px solid #3E3E4A !important;
-            border-radius: 12px !important;
-        }
-        [data-testid="stFileUploader"] section * {
-            color: #FFFFFF !important;
-        }
-        
-        /* Typography high-contrast styles */
-        h1, h2, h3, h4, h5, h6 {
-            color: #FFFFFF !important;
-            font-weight: 700 !important;
-        }
-        .stMarkdown p, .stMarkdown li, .stMarkdown span {
-            color: #F8FAFC !important;
-        }
-        label, .stWidgetLabel {
-            color: #FFFFFF !important;
-            font-weight: 600 !important;
-        }
-        
-        /* Sidebar Toggle Button */
-        button[data-testid="collapsedControl"], button[kind="header"] {
-            color: #60A5FA !important;
-        }
-        button[data-testid="collapsedControl"] svg, button[kind="header"] svg {
-            fill: #60A5FA !important;
-        }
-        
-        /* File Uploader small limit text */
-        [data-testid="stFileUploadDropzone"] small {
-            color: #94A3B8 !important;
-            font-weight: 500 !important;
-        }
-        
-        /* Sidebar dark theme label improvements */
-        section[data-testid="stSidebar"] {
-            background-color: #18181D !important;
-            border-right: 1px solid #3E3E4A !important;
-        }
-        section[data-testid="stSidebar"] h1,
-        section[data-testid="stSidebar"] h2,
-        section[data-testid="stSidebar"] h3,
-        section[data-testid="stSidebar"] h4,
-        section[data-testid="stSidebar"] label,
-        section[data-testid="stSidebar"] .stMarkdown {
-            color: #FFFFFF !important;
-        }
-        
-        /* Rounded borders and shadows for dataframes and tables */
-        div[data-testid="stDataFrame"] { 
-            border-radius: 12px; 
-            overflow: hidden; 
-            border: 1px solid #3E3E4A !important;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
-            background-color: #18181D;
-        }
-        div[data-testid="stExpander"] { 
-            border-radius: 12px !important; 
-            border: 1px solid #3E3E4A !important; 
-            background-color: #18181D !important;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
-            margin-bottom: 1rem;
-            overflow: hidden;
-        }
-        div[data-testid="stExpander"] > details {
-            background-color: #18181D !important;
-        }
-        div[data-testid="stExpander"] summary {
-            background-color: #18181D !important;
-            color: #FFFFFF !important;
-            font-weight: 600;
-        }
-        div[data-testid="stExpander"] summary:hover {
-            background-color: #2D2D38 !important;
-        }
-        div[data-testid="stExpander"] .stMarkdown {
-            color: #F8FAFC !important;
-        }
-        
-        /* General bordered container style */
-        div[data-testid="stVerticalBlockBorderWrapper"],
-        div.stVerticalBlockBorder {
-            border: 1px solid #3E3E4A !important;
-            border-radius: 12px !important;
-            background-color: #18181D !important;
-            padding: 1.5rem !important;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5) !important;
-        }
-        
-        /* Gantt chart container box specifically targeted with key or contents */
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(.stPlotlyChart),
-        div[data-testid="stVerticalBlockBorderWrapper"]:has([data-testid="stPlotlyChart"]),
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(.js-plotly-plot),
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(iframe),
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(.st-key-gantt_container),
-        div[data-testid="stVerticalBlockBorderWrapper"]:has([key="gantt_container"]),
-        div[data-testid="stVerticalBlockBorderWrapper"]:has([data-testid="st-key-gantt_container"]),
-        div[data-testid="stVerticalBlockBorderWrapper"]:has([class*="gantt_container"]),
-        div.stVerticalBlockBorder:has(.stPlotlyChart),
-        div.stVerticalBlockBorder:has([data-testid="stPlotlyChart"]),
-        .st-key-gantt_container {
-            background-color: #18181D !important; /* Cohesive Charcoal background */
-            border: 2px solid #3E3E4A !important; /* High contrast clean border */
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6) !important;
-            border-radius: 12px !important;
-            padding: 1.5rem !important;
-        }
-        
-        /* Premium button styles with interactive glow and forced high-contrast text */
-        .stButton>button, .stDownloadButton>button, button[data-testid="stBaseButton-secondary"] { 
-            border-radius: 24px; 
-            border: none; 
-            background: linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%) !important; 
-            color: #FFFFFF !important; 
-            padding: 0.5rem 1.5rem; 
-            font-weight: 600;
-            box-shadow: none !important;
-            transition: all 0.2s ease-in-out;
-        }
-        .stButton>button:hover, .stDownloadButton>button:hover, button[data-testid="stBaseButton-secondary"]:hover { 
-            background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%) !important;
-            color: #FFFFFF !important;
-            box-shadow: none !important;
-            transform: translateY(-1px);
-        }
-        
-        /* Quality validation alert card with clean high contrast text */
-        .validation-card {
-            background-color: #1E1B4B;
-            border-left: 4px solid #F59E0B;
-            padding: 1rem;
-            border-radius: 8px;
-            margin-bottom: 1rem;
-            color: #F8FAFC;
-        }
-    </style>
-""", unsafe_allow_html=True)
 
 from utils.quarterly_planner_helpers import (
     parse_quarter_to_date, get_status_group, truncate_text, clean_val, make_select_option,
-    val_changed, get_quarterly_team_label, prepare_quarterly_progress_for_presentation,
+    val_changed, build_quarterly_plan_pdf, ensure_roadmap_columns, backlog_roadmap_source,
     delivery_month_options, build_delivery_roadmap_timeline, build_delivery_roadmap_slide_pdf,
-    build_quarterly_progress_slide_pdf, build_quarterly_progress_pptx, build_quarterly_plan_pdf
+    build_quarterly_progress_pptx,
 )
+import base64
 
 def get_sprint_duration():
     return st.session_state.get("sprint_duration", 15)
@@ -463,7 +288,7 @@ def sync_main_editor_changes():
     except:
         pass
 
-st.title("📅 Quarterly Planner")
+st.title("🗓️ Quarterly Planning")
 
 # Load credentials
 jira_server = st.session_state.get("jira_server", "")
@@ -472,7 +297,8 @@ jira_server = st.session_state.get("jira_server", "")
 # Data Loader and Normalizer Helper
 # ---------------------------------------------------------
 def load_and_normalize_data(file_or_path):
-    df_raw = pd.read_csv(file_or_path)
+    """Normalize a backlog given as a CSV file/path or as a DataFrame (e.g. loaded from Jira)."""
+    df_raw = file_or_path.copy() if isinstance(file_or_path, pd.DataFrame) else pd.read_csv(file_or_path)
     
     # Drop rows that are completely empty
     if not df_raw.empty:
@@ -550,14 +376,14 @@ def load_and_normalize_data(file_or_path):
         calculated_dates = df_raw[mask_missing].apply(calculate_sequential_dates, axis=1, result_type='expand')
         if not calculated_dates.empty:
             df_raw.loc[mask_missing, ['Start Date', 'Due Date']] = calculated_dates
-            
-    return df_raw
+
+    return ensure_roadmap_columns(df_raw)
 
 # ---------------------------------------------------------
 # Step Navigation (stepper)
 # ---------------------------------------------------------
-options_qp = ["🔌 Ingestion", "✍️ Workbook", "💾 Exporter"]
-render_stepper(options_qp, "active_tab_qp", key="qp_stepper")
+STEPS = ["📥 Load", "✍️ Workbook", "📅 Gantt & Export"]
+render_stepper(STEPS, "active_tab_qp", key="qp_stepper")
 
 # Auto-load shared backlog on startup if not already loaded
 if 'main_df' not in st.session_state:
@@ -567,199 +393,78 @@ if 'main_df' not in st.session_state:
             st.session_state.last_backlog_mtime = os.path.getmtime(SHARED_BACKLOG_PATH)
         except:
             pass
+if st.session_state.get("main_df") is not None:
+    st.session_state.main_df = ensure_roadmap_columns(st.session_state.main_df)
 
 # ---------------------------------------------------------
-# STEP 1: Ingestion
+# STEP 1: Load (CSV file or Jira project and labels)
 # ---------------------------------------------------------
-if st.session_state.active_tab_qp == "🔌 Ingestion":
-    st.subheader("🔌 Dual Jira & CSV Backlog Ingestion")
-    st.write("Upload your product backlog CSV or connect to your Jira server parameters to get started.")
-    
-    # Ingestion Flash Feedback
-    if "ingestion_feedback" in st.session_state:
-        fb = st.session_state.ingestion_feedback
-        if fb.get("type") == "success":
-            st.success(fb.get("text"))
-        elif fb.get("type") == "error":
-            st.error(fb.get("text"))
-        elif fb.get("type") == "warning":
-            st.warning(fb.get("text"))
-        del st.session_state.ingestion_feedback
-    
-    st.divider()
-    
-    uploaded_file = st.file_uploader("Upload your data (CSV)", type=['csv'])
-    if uploaded_file:
-        try:
-            st.session_state.main_df = load_and_normalize_data(uploaded_file)
-            st.session_state.main_df.to_csv(SHARED_BACKLOG_PATH, index=False)
-            st.session_state.last_backlog_mtime = os.path.getmtime(SHARED_BACKLOG_PATH)
-            st.session_state.editor_key_counter = st.session_state.get('editor_key_counter', 0) + 1
-            st.session_state.ingestion_feedback = {"type": "success", "text": f"✅ Backlog of {len(st.session_state.main_df)} rows loaded and normalized successfully!"}
-            st.rerun()
-        except Exception as e:
-            st.session_state.ingestion_feedback = {"type": "error", "text": f"❌ Failed to parse CSV file: {e}"}
-            st.rerun()
-            
-    # Success indicator if data is loaded
-    if st.session_state.get("main_df") is not None:
-        st.info(f"📊 **Current Loaded Backlog:** `{len(st.session_state.main_df)}` rows found in active workspace.")
-        
-    st.markdown("### Don't have a file at hand?")
-    st.write("We have created a realistic mock file with simulated data so you can test the application with one click:")
+if st.session_state.active_tab_qp == STEPS[0]:
+    st.subheader("📥 Load backlog")
+    st.write("Load the backlog to plan. You edit it in the next step.")
+    show_flash("ingestion_feedback")
+
     try:
         mock_path_parent = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "jira_mock.csv")
         mock_path_tools = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jira_mock.csv")
         mock_path = mock_path_parent if os.path.exists(mock_path_parent) else mock_path_tools
-        with open(mock_path, "r") as f:
-            mock_csv = f.read()
-        st.download_button(
-            label="⬇️ Download a Template", 
-            data=mock_csv.encode('utf-8'), 
-            file_name="jira_mock.csv", 
-            mime="text/csv"
-        )
-    except:
-        pass
+        with open(mock_path, "rb") as f:
+            template_bytes = f.read()
+    except OSError:
+        template_bytes = b"Key,Epic Name,Status,Sprint,Size,Quarter,Cluster,Description\n"
 
-    st.divider()
-    st.subheader("📈 Quarterly Epic Progress")
-    st.write("Load the committed Epics for the quarter, calculate their completion, and add a concise update for the presentation.")
-    with st.container(border=True):
-        col_project, col_committed, col_quarter = st.columns(3)
-        with col_project:
-            progress_project = st.text_input(
-                "Project",
-                value=os.getenv("PROJECT_NAME", "MYPROJECT"),
-                key="qp_progress_project"
+    request = render_load_source(
+        "qplan",
+        csv_help="One row per Epic. Recognized columns: Key, Epic Name (or Summary), Status, Sprint, Size, Quarter, Cluster, Cluster Name, Labels, Description, Start Date, Due Date.",
+        template_bytes=template_bytes,
+        template_name="jira_mock.csv",
+        loaded_summary=(
+            f"📊 **Currently loaded:** {len(st.session_state.main_df)} backlog rows in the shared workspace."
+            if st.session_state.get("main_df") is not None else None
+        ),
+    )
+
+    new_backlog = None
+    if request and request["source"] == "csv":
+        try:
+            new_backlog = load_and_normalize_data(request["file"])
+            source_label = "the CSV file"
+        except Exception as e:
+            st.error(f"❌ The CSV file could not be read: {e}")
+    elif request and request["source"] == "jira":
+        server, token, auth_type, email = jira_auth_args()
+        st.session_state.pop("jira_query_error", None)
+        with st.spinner("Downloading committed Epics from Jira..."):
+            jira_df = fetch_quarterly_epics_backlog(
+                server, token, request["committed_label"], request["quarter_label"], auth_type, email,
+                project_key=request["project"],
             )
-        with col_committed:
-            progress_committed_label = st.text_input(
-                "Committed Epic label", value=os.getenv("COMMITTED_LABEL", "Project_committed"), key="qp_progress_committed"
-            )
-        with col_quarter:
-            progress_quarter_label = st.text_input(
-                "Quarter label", value=os.getenv("QUARTER_LABEL", "Project_Quarter_1"), key="qp_progress_quarter"
-            )
-        progress_title = st.text_input("Progress slide title", value="Committed Epics Q3 - Status", key="qp_progress_title")
-        progress_subtitle = st.text_input("Progress slide subtitle", value="Detail overview of Epics Progress for Q3", key="qp_progress_subtitle")
-        roadmap_title = st.text_input("Roadmap slide title", value="Delivery Roadmap", key="qp_roadmap_title")
-        roadmap_subtitle = st.text_input("Roadmap slide subtitle", value="Planned delivery milestones for unfinished work", key="qp_roadmap_subtitle")
+        if jira_df is None:
+            show_jira_error("backlog")
+        elif jira_df.empty:
+            st.warning("No committed Epics were found for those labels.")
+        else:
+            new_backlog = load_and_normalize_data(jira_df)
+            source_label = f"Jira ({request['project'] or 'all projects'})"
 
-        if st.button("📈 Load Quarterly Epic Progress", use_container_width=True):
-            if not st.session_state.get("jira_server") or not st.session_state.get("jira_token"):
-                st.error("Configure and test the Jira connection first on the Configuration page.")
-            elif not progress_committed_label.strip() or not progress_quarter_label.strip():
-                st.error("Enter both the committed Epic label and the quarter label.")
-            else:
-                st.session_state.pop("jira_query_error", None)
-                with st.spinner("Downloading committed Epics and calculating progress..."):
-                    result = build_quarterly_epic_progress_table(
-                        st.session_state.jira_server,
-                        st.session_state.jira_token,
-                        progress_committed_label.strip(),
-                        progress_quarter_label.strip(),
-                        progress_title.strip() or "Quarterly Epic Progress",
-                        "Quarterly Planner",
-                        st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)"),
-                        st.session_state.get("jira_email", ""),
-                        project_key=progress_project.strip() or os.getenv("PROJECT_NAME", "MYPROJECT"),
-                        include_parent_link=True,
-                    )
-                if result is None:
-                    jira_error = st.session_state.pop("jira_query_error", None)
-                    st.error(
-                        "The quarterly Epic progress could not be loaded. Check the Jira connection, project key and labels."
-                        + (f"\n\n**Jira said:** {jira_error}" if jira_error else "")
-                    )
-                elif result["df"].empty:
-                    st.warning("No committed Epics were found for those labels.")
-                else:
-                    previous = st.session_state.get("quarterly_progress_df")
-                    previous_updates = {}
-                    if isinstance(previous, pd.DataFrame) and not previous.empty and "Presentation update" in previous.columns:
-                        previous_updates = blank_if_missing(previous.set_index("Key")["Presentation update"]).to_dict()
-                    progress_df = result["df"].drop(columns=["Select"], errors="ignore")
-                    progress_df["Presentation update"] = blank_if_missing(progress_df["Key"].map(previous_updates))
-                    st.session_state.quarterly_progress_df = prepare_quarterly_progress_for_presentation(progress_df)
-                    st.session_state.quarterly_progress_config = {
-                        "title": progress_title.strip() or "Quarterly Epic Progress",
-                        "subtitle": progress_subtitle.strip(),
-                        "roadmap_title": roadmap_title.strip() or "Delivery Roadmap",
-                        "roadmap_subtitle": roadmap_subtitle.strip(),
-                        "quarter_label": progress_quarter_label.strip(),
-                    }
-                    st.session_state.workbook_feedback = {"type": "success", "text": f"✅ Loaded {len(progress_df)} committed Epics. Add the presentation updates below."}
-                    st.session_state.active_tab_qp = "✍️ Workbook"
-                    st.rerun()
-
-
-
-
+    if new_backlog is not None:
+        st.session_state.main_df = new_backlog
+        st.session_state.main_df.to_csv(SHARED_BACKLOG_PATH, index=False)
+        st.session_state.last_backlog_mtime = os.path.getmtime(SHARED_BACKLOG_PATH)
+        st.session_state.editor_key_counter = st.session_state.get('editor_key_counter', 0) + 1
+        st.session_state.workbook_feedback = {"type": "success", "text": f"✅ Loaded {len(new_backlog)} backlog rows from {source_label}."}
+        st.session_state.active_tab_qp = STEPS[1]
+        st.rerun()
 
 # ---------------------------------------------------------
 # STEP 2: Workbook
 # ---------------------------------------------------------
-elif st.session_state.active_tab_qp == "✍️ Workbook":
+elif st.session_state.active_tab_qp == STEPS[1]:
     st.subheader("✍️ Backlog Workbook Editor")
     st.write("Modify your epics, status, sprints, and period schedules directly in the high-fidelity table below.")
-
-    if "workbook_feedback" in st.session_state:
-        fb = st.session_state.workbook_feedback
-        if fb.get("type") == "success":
-            st.success(fb.get("text"))
-        elif fb.get("type") == "error":
-            st.error(fb.get("text"))
-        del st.session_state.workbook_feedback
-
-    progress_df = st.session_state.get("quarterly_progress_df")
-    st.markdown("### 📈 Quarterly Epic Progress — presentation updates")
-    if isinstance(progress_df, pd.DataFrame) and not progress_df.empty:
-        st.caption("Select the Epics to communicate, define their planned release milestone, and write a short update. Jira fields remain read-only.")
-        progress_columns = [
-            "Parent Link", "Key", "Summary", "Completion", "Closed / Resolved", "To Do", "In progress", "Status", "Team", "Presentation update",
-            "Include in delivery roadmap", "Release version", "Delivery month", "Delivery timing"
-        ]
-        progress_columns = [column for column in progress_columns if column in progress_df.columns]
-        with st.form("quarterly_progress_updates_form", border=False):
-            edited_progress = st.data_editor(
-                progress_df[progress_columns],
-                use_container_width=True,
-                hide_index=True,
-                disabled=[column for column in progress_columns if column not in {
-                    "Presentation update", "Include in delivery roadmap", "Release version", "Delivery month", "Delivery timing"
-                }],
-                column_config={
-                    "Parent Link": st.column_config.TextColumn("Parent Link", width="medium"),
-                    "Key": st.column_config.TextColumn("Key", width="small"),
-                    "Summary": st.column_config.TextColumn("Epic", width="large"),
-                "Completion": st.column_config.TextColumn("Completion", width="small"),
-                "Closed / Resolved": st.column_config.NumberColumn("Closed / Resolved", width="small", format="%d"),
-                "To Do": st.column_config.NumberColumn("To Do", width="small", format="%d"),
-                "In progress": st.column_config.NumberColumn("In progress", width="small", format="%d"),
-                    "Status": st.column_config.TextColumn("Status", width="small"),
-                    "Team": st.column_config.TextColumn("Team", width="medium"),
-                    "Presentation update": st.column_config.TextColumn("Update / context", width="large"),
-                    "Include in delivery roadmap": st.column_config.CheckboxColumn("Show in roadmap", default=False),
-                    "Release version": st.column_config.TextColumn("Release version", width="medium"),
-                    "Delivery month": st.column_config.SelectboxColumn("Delivery month", options=delivery_month_options(), width="medium"),
-                    "Delivery timing": st.column_config.SelectboxColumn("Approx. timing", options=["Beginning", "Mid", "End"], width="small"),
-                },
-                key="quarterly_progress_editor",
-            )
-            save_progress_updates = st.form_submit_button("Save roadmap selections and updates", use_container_width=True)
-        if save_progress_updates:
-            updated_progress = progress_df.copy()
-            for column in ["Presentation update", "Include in delivery roadmap", "Release version", "Delivery month", "Delivery timing"]:
-                updated_progress[column] = edited_progress[column]
-            st.session_state.quarterly_progress_df = prepare_quarterly_progress_for_presentation(updated_progress)
-            st.success("Roadmap selections and presentation updates saved.")
-    else:
-        st.info("Load Quarterly Epic Progress in Ingestion to add the updates that will appear in the slide.")
-    st.divider()
-    
+    show_flash("workbook_feedback")
     if st.session_state.get("main_df") is None:
-        st.info("ℹ️ **Optional: Detailed Roadmap Backlog.** To also plan and visualize your full backlog, upload a CSV backlog or use the template in Step 1: **Ingestion**.")
+        st.info("ℹ️ Load a backlog in step 1 first: a CSV file or Jira.")
     else:
         # Search & Quick Filters inside the workbook page
         st.write("### 🔍 Search Backlog")
@@ -787,7 +492,11 @@ elif st.session_state.active_tab_qp == "✍️ Workbook":
             "Cluster Name": st.column_config.TextColumn("Cluster Name"),
             "Milestone": st.column_config.CheckboxColumn("Milestone", default=False),
             "Start Date": st.column_config.DatetimeColumn("Start Date", format="DD-MM-YYYY"),
-            "Due Date": st.column_config.DatetimeColumn("Due Date", format="DD-MM-YYYY")
+            "Due Date": st.column_config.DatetimeColumn("Due Date", format="DD-MM-YYYY"),
+            "Include in delivery roadmap": st.column_config.CheckboxColumn("Show in roadmap", default=False),
+            "Release version": st.column_config.TextColumn("Release version", width="medium"),
+            "Delivery month": st.column_config.SelectboxColumn("Delivery month", options=delivery_month_options(), width="medium"),
+            "Delivery timing": st.column_config.SelectboxColumn("Approx. timing", options=["Beginning", "Mid", "End"], default="Mid", width="small"),
         }
         
         st.data_editor(
@@ -1380,7 +1089,7 @@ def show_timeline_gantt_tab():
 
     # Download buttons below the Gantt & Details
     st.divider()
-    st.subheader("💾 Export Roadmap")
+    st.subheader("💾 Export Plan")
     col_pdf, col_csv = st.columns(2)
     
     with col_pdf:
@@ -1414,81 +1123,57 @@ def show_timeline_gantt_tab():
         )
 
 # ---------------------------------------------------------
-# STEP NAVIGATION EXECUTION
+# STEP 3: Gantt & Export
 # ---------------------------------------------------------
-if st.session_state.active_tab_qp == "💾 Exporter":
-    progress_df = st.session_state.get("quarterly_progress_df")
-    if isinstance(progress_df, pd.DataFrame) and not progress_df.empty:
-        st.subheader("📈 Quarterly Epic Progress Slide")
-        st.write("This presentation-ready slide uses the same Epic progress fields as Sprint Review, with your additional update/context column.")
-        progress_title = st.session_state.get("quarterly_progress_config", {}).get("title", "Quarterly Epic Progress")
-        progress_subtitle = st.session_state.get("quarterly_progress_config", {}).get("subtitle", "")
-        roadmap_title = st.session_state.get("quarterly_progress_config", {}).get("roadmap_title", "Delivery Roadmap")
-        roadmap_subtitle = st.session_state.get("quarterly_progress_config", {}).get("roadmap_subtitle", "")
-        progress_pdf = build_quarterly_progress_slide_pdf(
-            prepare_quarterly_progress_for_presentation(progress_df),
-            progress_title,
-            st.session_state.get("primary_color", "#0B2756"),
-        )
+def show_delivery_roadmap():
+    """Delivery roadmap built from the backlog rows marked "Show in roadmap" in Workbook."""
+    st.subheader("🗓️ Delivery roadmap")
+    st.write("Milestones for the Epics marked **Show in roadmap** in Workbook, placed by their delivery month and timing.")
+    config = st.session_state.setdefault("planning_roadmap_config", {
+        "title": "Delivery Roadmap", "subtitle": "Planned delivery milestones for unfinished work",
+    })
+    render_title_fields("🏷️ Roadmap slide title and subtitle", "Roadmap slide title", "Roadmap slide subtitle", config, "qplan_roadmap")
+    roadmap_title = config["title"].strip() or "Delivery Roadmap"
+
+    source = backlog_roadmap_source(st.session_state.main_df, st.session_state.get("quarterly_progress_df"))
+    roadmap_df, roadmap_timeline = build_delivery_roadmap_timeline(source)
+    if roadmap_timeline is None:
+        st.info("In Workbook, tick **Show in roadmap** and choose a **Delivery month** for at least one Epic to build the roadmap.")
+        return
+    st.plotly_chart(roadmap_timeline, use_container_width=True)
+    st.caption(f"Showing {len(roadmap_df)} delivery milestone(s). Completion and context come from Quarterly Progress when the same Epic is loaded there.")
+    primary = st.session_state.get("primary_color", "#0B2756")
+    roadmap_pdf = build_delivery_roadmap_slide_pdf(roadmap_df, roadmap_title, primary)
+    col_pdf, col_pptx = st.columns(2)
+    with col_pdf:
         st.download_button(
-            label="⬇️ Download Quarterly Epic Progress Slide (PDF)",
-            data=progress_pdf,
-            file_name="quarterly_epic_progress.pdf",
-            mime="application/pdf",
+            label="⬇️ Download Delivery Roadmap Slide (PDF)", data=roadmap_pdf,
+            file_name="quarterly_delivery_roadmap.pdf", mime="application/pdf", use_container_width=True,
+        )
+    with col_pptx:
+        st.download_button(
+            label="⬇️ Download Delivery Roadmap (PowerPoint)",
+            data=build_quarterly_progress_pptx(
+                pd.DataFrame(columns=["Key", "Summary", "Completion", "Status", "Labels"]), roadmap_df,
+                "", "", roadmap_title, config["subtitle"].strip(), primary,
+            ),
+            file_name="quarterly_delivery_roadmap.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             use_container_width=True,
         )
-        st.markdown("#### 👁️ Progress slide preview")
-        progress_preview = base64.b64encode(progress_pdf).decode("utf-8")
-        st.markdown(
-            f'<iframe src="data:application/pdf;base64,{progress_preview}" width="100%" height="520" '
-            'type="application/pdf" style="border: 1px solid #3E3E4A; border-radius: 12px; background: #ffffff;"></iframe>',
-            unsafe_allow_html=True,
-        )
-        st.markdown("### 🗓️ Delivery roadmap timeline")
-        roadmap_df, roadmap_timeline = build_delivery_roadmap_timeline(progress_df)
-        if roadmap_timeline is None:
-            st.info("Select at least one Epic in Workbook and set its delivery month to build the client delivery timeline.")
-        else:
-            st.plotly_chart(roadmap_timeline, use_container_width=True)
-            st.caption(f"Showing {len(roadmap_df)} selected delivery milestone(s). Hover over a milestone to see its completion, status, and context.")
-            roadmap_pdf = build_delivery_roadmap_slide_pdf(
-                roadmap_df,
-                f"{progress_title} - Delivery Roadmap",
-                st.session_state.get("primary_color", "#0B2756"),
-            )
-            st.download_button(
-                label="⬇️ Download Delivery Roadmap Slide (PDF)",
-                data=roadmap_pdf,
-                file_name="quarterly_delivery_roadmap.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
-            powerpoint_data = build_quarterly_progress_pptx(
-                prepare_quarterly_progress_for_presentation(progress_df),
-                roadmap_df,
-                progress_title,
-                progress_subtitle,
-                roadmap_title,
-                roadmap_subtitle,
-                st.session_state.get("primary_color", "#0B2756"),
-            )
-            st.download_button(
-                label="⬇️ Download PowerPoint (Progress + Roadmap)",
-                data=powerpoint_data,
-                file_name="quarterly_epic_progress_and_roadmap.pptx",
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                use_container_width=True,
-            )
-            st.markdown("#### 👁️ Delivery roadmap slide preview")
-            roadmap_preview = base64.b64encode(roadmap_pdf).decode("utf-8")
-            st.markdown(
-                f'<iframe src="data:application/pdf;base64,{roadmap_preview}" width="100%" height="520" '
-                'type="application/pdf" style="border: 1px solid #3E3E4A; border-radius: 12px; background: #ffffff;"></iframe>',
-                unsafe_allow_html=True,
-            )
-        st.divider()
+    st.markdown("#### 👁️ Delivery roadmap slide preview")
+    roadmap_preview = base64.b64encode(roadmap_pdf).decode("utf-8")
+    st.markdown(
+        f'<iframe src="data:application/pdf;base64,{roadmap_preview}" width="100%" height="520" '
+        'type="application/pdf" style="border: 1px solid #3E3E4A; border-radius: 12px; background: #ffffff;"></iframe>',
+        unsafe_allow_html=True,
+    )
 
+
+if st.session_state.active_tab_qp == STEPS[2]:
     if st.session_state.get("main_df") is not None:
         show_timeline_gantt_tab()
-    elif not (isinstance(progress_df, pd.DataFrame) and not progress_df.empty):
-        st.warning("⚠️ Load a backlog or Quarterly Epic Progress in Ingestion first.")
+        st.divider()
+        show_delivery_roadmap()
+    else:
+        st.warning("⚠️ Load a backlog in step 1 first.")

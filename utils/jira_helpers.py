@@ -468,24 +468,42 @@ def fetch_epic_parent_links(server, token, epic_keys, auth_type="Personal Access
     return parent_by_epic
 
 
+def quarterly_epics_jql(project_key, committed_label, quarter_label):
+    """JQL for the Epics of a project that carry both the committed and the quarter label."""
+    escaped_quarter_label = quarter_label.replace('"', '\\"')
+    escaped_committed_label = committed_label.replace('"', '\\"')
+    project_key = (project_key or "").strip()
+    proj_jql = f'project = "{project_key}" AND ' if project_key else ''
+    return (
+        f'{proj_jql}issuetype = Epic '
+        f'AND labels = "{escaped_committed_label}" '
+        f'AND labels = "{escaped_quarter_label}" '
+        'ORDER BY priority DESC, updated DESC'
+    )
+
+
+def fetch_quarterly_epics_backlog(server, token, committed_label, quarter_label, auth_type, email, project_key=""):
+    """Committed quarterly Epics as a backlog DataFrame for the Planning page.
+
+    Columns: Key, Summary, Status, Labels, Description, Start Date, Due Date
+    (dates from Jira's Target start/end). Returns None if the query fails.
+    """
+    jql = quarterly_epics_jql(project_key, committed_label, quarter_label)
+    df = fetch_jira_tickets_dataset(server, token, jql, is_sprint=False, auth_type=auth_type, email=email, include_description=True)
+    if df is None or df.empty:
+        return df
+    df = df.rename(columns={"Target start date": "Start Date", "Target end date": "Due Date"})
+    return df[[c for c in ["Key", "Summary", "Status", "Labels", "Description", "Start Date", "Due Date"] if c in df.columns]]
+
+
 def build_quarterly_epic_progress_table(server, token, committed_label, quarter_label, title, position, auth_type, email, project_key="MYPROJECT", include_parent_link=False):
     """
     Query committed quarterly epics strictly requiring both configured labels.
     Calculates progress for each Epic from child issues linked via parent or Epic Link.
     With include_parent_link, adds the Epic's "Parent Link" as the first data column.
     """
-    escaped_quarter_label = quarter_label.replace('"', '\\"')
-    escaped_committed_label = committed_label.replace('"', '\\"')
-    
-    proj_jql = f'project = "{project_key.strip()}" AND ' if project_key.strip() else ''
-    
-    jql = (
-        f'{proj_jql}issuetype = Epic '
-        f'AND labels = "{escaped_committed_label}" '
-        f'AND labels = "{escaped_quarter_label}" '
-        'ORDER BY priority DESC, updated DESC'
-    )
-    
+    jql = quarterly_epics_jql(project_key, committed_label, quarter_label)
+
     try:
         # Query matching epics
         logger.debug(f"build_quarterly_epic_progress_table JQL: {jql}")

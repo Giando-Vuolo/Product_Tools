@@ -8,7 +8,15 @@ from utils.quarterly_planner_helpers import (
     get_quarterly_team_label,
     parse_quarter_to_date,
     prepare_quarterly_progress_for_presentation,
+    normalize_progress_csv,
+    ensure_roadmap_columns,
+    backlog_roadmap_source,
+    build_quarterly_progress_pptx,
+    PROGRESS_CSV_TEMPLATE,
+    PROGRESS_CSV_COLUMNS,
 )
+from utils.jira_helpers import quarterly_epics_jql
+import io
 
 
 class QuarterlyPlannerHelpersTests(unittest.TestCase):
@@ -73,6 +81,61 @@ class QuarterlyPlannerHelpersTests(unittest.TestCase):
         self.assertEqual(str(roadmap.iloc[0]["Release"]), "v2.0")
         self.assertTrue(pd.notna(roadmap.iloc[0]["Milestone date"]))
 
+
+    def test_progress_csv_template_loads(self):
+        df = normalize_progress_csv(pd.read_csv(io.StringIO(PROGRESS_CSV_TEMPLATE)))
+        self.assertEqual(list(df.columns), PROGRESS_CSV_COLUMNS)
+        self.assertEqual(df["Completion"].tolist(), ["100%", "50%", "0%"])
+
+    def test_progress_csv_aliases_and_defaults(self):
+        raw = pd.read_csv(io.StringIO("Issue key,Epic Name,Progress,Status\nA-1,X,0.4,Closed\nA-2,Y,,in progress\n"))
+        df = normalize_progress_csv(raw)
+        self.assertEqual(df["Key"].tolist(), ["A-1", "A-2"])
+        self.assertEqual(df["Completion"].tolist(), ["40%", "-"])
+        self.assertEqual(df["Status"].tolist(), ["Done", "In Progress"])
+        self.assertEqual(df["Parent Link"].tolist(), ["-", "-"])
+        self.assertEqual(df["To Do"].tolist(), [0, 0])
+
+    def test_progress_csv_requires_key_and_summary(self):
+        with self.assertRaises(ValueError):
+            normalize_progress_csv(pd.DataFrame({"Key": ["A-1"]}))
+
+    def test_quarterly_epics_jql(self):
+        self.assertEqual(
+            quarterly_epics_jql("RECALLTWO", "RC2_committed", "RC2_FB_18"),
+            'project = "RECALLTWO" AND issuetype = Epic AND labels = "RC2_committed" AND labels = "RC2_FB_18" ORDER BY priority DESC, updated DESC',
+        )
+        self.assertTrue(quarterly_epics_jql("", "a", "b").startswith("issuetype = Epic"))
+
+    def test_ensure_roadmap_columns_cleans_csv_roundtrip(self):
+        raw = pd.DataFrame({"Key": ["A", "B"], "Include in delivery roadmap": ["True", float("nan")],
+                            "Delivery month": [float("nan"), "Jan 2027"], "Delivery timing": [float("nan"), "End"]})
+        df = ensure_roadmap_columns(raw)
+        self.assertEqual(df["Include in delivery roadmap"].tolist(), [True, False])
+        self.assertEqual(df["Delivery month"].tolist(), ["", "Jan 2027"])
+        self.assertEqual(df["Release version"].tolist(), ["", ""])
+        self.assertEqual(df["Delivery timing"].tolist(), ["Mid", "End"])
+
+    def test_backlog_roadmap_uses_progress_completion(self):
+        backlog = pd.DataFrame({"Key": ["A-1", "A-2"], "Epic Name": ["One", "Two"], "Status": ["Done", "To Do"],
+                                "Include in delivery roadmap": [True, True], "Delivery month": ["Jan 2027", "Feb 2027"]})
+        progress = pd.DataFrame({"Key": ["A-1"], "Completion": ["80%"], "Presentation update": ["Almost there"]})
+        source = backlog_roadmap_source(backlog, progress)
+        self.assertEqual(source["Summary"].tolist(), ["One", "Two"])
+        self.assertEqual(source["Completion"].tolist(), ["80%", "-"])
+        self.assertEqual(source["Presentation update"].tolist(), ["Almost there", ""])
+        roadmap, fig = build_delivery_roadmap_timeline(source)
+        self.assertEqual(len(roadmap), 2)
+        self.assertIsNotNone(fig)
+
+    def test_pptx_report_only_and_roadmap_only(self):
+        report = prepare_quarterly_progress_for_presentation(pd.read_csv(io.StringIO(PROGRESS_CSV_TEMPLATE)))
+        self.assertTrue(build_quarterly_progress_pptx(report, None, "T", "S", "", "", "#1D4ED8"))
+        backlog = pd.DataFrame({"Key": ["A-1"], "Epic Name": ["One"], "Status": ["Done"],
+                                "Include in delivery roadmap": [True], "Delivery month": ["Jan 2027"]})
+        roadmap, _ = build_delivery_roadmap_timeline(backlog_roadmap_source(backlog))
+        empty = pd.DataFrame(columns=["Key", "Summary", "Completion", "Status", "Labels"])
+        self.assertTrue(build_quarterly_progress_pptx(empty, roadmap, "", "", "Roadmap", "Sub", "#1D4ED8"))
 
 if __name__ == "__main__":
     unittest.main()
