@@ -2078,9 +2078,20 @@ elif st.session_state.active_tab == "✍️ Workbook":
                     display_df_ext = display_df_ext[display_df_ext["Labels"].str.contains(filter_label_ext.strip(), case=False, na=False)]
  
                 has_selected_ext = check_any_selected_custom(ext_idx, f"editor_ext_{ext_idx}_refined", list(display_df_ext.index))
- 
+                disabled_ext = []
+                if table_data.get("table_type") == "quarterly_epic_progress":
+                    from utils.quarterly_planner_helpers import quarterly_progress_table_view, PROGRESS_COUNTS_COLUMN
+                    hidden_counts = [column for column in ("To Do", "In progress", "Closed / Resolved") if column in hidden_cols]
+                    display_df_ext = quarterly_progress_table_view(display_df_ext.drop(columns=hidden_counts, errors="ignore"))
+                    disabled_ext = [PROGRESS_COUNTS_COLUMN]
+                    col_cfg_ext[PROGRESS_COUNTS_COLUMN] = st.column_config.TextColumn(
+                        PROGRESS_COUNTS_COLUMN, width=150,
+                    )
+                    col_cfg_ext["Key"] = st.column_config.TextColumn("Key", width=180)
+
                 st.data_editor(
                     display_df_ext,
+                    disabled=disabled_ext,
                     num_rows="dynamic",
                     use_container_width=True,
                     column_config=col_cfg_ext,

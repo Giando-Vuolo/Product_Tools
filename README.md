@@ -14,12 +14,22 @@ You can connect directly to your corporate **Jira Server / Cloud** to automatica
 * **🤝 Live Collaboration**: Automatically spins up a secure, free Cloudflare tunnel on startup, displaying a shareable public link in the sidebar so team members can view and edit the roadmap together in real time.
 * **✍️ Commercial Workspace Workbook**: Refine technical Jira summaries into elegant commercial feature descriptions, schedule live product demos with presenters, and toggle report targets.
 * **🎨 Visual Branding**: Customize document primary theme colors with premium corporate presets, upload corporate logos, and add custom welcome intros.
-* **📈 Jira Quarterly Epic Progress**: Load and calculate progress stats for committed Epics (filtered by committed label + quarter label) directly inside Quarterly Review → Progress and the Sprint Review module. Quarterly Review → Planning holds the CSV backlog workbook and Gantt.
+* **📈 Jira Quarterly Epic Progress**: Load and calculate progress stats for committed Epics (filtered by committed label + quarter label) directly inside Quarterly Review → Progress and the Sprint Review module. Quarterly Progress reports show circular completion indicators with percentages in the preview, PDF and PowerPoint exports. Item counts share one column in `To Do / In Progress / Closed` order (for example, `3 / 5 / 12`); CSV input keeps its separate count columns. Quarterly Review → Planning holds the CSV backlog workbook and Gantt.
 * **💾 Export Presentation Slide Decks & PDFs**: Export compact, high-density, beautifully styled landscape slide presentation decks and portrait documents.
 * **📊 Interactive Gantt Chart & Velocity Reports**: Track delivery speed, complete/rollover story points, and visualize hierarchical timelines at a glance.
 
 
 ---
+
+### Slide templates (Quarterly Progress and Planning)
+
+In **Quarterly Progress → Report**, use **Slide template** to choose a local PowerPoint template or **Built-in design**. The choice applies to the PowerPoint export, PDF and preview. Add `.pptx` files to `assets/templates/` (create the folder if needed), then refresh the page. This folder is Git-ignored; templates stay local. For best results, use a 16:9 template with a title-only content layout. The generator uses the template's slide size, master and layout, replacing its existing slides with the report. The initial selection follows `QUARTERLY_PPTX_TEMPLATE` when configured, otherwise the existing automatic template discovery.
+
+Epic Keys and Initiative references (including grouped initiative headings) link to their Jira items in both exports and the PDF preview, using the configured Jira server URL. References without an issue key remain plain text.
+
+Sprint Review's quarterly Epic progress table also uses circular completion indicators in its PDF and combined `To Do / In Progress / Closed` counts in the workbook and PDF. Other Sprint Review custom tables keep their existing rendering.
+
+The same selector is available in **Quarterly Planning → Gantt & Export**. Planning applies it to the Plan PDF and delivery-roadmap PDF, preview and PowerPoint. These PDF reports retain their existing content on a readable panel fitted inside the template's logo/footer frame. Selecting **Built-in design** disables the local template.
 
 ## 🛠️ Easiest Setup & Launch (Zero Dev Knowledge Required)
 

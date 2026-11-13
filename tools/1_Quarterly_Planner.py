@@ -8,6 +8,7 @@ from utils.quarterly_theme import apply_quarterly_page_setup
 from utils.quarterly_load import render_load_source, render_title_fields, jira_auth_args, show_jira_error, show_flash
 from utils.jira_helpers import fetch_quarterly_epics_backlog
 from utils.stepper import render_stepper
+from utils.slide_templates import render_slide_template_selector, apply_pdf_slide_template
 
 # Shared file paths for live collaboration
 SHARED_DIR = "data"
@@ -1098,6 +1099,11 @@ def show_timeline_gantt_tab():
             st.session_state.main_df,
             st.session_state.get("primary_color", "#0B2756")
         )
+        try:
+            pdf_data = apply_pdf_slide_template(pdf_data, st.session_state.planning_roadmap_config["template_path"])
+        except Exception as error:
+            st.error(f"The plan could not be generated with the selected slide template: {error}")
+            st.stop()
         st.download_button(
             label="⬇️ Download Plan (PDF)",
             data=pdf_data,
@@ -1143,7 +1149,17 @@ def show_delivery_roadmap():
     st.plotly_chart(roadmap_timeline, use_container_width=True)
     st.caption(f"Showing {len(roadmap_df)} delivery milestone(s). Completion and context come from Quarterly Progress when the same Epic is loaded there.")
     primary = st.session_state.get("primary_color", "#0B2756")
-    roadmap_pdf = build_delivery_roadmap_slide_pdf(roadmap_df, roadmap_title, primary)
+    try:
+        roadmap_pdf = apply_pdf_slide_template(
+            build_delivery_roadmap_slide_pdf(roadmap_df, roadmap_title, primary), config["template_path"],
+        )
+        roadmap_pptx = build_quarterly_progress_pptx(
+            pd.DataFrame(columns=["Key", "Summary", "Completion", "Status", "Labels"]), roadmap_df,
+            "", "", roadmap_title, config["subtitle"].strip(), primary, template_path=config["template_path"],
+        )
+    except Exception as error:
+        st.error(f"The roadmap could not be generated with the selected slide template: {error}")
+        return
     col_pdf, col_pptx = st.columns(2)
     with col_pdf:
         st.download_button(
@@ -1153,10 +1169,7 @@ def show_delivery_roadmap():
     with col_pptx:
         st.download_button(
             label="⬇️ Download Delivery Roadmap (PowerPoint)",
-            data=build_quarterly_progress_pptx(
-                pd.DataFrame(columns=["Key", "Summary", "Completion", "Status", "Labels"]), roadmap_df,
-                "", "", roadmap_title, config["subtitle"].strip(), primary,
-            ),
+            data=roadmap_pptx,
             file_name="quarterly_delivery_roadmap.pptx",
             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             use_container_width=True,
@@ -1172,6 +1185,10 @@ def show_delivery_roadmap():
 
 if st.session_state.active_tab_qp == STEPS[2]:
     if st.session_state.get("main_df") is not None:
+        slide_config = st.session_state.setdefault("planning_roadmap_config", {
+            "title": "Delivery Roadmap", "subtitle": "Planned delivery milestones for unfinished work",
+        })
+        render_slide_template_selector(slide_config, "qplan_slide_template_selector")
         show_timeline_gantt_tab()
         st.divider()
         show_delivery_roadmap()
