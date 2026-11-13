@@ -463,7 +463,10 @@ def build_sprint_review_pdf(overview_df, outlook_df, config):
             df_render = df_render.drop(columns=[col for col in hidden_cols if col in df_render.columns])
             story.append(PageBreak())
             extra_title = t["title"] if t["title"].strip() != "" else "Special Metrics Overview"
-            extra_blocks = build_custom_extra_table_pdf_block(df_render, primary_color, styles, is_landscape=True)
+            extra_blocks = build_custom_extra_table_pdf_block(
+                df_render, primary_color, styles, is_landscape=True,
+                quarterly_progress=t.get("table_type") == "quarterly_epic_progress",
+            )
             if extra_blocks:
                 story.append(SmartKeepTogether([
                     Paragraph(extra_title, section_title_style),
@@ -492,7 +495,10 @@ def build_sprint_review_pdf(overview_df, outlook_df, config):
             df_render = df_render.drop(columns=[col for col in hidden_cols if col in df_render.columns])
             story.append(PageBreak())
             extra_title = t["title"] if t["title"].strip() != "" else "Special Metrics Overview"
-            extra_blocks = build_custom_extra_table_pdf_block(df_render, primary_color, styles, is_landscape=True)
+            extra_blocks = build_custom_extra_table_pdf_block(
+                df_render, primary_color, styles, is_landscape=True,
+                quarterly_progress=t.get("table_type") == "quarterly_epic_progress",
+            )
             if extra_blocks:
                 story.append(SmartKeepTogether([
                     Paragraph(extra_title, section_title_style),
@@ -652,5 +658,4 @@ def build_sprint_review_pdf(overview_df, outlook_df, config):
 
 
 # ---------------------------------------------------------
-
 

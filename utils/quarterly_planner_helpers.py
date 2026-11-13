@@ -154,6 +154,45 @@ def normalize_progress_csv(df):
     return out[PROGRESS_CSV_COLUMNS].reset_index(drop=True)
 
 
+PROGRESS_COUNTS_COLUMN = "To Do / In Progress / Closed"
+
+
+def compact_quarterly_progress_counts(df):
+    """Build display-only item counts without changing the source columns."""
+    def format_count(value):
+        if pd.isna(value) or str(value).strip() == "":
+            return "-"
+        if isinstance(value, (int, float)) and float(value).is_integer():
+            return str(int(value))
+        return str(value)
+
+    compact = df.copy()
+    columns = ("To Do", "In progress", "Closed / Resolved")
+    values = []
+    for column in columns:
+        counts = compact.get(column, pd.Series("-", index=compact.index))
+        values.append(counts.map(format_count))
+    compact[PROGRESS_COUNTS_COLUMN] = values[0] + " / " + values[1] + " / " + values[2]
+    return compact
+
+
+def quarterly_progress_table_view(df):
+    """Replace the individual count columns in a display-only copy."""
+    counts = ("To Do", "In progress", "Closed / Resolved")
+    present = [column for column in df.columns if column in counts]
+    if not present:
+        return df.copy()
+    compact = compact_quarterly_progress_counts(df)
+    columns = []
+    for column in df.columns:
+        if column in counts:
+            if PROGRESS_COUNTS_COLUMN not in columns:
+                columns.append(PROGRESS_COUNTS_COLUMN)
+        else:
+            columns.append(column)
+    return compact[columns]
+
+
 def prepare_quarterly_progress_for_presentation(df):
     """Add presentation fields and prioritize open, lower-progress Epics for review."""
     prepared = df.copy()
@@ -413,24 +452,45 @@ def build_delivery_roadmap_slide_pdf(roadmap_df, title, primary_color_hex):
     return buffer.getvalue()
 
 
-def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle="", by_initiative=False):
+def quarterly_jira_item_url(value, jira_server=None):
+    """Resolve an issue key or initiative label against the configured Jira base URL."""
+    from urllib.parse import urlsplit
+
+    server = (os.getenv("JIRA_SERVER", "") if jira_server is None else jira_server).strip().rstrip("/")
+    parsed = urlsplit(server)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    match = re.match(r"^(?:Initiative:\s*)?([A-Z][A-Z0-9_]*-\d+)(?=$|[\s:])", str(value).strip())
+    return f"{server}/browse/{match.group(1)}" if match else None
+
+
+def _quarterly_jira_link_text(value, jira_server):
+    text = html.escape(str(value))
+    url = quarterly_jira_item_url(value, jira_server)
+    return f'<link href="{html.escape(url, quote=True)}"><u>{text}</u></link>' if url else text
+
+
+def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle="", by_initiative=False, template_path="auto", jira_server=None):
     """Create a presentation-style landscape slide for the quarterly Epic progress.
 
     With a local PowerPoint template in assets/templates the PDF copies its look
     (same design as the PowerPoint export), so the on-screen preview matches it.
     With by_initiative there is one page per initiative (Parent Link), as in the PowerPoint.
+    template_path="auto" preserves discovery; None forces the built-in design.
     """
-    template_path = find_quarterly_pptx_template()
+    automatic_template = template_path == "auto"
+    template_path = find_quarterly_pptx_template() if automatic_template else template_path
     if template_path is not None:
         try:
-            return _build_template_progress_pdf(df, title, subtitle, template_path, by_initiative)
+            return _build_template_progress_pdf(df, title, subtitle, template_path, by_initiative, jira_server)
         except Exception:
+            if not automatic_template:
+                raise
             pass  # unreadable template: fall back to the built-in design
     from reportlab.lib.pagesizes import letter, landscape
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, PageBreak, Spacer
-    from utils.pdf_helpers import get_progress_bar_drawing
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -458,15 +518,16 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle=""
     key_style = ParagraphStyle("QuarterlyProgressKey", parent=body_style, fontName="Helvetica-Bold")
 
     def progress_table(df):
+        df = compact_quarterly_progress_counts(df)
         if "Parent Link" in df.columns:
             visible_columns = [
-                ("Parent Link", 90), ("Key", 55), ("Epic", 120), ("Progress", 60), ("Closed / Resolved", 56),
-                ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 60), ("Update", 78)
+                ("Parent Link", 90), ("Key", 55), ("Epic", 150), ("Progress", 60),
+                (PROGRESS_COUNTS_COLUMN, 100), ("Status", 62), ("Team", 60), ("Update", 107)
             ]
         else:
             visible_columns = [
-                ("Key", 55), ("Epic", 150), ("Progress", 60), ("Closed / Resolved", 56),
-                ("To Do", 45), ("In progress", 58), ("Status", 62), ("Team", 75), ("Update", 123)
+                ("Key", 55), ("Epic", 180), ("Progress", 60),
+                (PROGRESS_COUNTS_COLUMN, 100), ("Status", 62), ("Team", 75), ("Update", 152)
             ]
         column_sources = {"Epic": "Summary", "Progress": "Completion", "Update": "Presentation update"}
         table_data = [[Paragraph(name, header_style) for name, _ in visible_columns]]
@@ -477,9 +538,10 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle=""
                 value = row.get(source, "-")
                 value = "-" if pd.isna(value) or str(value).strip() == "" else str(value)
                 if name == "Progress":
-                    cells.append(get_progress_bar_drawing(value, primary, width=52, height=18) or Paragraph(value, body_style))
+                    cells.append(_progress_circle_drawing(value, 48, 24, primary_color_hex))
                 else:
-                    cells.append(Paragraph(html.escape(value), key_style if name == "Key" else body_style))
+                    text = _quarterly_jira_link_text(value, jira_server) if source in ("Key", "Parent Link") else html.escape(value)
+                    cells.append(Paragraph(text, key_style if name == "Key" else body_style))
             table_data.append(cells)
 
         table = Table(table_data, colWidths=[width for _, width in visible_columns], repeatRows=1)
@@ -488,6 +550,8 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle=""
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("TOPPADDING", (0, 0), (-1, -1), 6),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 1), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 1), (-1, -1), 3),
             ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#CBD5E1")),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
         ]))
@@ -508,7 +572,7 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle=""
             ]
             for block in spec["blocks"]:
                 story += [
-                    Paragraph(f"{html.escape(block['heading'])} &nbsp; <font color='#64748B' size='9'>({len(block['df'])} Epics)</font>", heading_style),
+                    Paragraph(f"{_quarterly_jira_link_text(block['heading'], jira_server)} &nbsp; <font color='#64748B' size='9'>({len(block['df'])} Epics)</font>", heading_style),
                     progress_table(block["df"]),
                     Spacer(1, 12),
                 ]
@@ -532,6 +596,19 @@ QUARTERLY_PPTX_TEMPLATE_NAMES = ("Template QP.pptx", "quarterly_planning_templat
 QUARTERLY_PPTX_LAYOUT_NAMES = ("03 Inhalt – Nur Titel, Deep Space Blue", "1_Title Only Deep Space Blue", "Title only Deep Space Blue")
 
 
+def list_quarterly_pptx_templates(templates_dir=None):
+    """List local templates in filename order, excluding Office lock files."""
+    directory = templates_dir or TEMPLATES_DIR
+    if not os.path.isdir(directory):
+        return []
+    return [
+        os.path.join(directory, name)
+        for name in sorted(os.listdir(directory))
+        if name.lower().endswith(".pptx") and not name.startswith("~$")
+        and os.path.isfile(os.path.join(directory, name))
+    ]
+
+
 def find_quarterly_pptx_template(templates_dir=None):
     """Path of the local PowerPoint template for the Quarterly exports, or None.
 
@@ -547,12 +624,8 @@ def find_quarterly_pptx_template(templates_dir=None):
     for path in candidates:
         if os.path.isfile(path):
             return path
-    if os.path.isdir(templates_dir):
-        for name in sorted(os.listdir(templates_dir)):
-            # Skip Office lock files (~$...) left while the template is open in PowerPoint
-            if name.lower().endswith(".pptx") and not name.startswith("~$"):
-                return os.path.join(templates_dir, name)
-    return None
+    templates = list_quarterly_pptx_templates(templates_dir)
+    return templates[0] if templates else None
 
 
 def _template_content_layout(prs):
@@ -576,16 +649,14 @@ def _progress_columns(df):
     """(header, source column, width in inches) of the progress table, as in the PowerPoint export."""
     if df is not None and "Parent Link" in df.columns:
         return [
-            ("Parent Link", "Parent Link", 1.40), ("Key", "Key", 0.85), ("Epic", "Summary", 2.20),
-            ("Progress", "Completion", 0.85), ("Closed / Resolved", "Closed / Resolved", 0.90),
-            ("To Do", "To Do", 0.65), ("In progress", "In progress", 0.90), ("Status", "Status", 0.80),
-            ("Team", "Team", 1.00), ("Update", "Presentation update", 2.43),
+            ("Parent Link", "Parent Link", 1.40), ("Key", "Key", 0.85), ("Epic", "Summary", 2.60),
+            ("Progress", "Completion", 0.85), (PROGRESS_COUNTS_COLUMN, PROGRESS_COUNTS_COLUMN, 1.65),
+            ("Status", "Status", 0.80), ("Team", "Team", 1.00), ("Update", "Presentation update", 2.83),
         ]
     return [
-        ("Key", "Key", 0.85), ("Epic", "Summary", 2.70), ("Progress", "Completion", 0.85),
-        ("Closed / Resolved", "Closed / Resolved", 0.90), ("To Do", "To Do", 0.65),
-        ("In progress", "In progress", 0.90), ("Status", "Status", 0.90), ("Team", "Team", 1.10),
-        ("Update", "Presentation update", 3.13),
+        ("Key", "Key", 0.85), ("Epic", "Summary", 3.10), ("Progress", "Completion", 0.85),
+        (PROGRESS_COUNTS_COLUMN, PROGRESS_COUNTS_COLUMN, 1.65), ("Status", "Status", 0.90),
+        ("Team", "Team", 1.10), ("Update", "Presentation update", 3.53),
     ]
 
 
@@ -615,6 +686,7 @@ def progress_slides(df, title, subtitle="", by_initiative=False):
     space above the table area and every further one needs INITIATIVE_GAP_ROWS.
     """
     df = prepare_quarterly_progress_for_presentation(df) if df is not None else pd.DataFrame()
+    df = compact_quarterly_progress_counts(df)
     title = (title or "").strip()
     subtitle = (subtitle or "").strip()
     rows = PROGRESS_ROWS_PER_SLIDE
@@ -695,28 +767,45 @@ def _template_chrome(template_path):
     return chrome
 
 
-def _template_progress_bar(value, width, height):
-    """Percentage label over a bar, in the template colours (lime at 100%)."""
-    from reportlab.graphics.shapes import Drawing, Rect, String
+def _progress_percentage(value):
+    """Return a bounded percentage, keeping missing progress distinct from zero."""
+    import math
+
+    text = str(value).strip().replace("%", "")
+    try:
+        percentage = float(text)
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(100, int(percentage))) if math.isfinite(percentage) else None
+
+
+def _progress_circle_drawing(value, width, height, primary_color_hex, using_template=False):
+    """Clockwise filled circle with the percentage below, shared by both PDF designs."""
+    from reportlab.graphics.shapes import Drawing, Circle, Wedge, String
     from reportlab.lib import colors
 
-    try:
-        percentage = max(0, min(100, int(float(str(value).replace("%", "")))))
-    except Exception:
-        percentage = 0
+    percentage = _progress_percentage(value)
     drawing = Drawing(width, height)
-    drawing.add(String(width / 2, height - 7.5, f"{percentage}%", fontName="Helvetica-Bold", fontSize=6.5,
-                       fillColor=colors.white, textAnchor="middle"))
-    bar_width, bar_height = width * 0.78, 2.2
-    bar_left = (width - bar_width) / 2
-    drawing.add(Rect(bar_left, 2, bar_width, bar_height, fillColor=colors.HexColor(TEMPLATE_BAR_REMAINING_HEX), strokeColor=None))
-    if percentage:
-        filled = colors.HexColor(TEMPLATE_BAR_COMPLETE_HEX if percentage == 100 else TEMPLATE_TEAL_HEX)
-        drawing.add(Rect(bar_left, 2, bar_width * percentage / 100, bar_height, fillColor=filled, strokeColor=None))
+    text_color = colors.white if using_template else colors.HexColor("#1E293B")
+    drawing.add(String(width / 2, 1, "-" if percentage is None else f"{percentage}%",
+                       fontName="Helvetica-Bold", fontSize=6.5, fillColor=text_color, textAnchor="middle"))
+    if percentage is None:
+        return drawing
+    diameter = min(width, height - 10)
+    radius = diameter / 2
+    center_x, center_y = width / 2, height - radius
+    remaining = colors.HexColor(TEMPLATE_BAR_REMAINING_HEX if using_template else "#E2E8F0")
+    filled = colors.HexColor(
+        (TEMPLATE_BAR_COMPLETE_HEX if using_template else "#22C55E") if percentage == 100
+        else (TEMPLATE_TEAL_HEX if using_template else primary_color_hex)
+    )
+    drawing.add(Circle(center_x, center_y, radius, fillColor=filled if percentage == 100 else remaining, strokeColor=None))
+    if 0 < percentage < 100:
+        drawing.add(Wedge(center_x, center_y, radius, 90 - percentage * 3.6, 90, fillColor=filled, strokeColor=None))
     return drawing
 
 
-def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiative=False):
+def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiative=False, jira_server=None):
     """PDF version of the template-styled PowerPoint progress slides (same layout, colours and paging)."""
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
@@ -789,9 +878,10 @@ def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiati
                 value = row.get(source, "-")
                 value = "-" if pd.isna(value) or str(value).strip() == "" else str(value)
                 if source == "Completion":
-                    cells.append(_template_progress_bar(value, width * scale * point - 8, min(row_height - 6, 18)))
+                    cells.append(_progress_circle_drawing(value, width * scale * point - 8, row_height - 6, TEMPLATE_TEAL_HEX, using_template=True))
                 else:
-                    cells.append(Paragraph(html.escape(value), key_style if source == "Key" else body_style))
+                    text = _quarterly_jira_link_text(value, jira_server) if source in ("Key", "Parent Link") else html.escape(value)
+                    cells.append(Paragraph(text, key_style if source == "Key" else body_style))
             data.append(cells)
         table = Table(data, colWidths=widths, rowHeights=[row_height] * len(data))
         table.setStyle(TableStyle([
@@ -811,7 +901,7 @@ def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiati
         for block in spec["blocks"]:
             if block["heading"]:
                 # Initiative heading in the gap above its table (the frame starts one gap above the table area)
-                story += [Spacer(1, gap - 16 - 6), Paragraph(html.escape(block["heading"]), block_subtitle_style), Spacer(1, 6)]
+                story += [Spacer(1, gap - 16 - 6), Paragraph(_quarterly_jira_link_text(block["heading"], jira_server), block_subtitle_style), Spacer(1, 6)]
             else:
                 story.append(Spacer(1, gap))
             story.append(template_table(block["df"], block["columns"]))
@@ -821,8 +911,8 @@ def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiati
     return buffer.getvalue()
 
 
-def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progress_subtitle, roadmap_title, roadmap_subtitle, primary_color_hex, by_initiative=False):
-    """Build editable PowerPoint slides for quarterly progress and delivery milestones."""
+def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progress_subtitle, roadmap_title, roadmap_subtitle, primary_color_hex, by_initiative=False, template_path="auto", jira_server=None):
+    """Build editable slides; template_path="auto" discovers a template, None uses the built-in design."""
     from pptx import Presentation
     from pptx.util import Inches, Pt
     from pptx.enum.shapes import MSO_SHAPE
@@ -845,7 +935,7 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progr
     white = RGBColor(255, 255, 255)
     template_muted = RGBColor(113, 190, 187)
 
-    template_path = find_quarterly_pptx_template()
+    template_path = find_quarterly_pptx_template() if template_path == "auto" else template_path
     using_template = template_path is not None
     prs = Presentation(template_path) if using_template else Presentation()
     if using_template:
@@ -918,9 +1008,12 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progr
                 # Initiative heading in the gap above its table (for the first table, the space under the
                 # slide subtitle); a text box of its own, not the template's subtitle placeholder
                 if using_template:
-                    add_text(slide, block["heading"], 0.43, block_top - gap + 0.10, 11.4, 0.27, size=13, color=white)
+                    heading = add_text(slide, block["heading"], 0.43, block_top - gap + 0.10, 11.4, 0.27, size=13, color=white)
                 else:
-                    add_text(slide, block["heading"], 0.7, block_top - gap + 0.12, 11.7, 0.24, size=10, color=muted)
+                    heading = add_text(slide, block["heading"], 0.7, block_top - gap + 0.12, 11.7, 0.24, size=10, color=muted)
+                url = quarterly_jira_item_url(block["heading"], jira_server)
+                if url:
+                    heading.text_frame.paragraphs[0].runs[0].hyperlink.address = url
             table_height = row_height * (len(chunk) + 1)
             table_shape = slide.shapes.add_table(len(chunk) + 1, len(progress_columns), Inches(table_left), Inches(block_top), Inches(table_width), Inches(table_height))
             table = table_shape.table
@@ -955,42 +1048,47 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progr
                         paragraph.runs[0].font.color.rgb = white if using_template else dark
                         if source == "Key":
                             paragraph.runs[0].font.bold = True
+                        if source in ("Key", "Parent Link"):
+                            url = quarterly_jira_item_url(value, jira_server)
+                            if url:
+                                paragraph.runs[0].hyperlink.address = url
 
                     if source == "Completion":
-                        try:
-                            percentage = max(0, min(100, int(float(value.replace("%", "")))))
-                        except Exception:
-                            percentage = 0
-                        # Keep the percentage and its visual bar *inside* the table
-                        # cell.  Separate shapes drift when PowerPoint recalculates
-                        # table-row heights, while text runs remain attached to the row.
-                        text_frame = cell.text_frame
-                        text_frame.clear()
-                        text_frame.word_wrap = False
-                        text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
-                        label = text_frame.paragraphs[0]
-                        label.alignment = PP_ALIGN.CENTER
-                        label_run = label.add_run()
-                        label_run.text = f"{percentage}%"
-                        label_run.font.name = "Arial"
-                        label_run.font.size = Pt(6.5)
-                        label_run.font.bold = True
-                        label_run.font.color.rgb = white if using_template else dark
-                        bar = text_frame.add_paragraph()
-                        bar.alignment = PP_ALIGN.CENTER
-                        # Five compact segments fit in the narrow Progress column in
-                        # PowerPoint without wrapping onto a second line.
-                        filled_blocks = int(round(percentage / 20))
-                        filled_run = bar.add_run()
-                        filled_run.text = "▬" * filled_blocks
-                        filled_run.font.name = "Arial"
-                        filled_run.font.size = Pt(7)
-                        filled_run.font.color.rgb = RGBColor(170, 255, 0) if using_template and percentage == 100 else (template_teal if using_template else (green if percentage == 100 else navy))
-                        remaining_run = bar.add_run()
-                        remaining_run.text = "▬" * (5 - filled_blocks)
-                        remaining_run.font.name = "Arial"
-                        remaining_run.font.size = Pt(7)
-                        remaining_run.font.color.rgb = RGBColor(0, 98, 110) if using_template else RGBColor(226, 232, 240)
+                        percentage = _progress_percentage(value)
+                        left = table_shape.left + sum(table.columns[i].width for i in range(col_index))
+                        top = table_shape.top + sum(table.rows[i].height for i in range(row_index))
+                        width, height = table.columns[col_index].width, table.rows[row_index].height
+                        group = slide.shapes.add_group_shape()
+                        group.name = f"Epic progress: {value}"
+                        diameter = min(width - Inches(0.10), height - Pt(16))
+                        circle_left = left + (width - diameter) // 2
+                        circle_top = top + Pt(3)
+                        if percentage is not None:
+                            filled = rgb(TEMPLATE_BAR_COMPLETE_HEX) if using_template and percentage == 100 else (template_teal if using_template else (green if percentage == 100 else navy))
+                            remaining = rgb(TEMPLATE_BAR_REMAINING_HEX) if using_template else rgb("#E2E8F0")
+                            circle = group.shapes.add_shape(MSO_SHAPE.OVAL, circle_left, circle_top, diameter, diameter)
+                            circle.fill.solid()
+                            circle.fill.fore_color.rgb = filled if percentage == 100 else remaining
+                            circle.line.fill.background()
+                            if 0 < percentage < 100:
+                                sector = group.shapes.add_shape(MSO_SHAPE.PIE, circle_left, circle_top, diameter, diameter)
+                                sector.adjustments[0] = 270
+                                sector.adjustments[1] = (270 + percentage * 3.6) % 360
+                                sector.fill.solid()
+                                sector.fill.fore_color.rgb = filled
+                                sector.line.fill.background()
+                        label = group.shapes.add_textbox(left, circle_top + diameter + Pt(2), width, Pt(8))
+                        frame = label.text_frame
+                        frame.margin_left = frame.margin_right = frame.margin_top = frame.margin_bottom = 0
+                        frame.word_wrap = False
+                        paragraph = frame.paragraphs[0]
+                        paragraph.alignment = PP_ALIGN.CENTER
+                        run = paragraph.add_run()
+                        run.text = "-" if percentage is None else f"{percentage}%"
+                        run.font.name = "Arial"
+                        run.font.size = Pt(6.5)
+                        run.font.bold = True
+                        run.font.color.rgb = white if using_template else dark
             block_top += table_height
 
     if roadmap_df is not None and not roadmap_df.empty:
@@ -1181,5 +1279,3 @@ def build_quarterly_plan_pdf(df, primary_color_hex):
     doc.build(story)
     pdf_buffer.seek(0)
     return pdf_buffer
-
-
