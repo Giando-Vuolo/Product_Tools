@@ -180,6 +180,51 @@ class QuarterlyPptxTemplateTests(unittest.TestCase):
         os.environ["QUARTERLY_PPTX_TEMPLATE"] = "Other.pptx"
         self.assertEqual(find_quarterly_pptx_template(self.dir), chosen)
 
+    def test_list_templates_excludes_lock_files_and_directories(self):
+        from utils.quarterly_planner_helpers import list_quarterly_pptx_templates
+        self._touch("~$Locked.pptx")
+        self._touch("notes.txt")
+        second = self._touch("B.pptx")
+        first = self._touch("A.PPTX")
+        os.mkdir(os.path.join(self.dir, "Directory.pptx"))
+        self.assertEqual(list_quarterly_pptx_templates(self.dir), [first, second])
+        self.assertEqual(list_quarterly_pptx_templates(os.path.join(self.dir, "missing")), [])
+
+    def test_explicit_template_selection_and_built_in_override(self):
+        from unittest import mock
+        from pptx import Presentation
+        from pptx.util import Inches
+        from pypdf import PdfReader
+        import utils.quarterly_planner_helpers as helpers
+
+        paths = []
+        for name, width in (("A.pptx", 13.5), ("B.pptx", 14)):
+            path = os.path.join(self.dir, name)
+            template = Presentation()
+            template.slide_width, template.slide_height = Inches(width), Inches(7.5)
+            template.save(path)
+            paths.append(path)
+        df = pd.DataFrame([{"Key": "K-1", "Summary": "Epic", "Completion": "50%"}])
+        with mock.patch.object(helpers, "find_quarterly_pptx_template", return_value=paths[0]):
+            for path, width in ((paths[0], 13.5), (paths[1], 14), (None, 13.333)):
+                with self.subTest(template=path):
+                    pptx = helpers.build_quarterly_progress_pptx(
+                        df, None, "T", "S", "", "", "#0B2756", template_path=path,
+                    )
+                    self.assertAlmostEqual(Presentation(io.BytesIO(pptx)).slide_width.inches, width, places=6)
+                    pdf = helpers.build_quarterly_progress_slide_pdf(df, "T", "#0B2756", template_path=path)
+                    expected_width = width * 72 if path else 792
+                    self.assertAlmostEqual(float(PdfReader(io.BytesIO(pdf)).pages[0].mediabox.width), expected_width)
+
+    def test_invalid_explicit_template_does_not_silently_fall_back(self):
+        import utils.quarterly_planner_helpers as helpers
+        path = self._touch("broken.pptx")
+        df = pd.DataFrame([{"Key": "K-1", "Summary": "Epic", "Completion": "50%"}])
+        with self.assertRaises(Exception):
+            helpers.build_quarterly_progress_slide_pdf(df, "T", "#0B2756", template_path=path)
+        with self.assertRaises(Exception):
+            helpers.build_quarterly_progress_pptx(df, None, "T", "", "", "", "#0B2756", template_path=path)
+
     def test_progress_pdf_uses_template_design(self):
         from unittest import mock
         import utils.quarterly_planner_helpers as helpers
@@ -269,3 +314,181 @@ class ProgressByInitiativeTests(unittest.TestCase):
         reader = PdfReader(io.BytesIO(build_quarterly_progress_slide_pdf(self._df(), "T", "#0B2756", "Sub", by_initiative=True)))
         self.assertEqual(len(reader.pages), 2)
         self.assertIn("Initiative: No initiative", reader.pages[1].extract_text())
+
+
+class ProgressJiraLinkTests(unittest.TestCase):
+    def test_jira_url_resolution(self):
+        from utils.quarterly_planner_helpers import quarterly_jira_item_url
+        server = "https://jira.example.test/jira/"
+        for value in ("ABC-12", "ABC-12 - Platform", "Initiative: ABC-12 - Platform (cont.)"):
+            self.assertEqual(quarterly_jira_item_url(value, server), "https://jira.example.test/jira/browse/ABC-12")
+        for value in ("-", "No initiative", "Platform", "ABC-12invalid"):
+            self.assertIsNone(quarterly_jira_item_url(value, server))
+        for invalid_server in ("", "jira.example.test", "javascript:alert(1)"):
+            self.assertIsNone(quarterly_jira_item_url("ABC-12", invalid_server))
+
+    def test_export_links_in_both_designs_and_layouts(self):
+        import tempfile
+        from pptx import Presentation
+        from pptx.util import Inches
+        from pypdf import PdfReader
+        import utils.quarterly_planner_helpers as helpers
+
+        server = "https://jira.example.test/jira"
+        df = pd.DataFrame([{"Parent Link": "INIT-1 - Platform & APIs", "Key": "EPIC-2",
+                            "Summary": "Epic", "Completion": "50%"}])
+        expected = {f"{server}/browse/INIT-1", f"{server}/browse/EPIC-2"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "template.pptx")
+            template = Presentation()
+            template.slide_width, template.slide_height = Inches(13.333), Inches(7.5)
+            template.save(path)
+            for template_path in (None, path):
+                for grouped in (False, True):
+                    with self.subTest(template=bool(template_path), grouped=grouped):
+                        pdf = helpers.build_quarterly_progress_slide_pdf(
+                            df, "T", "#0B2756", by_initiative=grouped,
+                            template_path=template_path, jira_server=server,
+                        )
+                        reader = PdfReader(io.BytesIO(pdf))
+                        urls = {a.get_object()["/A"]["/URI"] for page in reader.pages for a in page.get("/Annots", [])}
+                        self.assertEqual(urls, expected)
+                        self.assertIn("Platform & APIs", " ".join(reader.pages[0].extract_text().split()))
+                        pptx = helpers.build_quarterly_progress_pptx(
+                            df, None, "T", "", "", "", "#0B2756", by_initiative=grouped,
+                            template_path=template_path, jira_server=server,
+                        )
+                        prs = Presentation(io.BytesIO(pptx))
+                        urls = set()
+                        for slide in prs.slides:
+                            for shape in slide.shapes:
+                                frames = []
+                                if shape.has_table:
+                                    frames.extend(cell.text_frame for row in shape.table.rows for cell in row.cells)
+                                elif shape.has_text_frame:
+                                    frames.append(shape.text_frame)
+                                urls.update(run.hyperlink.address for frame in frames for p in frame.paragraphs
+                                            for run in p.runs if run.hyperlink.address)
+                        self.assertEqual(urls, expected)
+
+
+class ProgressCountTests(unittest.TestCase):
+    def test_compact_counts_preserve_source_and_missing_values(self):
+        from utils.quarterly_planner_helpers import compact_quarterly_progress_counts, PROGRESS_COUNTS_COLUMN
+
+        df = pd.DataFrame({"To Do": [3, 0, None], "In progress": [5, 0, 2],
+                           "Closed / Resolved": [12, 0, 4]})
+        original = df.copy(deep=True)
+        compact = compact_quarterly_progress_counts(df)
+        self.assertEqual(compact[PROGRESS_COUNTS_COLUMN].tolist(), ["3 / 5 / 12", "0 / 0 / 0", "- / 2 / 4"])
+        pd.testing.assert_frame_equal(df, original)
+        missing = compact_quarterly_progress_counts(pd.DataFrame({"To Do": [3]}))
+        self.assertEqual(missing[PROGRESS_COUNTS_COLUMN].tolist(), ["3 / - / -"])
+
+    def test_reports_use_one_count_column_in_both_designs_and_layouts(self):
+        import tempfile
+        from unittest import mock
+        from pptx import Presentation
+        from pptx.util import Inches
+        from pypdf import PdfReader
+        import utils.quarterly_planner_helpers as helpers
+
+        df = pd.DataFrame([{"Parent Link": "INIT-1", "Key": "K-1", "Summary": "Epic", "Completion": "50%",
+                            "To Do": 3, "In progress": 5, "Closed / Resolved": 12}])
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "template.pptx")
+            template = Presentation()
+            template.slide_width, template.slide_height = Inches(13.333), Inches(7.5)
+            template.save(path)
+            for template_path in (None, path):
+                for grouped in (False, True):
+                    with self.subTest(template=bool(template_path), grouped=grouped), \
+                         mock.patch.object(helpers, "find_quarterly_pptx_template", return_value=template_path):
+                        data = helpers.build_quarterly_progress_pptx(df, None, "T", "S", "", "", "#0B2756", grouped)
+                        prs = Presentation(io.BytesIO(data))
+                        table = next(s.table for s in prs.slides[0].shapes if s.has_table)
+                        headers = [c.text for c in table.rows[0].cells]
+                        self.assertEqual(len(headers), 7 if grouped else 8)
+                        self.assertIn(helpers.PROGRESS_COUNTS_COLUMN, headers)
+                        self.assertTrue(all(c not in headers for c in ("To Do", "In progress", "Closed / Resolved")))
+                        self.assertEqual(table.cell(1, headers.index(helpers.PROGRESS_COUNTS_COLUMN)).text, "3 / 5 / 12")
+                        pdf = helpers.build_quarterly_progress_slide_pdf(df, "T", "#0B2756", "S", grouped)
+                        reader = PdfReader(io.BytesIO(pdf))
+                        self.assertEqual(len(reader.pages), 1)
+                        self.assertIn("3 / 5 / 12", reader.pages[0].extract_text())
+
+
+class ProgressCircleTests(unittest.TestCase):
+    def test_pdf_circle_geometry_and_labels(self):
+        from reportlab.graphics.shapes import Circle, Wedge, String
+        from utils.quarterly_planner_helpers import _progress_circle_drawing
+
+        for template in (False, True):
+            for value, percentage in (("0%", 0), ("50%", 50), ("93%", 93), ("100%", 100), ("-", None)):
+                with self.subTest(template=template, value=value):
+                    drawing = _progress_circle_drawing(value, 48, 21, "#0B2756", template)
+                    circles = [shape for shape in drawing.contents if isinstance(shape, Circle)]
+                    wedges = [shape for shape in drawing.contents if isinstance(shape, Wedge)]
+                    self.assertEqual(len(circles), int(percentage is not None))
+                    self.assertEqual(len(wedges), int(percentage is not None and 0 < percentage < 100))
+                    self.assertEqual(next(shape.text for shape in drawing.contents if isinstance(shape, String)), value)
+                    if wedges:
+                        self.assertAlmostEqual(wedges[0].endangledegrees - wedges[0].startangledegrees, percentage * 3.6)
+
+    def test_missing_and_out_of_range_percentages(self):
+        from utils.quarterly_planner_helpers import _progress_percentage
+
+        for value in ("-", "", None, float("nan"), float("inf"), "invalid"):
+            self.assertIsNone(_progress_percentage(value))
+        self.assertEqual(_progress_percentage("-20%"), 0)
+        self.assertEqual(_progress_percentage("120%"), 100)
+
+    def test_pptx_circles_fit_table_cells_in_both_designs_and_layouts(self):
+        import tempfile
+        from unittest import mock
+        from pptx import Presentation
+        from pptx.enum.shapes import MSO_SHAPE, MSO_SHAPE_TYPE
+        import utils.quarterly_planner_helpers as helpers
+
+        df = pd.DataFrame([
+            {"Parent Link": f"INIT-{i // 3}", "Key": f"K-{i}", "Summary": "Epic",
+             "Completion": value, "Status": "In Progress"}
+            for i, value in enumerate(["0%", "50%", "93%", "100%", "-"] * 3)
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            template_path = os.path.join(directory, "template.pptx")
+            Presentation().save(template_path)
+            for template in (None, template_path):
+                for grouped in (False, True):
+                    with self.subTest(template=bool(template), grouped=grouped), \
+                         mock.patch.object(helpers, "find_quarterly_pptx_template", return_value=template):
+                        data = helpers.build_quarterly_progress_pptx(df, None, "T", "S", "", "", "#0B2756", grouped)
+                        prs = Presentation(io.BytesIO(data))
+                        labels = []
+                        for slide in prs.slides:
+                            tables = [shape for shape in slide.shapes if shape.has_table]
+                            for group in (s for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.GROUP):
+                                label = next(s for s in group.shapes if s.has_text_frame and s.text)
+                                labels.append(label.text)
+                                table_shape = next(t for t in tables if t.top <= group.top < t.top + t.height)
+                                table = table_shape.table
+                                column_index = next(i for i, c in enumerate(table.rows[0].cells) if c.text == "Progress")
+                                left = table_shape.left + sum(table.columns[i].width for i in range(column_index))
+                                width = table.columns[column_index].width
+                                row_height = table.rows[1].height
+                                row_index = (group.top - table_shape.top) // row_height
+                                row_top = table_shape.top + row_index * row_height
+                                self.assertGreaterEqual(group.left, left)
+                                self.assertLessEqual(group.left + group.width, left + width)
+                                self.assertGreaterEqual(group.top, row_top)
+                                self.assertLessEqual(group.top + group.height, row_top + row_height)
+                                auto_shapes = [s for s in group.shapes if s.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE]
+                                circles = [s for s in auto_shapes if s.auto_shape_type == MSO_SHAPE.OVAL]
+                                sectors = [s for s in auto_shapes if s.auto_shape_type == MSO_SHAPE.PIE]
+                                self.assertEqual(len(circles), int(label.text != "-"))
+                                self.assertEqual(len(sectors), int(label.text in ("50%", "93%")))
+                                if sectors:
+                                    percentage = int(label.text[:-1])
+                                    self.assertEqual(sectors[0].adjustments[0], 270)
+                                    self.assertAlmostEqual(sectors[0].adjustments[1], (270 + percentage * 3.6) % 360, places=4)
+                        self.assertCountEqual(labels, df["Completion"].tolist())

@@ -581,12 +581,15 @@ def get_progress_bar_drawing(pct_val, primary_color, width=48, height=18):
     return d
 
 # Helper function to dynamically build and format an uploaded custom table (non-Jira) in both landscape and portrait PDFs
-def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=False):
+def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=False, quarterly_progress=False):
     if df is None or df.empty:
         return []
         
     block_elements = []
     df = df.copy()
+    if quarterly_progress:
+        from utils.quarterly_planner_helpers import quarterly_progress_table_view, PROGRESS_COUNTS_COLUMN
+        df = quarterly_progress_table_view(df)
     if "Labels" in df.columns:
         df["Team"] = df["Labels"].apply(get_team_label)
         df = df[[column for column in df.columns if column != "Team"] + ["Team"]]
@@ -662,13 +665,20 @@ def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=F
             if c_clean == "status":
                 row_data.append(Paragraph(format_status_with_emoji(str(val) if pd.notna(val) else ""), cell_body_center_style))
             elif c_clean == "completion":
-                bar_drawing = get_progress_bar_drawing(val, primary_color, width=48 if is_landscape else 40, height=18)
+                if quarterly_progress:
+                    from utils.quarterly_planner_helpers import _progress_circle_drawing
+                    bar_drawing = _progress_circle_drawing(val, 48, 24, primary_color.hexval())
+                else:
+                    bar_drawing = get_progress_bar_drawing(val, primary_color, width=48 if is_landscape else 40, height=18)
                 if bar_drawing:
                     row_data.append(bar_drawing)
                 else:
                     row_data.append(Paragraph(str(val) if pd.notna(val) and str(val).strip() != "" else "-", cell_body_center_style))
             elif c_clean == "key":
                 row_data.append(get_jira_link_paragraph(val, cell_body_bold_style))
+            elif quarterly_progress and c_clean == "parent link":
+                from utils.quarterly_planner_helpers import _quarterly_jira_link_text
+                row_data.append(Paragraph(_quarterly_jira_link_text(val, st.session_state.get("jira_server", "")), cell_body_style))
             elif c_clean == "version":
                 row_data.append(Paragraph(str(val) if pd.notna(val) else "", cell_body_bold_style))
             else:
@@ -692,8 +702,13 @@ def build_custom_extra_table_pdf_block(df, primary_color, styles, is_landscape=F
                 col_widths.append(65 if is_landscape else 55)
                 fixed_width_total += (65 if is_landscape else 55)
             elif c_name == "key":
-                col_widths.append(85 if is_landscape else 75)
-                fixed_width_total += (85 if is_landscape else 75)
+                key_width = (110 if is_landscape else 95) if quarterly_progress else (85 if is_landscape else 75)
+                col_widths.append(key_width)
+                fixed_width_total += key_width
+            elif quarterly_progress and col == PROGRESS_COUNTS_COLUMN:
+                count_width = 90 if is_landscape else 80
+                col_widths.append(count_width)
+                fixed_width_total += count_width
             elif c_name == "team":
                 col_widths.append(95 if is_landscape else 80)
                 fixed_width_total += (95 if is_landscape else 80)

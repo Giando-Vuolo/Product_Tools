@@ -1,4 +1,5 @@
 import base64
+import os
 
 import pandas as pd
 import streamlit as st
@@ -9,7 +10,9 @@ from utils.quarterly_load import render_load_source, render_title_fields, jira_a
 from utils.quarterly_planner_helpers import (
     prepare_quarterly_progress_for_presentation, build_quarterly_progress_slide_pdf, build_quarterly_progress_pptx,
     normalize_progress_csv, PROGRESS_CSV_TEMPLATE,
+    compact_quarterly_progress_counts, PROGRESS_COUNTS_COLUMN,
 )
+from utils.slide_templates import render_slide_template_selector
 from utils.quarterly_theme import apply_quarterly_page_setup
 from utils.stepper import render_stepper
 
@@ -118,12 +121,13 @@ elif st.session_state.active_tab_qprog == STEPS[1]:
     if isinstance(progress_df, pd.DataFrame) and not progress_df.empty:
         st.caption("Write a short update for each Epic; it appears in the report. Jira fields remain read-only. The delivery roadmap is built in Quarterly Review → Planning.")
         progress_columns = [
-            "Parent Link", "Key", "Summary", "Completion", "Closed / Resolved", "To Do", "In progress", "Status", "Team", "Presentation update",
+            "Parent Link", "Key", "Summary", "Completion", PROGRESS_COUNTS_COLUMN, "Status", "Team", "Presentation update",
         ]
-        progress_columns = [column for column in progress_columns if column in progress_df.columns]
+        progress_view = compact_quarterly_progress_counts(progress_df)
+        progress_columns = [column for column in progress_columns if column in progress_view.columns]
         # Row number for on-screen reference only: it is not stored in
         # session state and does not reach the slides or exports.
-        progress_view = progress_df[progress_columns].copy()
+        progress_view = progress_view[progress_columns].copy()
         progress_view.insert(0, "#", range(1, len(progress_view) + 1))
         with st.form("quarterly_progress_updates_form", border=False):
             edited_progress = st.data_editor(
@@ -136,10 +140,8 @@ elif st.session_state.active_tab_qprog == STEPS[1]:
                     "Parent Link": st.column_config.TextColumn("Parent Link", width="medium"),
                     "Key": st.column_config.TextColumn("Key", width="small"),
                     "Summary": st.column_config.TextColumn("Epic", width="large"),
-                "Completion": st.column_config.TextColumn("Completion", width="small"),
-                "Closed / Resolved": st.column_config.NumberColumn("Closed / Resolved", width="small", format="%d"),
-                "To Do": st.column_config.NumberColumn("To Do", width="small", format="%d"),
-                "In progress": st.column_config.NumberColumn("In progress", width="small", format="%d"),
+                    "Completion": st.column_config.TextColumn("Completion", width="small"),
+                    PROGRESS_COUNTS_COLUMN: st.column_config.TextColumn(PROGRESS_COUNTS_COLUMN, width="medium"),
                     "Status": st.column_config.TextColumn("Status", width="small"),
                     "Team": st.column_config.TextColumn("Team", width="medium"),
                     "Presentation update": st.column_config.TextColumn("Update / context", width="large"),
@@ -165,6 +167,7 @@ elif st.session_state.active_tab_qprog == STEPS[2]:
         st.write("A presentation-ready report of the committed Epics with their completion and your update/context column.")
         config = {**SLIDE_DEFAULTS, **st.session_state.quarterly_progress_config}
         render_title_fields("🏷️ Report title and subtitle", "Report title", "Report subtitle", config, "qprog")
+        render_slide_template_selector(config, "qprog_slide_template_selector")
         st.session_state.quarterly_progress_config = config
         layouts = [LAYOUT_ALL, LAYOUT_BY_INITIATIVE]
         config["layout"] = st.radio(
@@ -180,7 +183,23 @@ elif st.session_state.active_tab_qprog == STEPS[2]:
         progress_subtitle = config["subtitle"].strip()
         report_df = prepare_quarterly_progress_for_presentation(progress_df)
         primary = st.session_state.get("primary_color", "#0B2756")
-        progress_pdf = build_quarterly_progress_slide_pdf(report_df, progress_title, primary, progress_subtitle, by_initiative=by_initiative)
+        jira_server = st.session_state.get("jira_server", os.getenv("JIRA_SERVER", ""))
+        if not jira_server.strip():
+            st.info("Configure the Jira server URL to enable Epic and Initiative links in the report.")
+        try:
+            progress_pdf = build_quarterly_progress_slide_pdf(
+                report_df, progress_title, primary, progress_subtitle,
+                by_initiative=by_initiative, template_path=config["template_path"],
+                jira_server=jira_server,
+            )
+            progress_pptx = build_quarterly_progress_pptx(
+                report_df, None, progress_title, progress_subtitle, "", "", primary,
+                by_initiative=by_initiative, template_path=config["template_path"],
+                jira_server=jira_server,
+            )
+        except Exception as error:
+            st.error(f"The report could not be generated with the selected slide template: {error}")
+            st.stop()
         col_pdf, col_pptx = st.columns(2)
         with col_pdf:
             st.download_button(
@@ -190,7 +209,7 @@ elif st.session_state.active_tab_qprog == STEPS[2]:
         with col_pptx:
             st.download_button(
                 label="⬇️ Download Progress Report (PowerPoint)",
-                data=build_quarterly_progress_pptx(report_df, None, progress_title, progress_subtitle, "", "", primary, by_initiative=by_initiative),
+                data=progress_pptx,
                 file_name="quarterly_epic_progress.pptx",
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 use_container_width=True,
