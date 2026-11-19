@@ -80,6 +80,7 @@ def save_credentials_to_env():
     kv["JIRA_EMAIL"] = st.session_state.jira_email
     kv["CONFLUENCE_SERVER"] = st.session_state.conf_server
     kv["CONFLUENCE_API_TOKEN"] = st.session_state.conf_token
+    kv["RELEASE_CALENDAR_ICS_URL"] = st.session_state.release_calendar_ics_url
     kv["OLLAMA_URL"] = st.session_state.ollama_url
     kv["SONAR_SERVER"] = st.session_state.sonar_server
     kv["SONAR_TOKEN"] = st.session_state.sonar_token
@@ -126,6 +127,8 @@ if "conf_server" not in st.session_state:
     st.session_state.conf_server = os.getenv("CONFLUENCE_SERVER", "")
 if "conf_token" not in st.session_state:
     st.session_state.conf_token = os.getenv("CONFLUENCE_API_TOKEN", "")
+if "release_calendar_ics_url" not in st.session_state:
+    st.session_state.release_calendar_ics_url = os.getenv("RELEASE_CALENDAR_ICS_URL", "")
 if "ollama_url" not in st.session_state:
     st.session_state.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
 if "ollama_models" not in st.session_state:
@@ -248,6 +251,7 @@ progress_page = st.Page("tools/1_Quarterly_Progress.py", title="Progress", icon=
 planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Planning", icon="🗓️")
 sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", icon="📋")
 release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
+release_calendar_page = st.Page("tools/8_Release_Calendar.py", title="Release Calendar", icon="🗓️")
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
 ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="Issue Creator", icon="🤖")
 # Reachable by URL only: hidden from the menu
@@ -494,7 +498,13 @@ def _inject_home_styles():
             }
             /* Card buttons: same size, side by side with a 10px gap, at the same height in every card */
             [class*="st-key-poLinks_"] { gap: 10px !important; flex-wrap: nowrap !important; }
-            [class*="st-key-poLinks_"] > div { flex: 0 0 calc(50% - 5px) !important; width: calc(50% - 5px) !important; min-width: 0 !important; }
+            /* Equal share of the row: 2 buttons = 50% each, 3 buttons = a third each (a single button keeps 50%) */
+            [class*="st-key-poLinks_"] > div { flex: 1 1 0 !important; width: auto !important; min-width: 0 !important; }
+            [class*="st-key-poLinks_"] > div:only-child { flex: 0 0 calc(50% - 5px) !important; }
+            /* Three buttons: tighter gap and padding so labels such as "Calendar" stay readable */
+            [class*="st-key-poLinks_"]:has(> div:nth-child(3)) { gap: 6px !important; }
+            [class*="st-key-poLinks_"]:has(> div:nth-child(3)) > div { flex: 1 1 auto !important; }
+            [class*="st-key-poLinks_"]:has(> div:nth-child(3)) [data-testid="stPageLink"] a { padding: 0 0.35rem !important; }
             [class*="st-key-poLinks_"] [data-testid="stPageLink"] a {
                 width: 100% !important; height: 2.25rem !important; padding: 0 0.75rem !important; margin-top: 0 !important;
             }
@@ -552,8 +562,9 @@ def show_home():
                    "ACTIVE 🚀", [(sprint_review_page, "Review", "📋"), (sprint_kpis_page, "KPIs", "📊")])
     with c3:
         _home_card("releases", "🚀", "Releases",
-                   "Create and publish Release Notes from a Jira version, or check a release plan before go-live.",
-                   "ACTIVE 🚀", [(release_notes_page, "Notes", "📣"), (rr_overview_page, "Plan", "🎯")])
+                   "Create and publish Release Notes from a Jira version, check a release plan before go-live, or view the release calendar.",
+                   "ACTIVE 🚀", [(release_notes_page, "Notes", "📣"), (release_calendar_page, "Calendar", "🗓️"),
+                                (rr_overview_page, "Plan", "🎯")])
 
     st.markdown('<div class="po-section">AI</div>', unsafe_allow_html=True)
     c4, _, _ = st.columns(3, gap="medium")
@@ -654,6 +665,11 @@ def show_configuration():
         csrv_in = st.text_input("Confluence Server URL:", value=st.session_state.conf_server, key="central_conf_server")
     with col_ctok:
         ctok_in = _secret_input("Confluence Personal Access Token (PAT):", "conf_token", "central_conf_token")
+    col_cics, _ = st.columns(2)
+    with col_cics:
+        # The private subscription link works like a key: stored like a secret, never sent back to the browser
+        cics_in = _secret_input("Release Calendar ICS URL (private):", "release_calendar_ics_url", "central_conf_ics").strip()
+        st.caption("Confluence calendar → ⋯ → Subscribe → copy the .ics link. Used by Releases → Release Calendar.")
 
     st.markdown("---")
     st.markdown("##### 🤖 Local AI (Ollama)")
@@ -700,6 +716,7 @@ def show_configuration():
         st.session_state.jira_email != mail_in or
         st.session_state.conf_server != csrv_in or
         st.session_state.conf_token != ctok_in or
+        st.session_state.release_calendar_ics_url != cics_in or
         st.session_state.ollama_url != ourl_in or
         st.session_state.sonar_server != sonar_server_in or
         st.session_state.sonar_token != sonar_token_in or
@@ -721,6 +738,7 @@ def show_configuration():
         st.session_state.jira_email = mail_in
         st.session_state.conf_server = csrv_in
         st.session_state.conf_token = ctok_in
+        st.session_state.release_calendar_ics_url = cics_in
         st.session_state.ollama_url = ourl_in
         st.session_state.sonar_server = sonar_server_in
         st.session_state.sonar_token = sonar_token_in
@@ -877,7 +895,7 @@ pg = st.navigation(
         # so the final order is set with CSS in the top menu styles below
         "": [home_page, ai_creator_page, ai_agent_page, configuration_page],
         "🏃 Sprint": [sprint_review_page, sprint_kpis_page],
-        "🚀 Releases": [release_notes_page, *release_plan_nav_pages],
+        "🚀 Releases": [release_notes_page, release_calendar_page, *release_plan_nav_pages],
         "📅 Quarterly Review": [progress_page, planner_page],
     },
     position="top",
