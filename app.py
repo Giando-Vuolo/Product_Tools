@@ -495,7 +495,13 @@ def _inject_home_styles():
             }
             /* Card buttons: same size, side by side with a 10px gap, at the same height in every card */
             [class*="st-key-poLinks_"] { gap: 10px !important; flex-wrap: nowrap !important; }
-            [class*="st-key-poLinks_"] > div { flex: 0 0 calc(50% - 5px) !important; width: calc(50% - 5px) !important; min-width: 0 !important; }
+            /* Equal share of the row: 2 buttons = 50% each, 3 buttons = a third each (a single button keeps 50%) */
+            [class*="st-key-poLinks_"] > div { flex: 1 1 0 !important; width: auto !important; min-width: 0 !important; }
+            [class*="st-key-poLinks_"] > div:only-child { flex: 0 0 calc(50% - 5px) !important; }
+            /* Three buttons: tighter gap and padding so labels such as "Calendar" stay readable */
+            [class*="st-key-poLinks_"]:has(> div:nth-child(3)) { gap: 6px !important; }
+            [class*="st-key-poLinks_"]:has(> div:nth-child(3)) > div { flex: 1 1 auto !important; }
+            [class*="st-key-poLinks_"]:has(> div:nth-child(3)) [data-testid="stPageLink"] a { padding: 0 0.35rem !important; }
             [class*="st-key-poLinks_"] [data-testid="stPageLink"] a {
                 width: 100% !important; height: 2.25rem !important; padding: 0 0.75rem !important; margin-top: 0 !important;
             }
