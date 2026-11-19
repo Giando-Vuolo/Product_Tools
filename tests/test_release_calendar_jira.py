@@ -311,7 +311,7 @@ class PageTests(unittest.TestCase):
 
     def test_tab_loads_jira_and_saves_manual_link(self):
         at = self.at
-        self.assertEqual([t.label for t in at.tabs], ["Releases", "Jira", "Edit", "Events", "Timeline"])
+        self.assertEqual([t.label for t in at.tabs], ["Releases", "Jira", "Edit", "Events", "Timeline", "Overview"])
         self.assertTrue(any("Load Jira versions" in i.value for i in at.info))
         at.button(key="rc_jira_load").click().run()
         self.assertFalse(at.exception, [e.value for e in at.exception])
