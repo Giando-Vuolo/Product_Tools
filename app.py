@@ -2,6 +2,7 @@ import truststore
 truststore.inject_into_ssl()  # verify TLS with the OS trust store (corporate proxies such as Zscaler)
 import streamlit as st
 import html
+import re
 import os
 import requests
 from concurrent.futures import ThreadPoolExecutor
@@ -81,6 +82,8 @@ def save_credentials_to_env():
     kv["CONFLUENCE_SERVER"] = st.session_state.conf_server
     kv["CONFLUENCE_API_TOKEN"] = st.session_state.conf_token
     kv["RELEASE_CALENDAR_ICS_URL"] = st.session_state.release_calendar_ics_url
+    kv["RELEASE_NAME_TEMPLATE"] = st.session_state.release_name_template
+    kv["RELEASE_CALENDAR_ID"] = st.session_state.release_calendar_id
     kv["OLLAMA_URL"] = st.session_state.ollama_url
     kv["SONAR_SERVER"] = st.session_state.sonar_server
     kv["SONAR_TOKEN"] = st.session_state.sonar_token
@@ -129,6 +132,10 @@ if "conf_token" not in st.session_state:
     st.session_state.conf_token = os.getenv("CONFLUENCE_API_TOKEN", "")
 if "release_calendar_ics_url" not in st.session_state:
     st.session_state.release_calendar_ics_url = os.getenv("RELEASE_CALENDAR_ICS_URL", "")
+if "release_calendar_id" not in st.session_state:
+    st.session_state.release_calendar_id = os.getenv("RELEASE_CALENDAR_ID", "")
+if "release_name_template" not in st.session_state:
+    st.session_state.release_name_template = os.getenv("RELEASE_NAME_TEMPLATE", "") or "DIGITAL:HUB {version}"
 if "ollama_url" not in st.session_state:
     st.session_state.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
 if "ollama_models" not in st.session_state:
@@ -665,11 +672,35 @@ def show_configuration():
         csrv_in = st.text_input("Confluence Server URL:", value=st.session_state.conf_server, key="central_conf_server")
     with col_ctok:
         ctok_in = _secret_input("Confluence Personal Access Token (PAT):", "conf_token", "central_conf_token")
-    col_cics, _ = st.columns(2)
+    col_cics, col_rname = st.columns(2)
     with col_cics:
         # The private subscription link works like a key: stored like a secret, never sent back to the browser
         cics_in = _secret_input("Release Calendar ICS URL (private):", "release_calendar_ics_url", "central_conf_ics").strip()
         st.caption("Confluence calendar → ⋯ → Subscribe → copy the .ics link. Used by Releases → Release Calendar.")
+    with col_rname:
+        rname_typed = st.text_input("Release name template:", value=st.session_state.release_name_template,
+                                    key="central_release_name_template").strip()
+        if rname_typed.count("{version}") == 1:
+            rname_in = rname_typed
+            st.caption(f"Jira name of each release; {{version}} is the X.Y.Z. "
+                       f"Example: {rname_in.replace('{version}', '37.0.0')}. Used by Releases → Release Calendar.")
+        else:
+            rname_in = st.session_state.release_name_template  # keep the saved one until it is valid
+            st.warning("The template must contain {version} exactly once, e.g. DIGITAL:HUB {version}. Not saved.")
+    col_ccal, _ = st.columns(2)
+    with col_ccal:
+        ccal_typed = st.text_input("Release Calendar link (to edit):", value=st.session_state.release_calendar_id,
+                                   key="central_release_calendar_id",
+                                   help="Open the calendar in Confluence and paste the address, or just its id.")
+        _cal_match = re.search(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                               ccal_typed or "")
+        if _cal_match or not ccal_typed.strip():
+            ccal_in = _cal_match.group(0).lower() if _cal_match else ""
+            st.caption("Used by Releases → Release Calendar → Edit to write events" +
+                       (f" (calendar {ccal_in})." if ccal_in else "."))
+        else:
+            ccal_in = st.session_state.release_calendar_id
+            st.warning("No calendar id found in that link. Not saved.")
 
     st.markdown("---")
     st.markdown("##### 🤖 Local AI (Ollama)")
@@ -717,6 +748,8 @@ def show_configuration():
         st.session_state.conf_server != csrv_in or
         st.session_state.conf_token != ctok_in or
         st.session_state.release_calendar_ics_url != cics_in or
+        st.session_state.release_name_template != rname_in or
+        st.session_state.release_calendar_id != ccal_in or
         st.session_state.ollama_url != ourl_in or
         st.session_state.sonar_server != sonar_server_in or
         st.session_state.sonar_token != sonar_token_in or
@@ -739,6 +772,8 @@ def show_configuration():
         st.session_state.conf_server = csrv_in
         st.session_state.conf_token = ctok_in
         st.session_state.release_calendar_ics_url = cics_in
+        st.session_state.release_name_template = rname_in
+        st.session_state.release_calendar_id = ccal_in
         st.session_state.ollama_url = ourl_in
         st.session_state.sonar_server = sonar_server_in
         st.session_state.sonar_token = sonar_token_in

@@ -184,7 +184,7 @@ class PageTests(unittest.TestCase):
         self.assertFalse(at.exception, [e.value for e in at.exception])
         fetch.assert_called_once()
         self.assertEqual(len(at.metric), 4)
-        self.assertEqual([t.label for t in at.tabs], ["Releases", "Events", "Timeline"])
+        self.assertEqual([t.label for t in at.tabs], ["Releases", "Jira", "Edit", "Events", "Timeline"])
         self.assertEqual(len(at.dataframe), 1)  # Releases; Events shows the wrapped HTML table by default
         events_html = next(m.value for m in at.markdown if "rc-events" in m.value)
         self.assertIn('<td class="rc-desc">* Spring Boot\n* HTTPS, maybe?', events_html)
