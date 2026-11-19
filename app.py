@@ -248,6 +248,7 @@ progress_page = st.Page("tools/1_Quarterly_Progress.py", title="Progress", icon=
 planner_page = st.Page("tools/1_Quarterly_Planner.py", title="Planning", icon="🗓️")
 sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", icon="📋")
 release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
+release_calendar_page = st.Page("tools/8_Release_Calendar.py", title="Release Calendar", icon="🗓️")
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
 ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="Issue Creator", icon="🤖")
 # Reachable by URL only: hidden from the menu
@@ -552,8 +553,9 @@ def show_home():
                    "ACTIVE 🚀", [(sprint_review_page, "Review", "📋"), (sprint_kpis_page, "KPIs", "📊")])
     with c3:
         _home_card("releases", "🚀", "Releases",
-                   "Create and publish Release Notes from a Jira version, or check a release plan before go-live.",
-                   "ACTIVE 🚀", [(release_notes_page, "Notes", "📣"), (rr_overview_page, "Plan", "🎯")])
+                   "Create and publish Release Notes from a Jira version, check a release plan before go-live, or view the release calendar.",
+                   "ACTIVE 🚀", [(release_notes_page, "Notes", "📣"), (release_calendar_page, "Calendar", "🗓️"),
+                                (rr_overview_page, "Plan", "🎯")])
 
     st.markdown('<div class="po-section">AI</div>', unsafe_allow_html=True)
     c4, _, _ = st.columns(3, gap="medium")
@@ -877,7 +879,7 @@ pg = st.navigation(
         # so the final order is set with CSS in the top menu styles below
         "": [home_page, ai_creator_page, ai_agent_page, configuration_page],
         "🏃 Sprint": [sprint_review_page, sprint_kpis_page],
-        "🚀 Releases": [release_notes_page, *release_plan_nav_pages],
+        "🚀 Releases": [release_notes_page, release_calendar_page, *release_plan_nav_pages],
         "📅 Quarterly Review": [progress_page, planner_page],
     },
     position="top",
