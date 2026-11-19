@@ -494,7 +494,7 @@ class PageTests(unittest.TestCase):
 
     def test_needs_calendar_link(self):
         at = self.start({})
-        self.assertEqual([t.label for t in at.tabs], ["Releases", "Jira", "Edit", "Events", "Timeline"])
+        self.assertEqual([t.label for t in at.tabs], ["Releases", "Jira", "Edit", "Events", "Timeline", "Overview"])
         self.assertTrue(any("Release Calendar link" in i.value for i in at.info))
         self.assertTrue(any("Sandbox mode" in w.value for w in at.warning))
 

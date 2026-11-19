@@ -11,6 +11,8 @@ from utils import release_calendar as rc
 from utils import release_calendar_api as rca
 from utils import release_calendar_edit as rce
 from utils import release_calendar_jira as rcj
+from utils import release_overview as ro
+from utils.slide_templates import render_slide_template_selector
 
 load_dotenv(override=True)
 
@@ -135,7 +137,8 @@ def _events_html(df):
            '<col style="width:22%"><col style="width:7%"><col style="width:41%"></colgroup>'
     head = "<tr><th>Start</th><th>End</th><th>Type</th><th>Summary</th><th>Version</th><th>Description</th></tr>"
     return f'{_EVENTS_CSS}<div class="rc-events"><table>{cols}<thead>{head}</thead><tbody>{rows}</tbody></table></div>'
-tab_rel, tab_jira, tab_edit, tab_events, tab_timeline = st.tabs(["Releases", "Jira", "Edit", "Events", "Timeline"])
+tab_rel, tab_jira, tab_edit, tab_events, tab_timeline, tab_overview = st.tabs(
+    ["Releases", "Jira", "Edit", "Events", "Timeline", "Overview"])
 
 # ----------------------------------------------------------------- Releases (one row per version)
 with tab_rel:
@@ -629,3 +632,92 @@ with tab_timeline:
         fig.update_layout(height=90 + row_px * n_rows, showlegend=False,
                           margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig, width="stretch")
+
+# ----------------------------------------------------------------- Overview (Release Overview slide)
+with tab_overview:
+    st.caption("Builds the Release Overview slide: a timeline of the Prod Deploys of the calendar with "
+               "highlights of the main releases and remarkable events. Kind follows the version "
+               "(X.0.0 major, X.Y.0 minor, X.Y.Z hot fix); releases from today on are drawn as upcoming. "
+               "Only the PowerPoint is created: the calendar and Jira are not changed.")
+    o1, o2 = st.columns([1, 2])
+    with o1:
+        first = (pd.Timestamp(today) - pd.DateOffset(months=3)).date()
+        last = (pd.Timestamp(today) + pd.DateOffset(months=1)).date()
+        months = st.date_input("Months shown", value=(first, last), key="rc_ov_range", format="DD/MM/YYYY",
+                               help="The slide shows the whole months of this range.")
+    if not (isinstance(months, (tuple, list)) and len(months) == 2):
+        st.info("Choose the first and last month of the slide.")
+        st.stop()
+    ov_start, ov_end = months
+    range_key = f"{ov_start:%Y%m}_{ov_end:%Y%m}"
+    with o2:
+        ov_title = st.text_input("Title", key="rc_ov_title",
+                                 value=f"{os.getenv('PROJECT_NAME', 'Release').strip() or 'Release'} | "
+                                       "Overview on current releases")
+
+    base_rows = ro.overview_rows(releases, events, ov_start, ov_end, today)
+    headline = st.text_area(
+        "Summary lines", value=ro.default_headline(base_rows, today), key=f"rc_ov_headline_{range_key}", height=80,
+        help="Shown under the title, one line each. Release names (R35.0.0) and text between **two "
+             "asterisks** are highlighted in green.")
+
+    st.markdown("**Releases**")
+    if base_rows.empty:
+        st.info("No Prod Deploy dates in these months.")
+        ov_rows = base_rows
+    else:
+        edited = st.data_editor(
+            base_rows.drop(columns=["Highlights"]), key=f"rc_ov_rows_{range_key}", hide_index=True,
+            width="stretch", disabled=["Version", "Prod Deploy"],
+            column_config={
+                "Prod Deploy": st.column_config.DateColumn("Prod Deploy", format="DD MMM YYYY"),
+                "Kind": st.column_config.SelectboxColumn("Kind", options=list(ro.KINDS), required=True),
+                "Box": st.column_config.CheckboxColumn("Box", help="Box with highlights above the timeline."),
+                "Incidents": st.column_config.SelectboxColumn(
+                    "Incidents", options=list(ro.INCIDENT_LEVELS),
+                    help="Coloured dot in the release box (deployed releases)."),
+            })
+        ov_rows = edited.copy()
+        highlights = dict(zip(base_rows["Version"], base_rows["Highlights"]))
+        boxed = ov_rows[ov_rows["Box"].fillna(False).astype(bool)]
+        if not boxed.empty:
+            st.caption("Highlights of each box, one bullet per line. Prefilled with the description of the "
+                       "Prod Deploy event in the calendar.")
+            cols = st.columns(min(len(boxed), 3))
+            for i, version in enumerate(boxed["Version"]):
+                with cols[i % len(cols)]:
+                    highlights[version] = st.text_area(f"R{version}", value=highlights.get(version, ""),
+                                                       key=f"rc_ov_hl_{version}", height=130)
+        ov_rows["Highlights"] = ov_rows["Version"].map(highlights).fillna("")
+
+    st.markdown("**Remarkable events**")
+    events_key = f"rc_ov_events_base_{range_key}"
+    if events_key not in st.session_state:
+        st.session_state[events_key] = pd.DataFrame({"Date": pd.Series(dtype="object"), "Text": pd.Series(dtype="str")})
+    remarkable = st.data_editor(
+        st.session_state[events_key], key=f"rc_ov_events_{range_key}", num_rows="dynamic", hide_index=True,
+        width="stretch",
+        column_config={
+            "Date": st.column_config.DateColumn("Date", format="DD MMM YYYY", required=True),
+            "Text": st.column_config.TextColumn(
+                "Text", width="large",
+                help="Drawn in a box under the timeline. Separate lines with | ; lines starting with - are bullets, "
+                     "e.g. Report generation saturated | - Non critical reports moved to 35.0.0"),
+        })
+    remarkable = remarkable.assign(Text=remarkable["Text"].fillna("").astype(str).str.replace(r"\s*\|\s*", "\n", regex=True))
+
+    config = st.session_state.setdefault("rc_overview_config", {})
+    template_path = render_slide_template_selector(config, "rc_ov_template")
+
+    elements = ro.plan_overview(ov_rows, remarkable, ov_start, ov_end, ov_title, headline, today)
+    st.markdown("**Preview**")
+    st.image(ro.overview_svg(elements), width="stretch")
+    st.caption("Approximate preview; the PowerPoint uses the template's fonts, logo and footer.")
+    try:
+        pptx_bytes = ro.build_overview_pptx(elements, template_path)
+    except Exception as exc:  # unreadable template
+        st.error(f"Could not build the PowerPoint: {exc}")
+    else:
+        st.download_button("Download Release Overview (.pptx)", pptx_bytes, type="primary", key="rc_ov_download",
+                           file_name=f"Release_Overview_{today:%Y-%m-%d}.pptx",
+                           mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
