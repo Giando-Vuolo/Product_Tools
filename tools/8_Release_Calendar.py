@@ -674,8 +674,9 @@ with tab_overview:
                 "Kind": st.column_config.SelectboxColumn("Kind", options=list(ro.KINDS), required=True),
                 "Box": st.column_config.CheckboxColumn("Box", help="Box with highlights above the timeline."),
                 "Incidents": st.column_config.SelectboxColumn(
-                    "Incidents", options=list(ro.INCIDENT_LEVELS),
-                    help="Coloured dot in the release box (deployed releases)."),
+                    "Traffic light", options=list(ro.INCIDENT_LEVELS),
+                    help="Green / yellow / red dot in the box of a deployed release: without, minor or major "
+                         "incidents. Green by default; leave it empty to hide it. Upcoming releases have none."),
             })
         ov_rows = edited.copy()
         highlights = dict(zip(base_rows["Version"], base_rows["Highlights"]))

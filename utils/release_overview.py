@@ -85,7 +85,8 @@ def overview_rows(releases: pd.DataFrame, events: pd.DataFrame, start: date, end
     """Releases with a Prod Deploy in the months of [start, end], with the default slide settings.
 
     A box with highlights is shown for every major release and for the next upcoming release; the
-    highlights are the lines of the Prod Deploy description in the calendar.
+    highlights are the lines of the Prod Deploy description in the calendar. Deployed releases get a
+    green traffic light (Without incidents) by default; upcoming releases have none.
     """
     today = pd.Timestamp(today or date.today())
     if releases is None or releases.empty:
@@ -101,7 +102,8 @@ def overview_rows(releases: pd.DataFrame, events: pd.DataFrame, start: date, end
         info = rc.prod_deploy_info(events, r["Version"])
         rows.append({
             "Version": r["Version"], "Prod Deploy": r["Prod Deploy"].date(), "Kind": kind,
-            "Box": kind == MAJOR or r["Version"] == next_version, "Incidents": "",
+            "Box": kind == MAJOR or r["Version"] == next_version,
+            "Incidents": NO_INCIDENTS if r["Prod Deploy"] < today else "",
             "Highlights": "\n".join(highlights_from_description(info["description"])),
         })
     return pd.DataFrame(rows, columns=OVERVIEW_COLUMNS)
@@ -234,6 +236,7 @@ def plan_overview(rows: pd.DataFrame, remarkable: pd.DataFrame, start: date, end
     release_xs = []
 
     # Release boxes above the axis
+    traffic_lights = False
     boxed = rows[rows["Box"].fillna(False).astype(bool)] if not rows.empty else rows
     width = _box_width(len(boxed), 2.75)
     lefts = _spread([x_of(d) for d in boxed["Prod Deploy"]], width) if not boxed.empty else []
@@ -243,15 +246,16 @@ def plan_overview(rows: pd.DataFrame, remarkable: pd.DataFrame, start: date, end
         mx = x_of(r["Prod Deploy"])
         title_text = f"R{r['Version']} ({_day_month(r['Prod Deploy'])})"
         bullets = [b.strip() for b in str(r.get("Highlights") or "").splitlines() if b.strip()][:MAX_BULLETS]
-        incident = str(r.get("Incidents") or "")
+        incident = "" if upcoming else str(r.get("Incidents") or "")  # traffic light: deployed releases only
         dot = 0.24 if incident in INCIDENT_COLORS else 0.0
         size = fit_size(title_text, bullets, width - 0.16 - dot, BOX_BOTTOM - BOX_TOP - 0.12)
         els.append({"kind": "rect", "x": left, "y": BOX_TOP, "w": width, "h": BOX_BOTTOM - BOX_TOP,
                     "fill": None, "line": color, "line_width": 1.75})
         paragraphs = [{"runs": [(title_text, WHITE)], "bullet": False, "bold": True, "size": size + 1}]
         paragraphs += [{"runs": [(b, WHITE)], "bullet": True} for b in bullets]
-        els.append(_text(left + 0.06, BOX_TOP + 0.05, width - 0.12, BOX_BOTTOM - BOX_TOP - 0.1, paragraphs, size))
+        els.append(_text(left + 0.06, BOX_TOP + 0.05, width - 0.12 - dot, BOX_BOTTOM - BOX_TOP - 0.1, paragraphs, size))
         if dot:
+            traffic_lights = True
             els.append({"kind": "circle", "cx": left + width - 0.08 - dot / 2, "cy": BOX_TOP + 0.08 + dot / 2,
                         "r": dot / 2, "fill": INCIDENT_COLORS[incident], "line": None})
         bx = min(max(mx, left + 0.01), left + width - 0.01)
@@ -303,7 +307,7 @@ def plan_overview(rows: pd.DataFrame, remarkable: pd.DataFrame, start: date, end
         els.append(_text(left + 0.06, EVENT_TOP + 0.05, ev_width - 0.12, height - 0.1, paragraphs, size))
         els += _remarkable_marker(mx, AXIS_Y, 0.22)
 
-    els += _legend(rows)
+    els += _legend(traffic_lights)
     return els
 
 
@@ -327,13 +331,12 @@ def _remarkable_marker(cx: float, cy: float, d: float) -> list:
                   align="c", anchor="m")]
 
 
-def _legend(rows: pd.DataFrame) -> list:
-    """Release kinds on the left; incident levels right-aligned when any release has one.
+def _legend(traffic_lights: bool) -> list:
+    """Release kinds on the left; the traffic light levels right-aligned when a box shows one.
     The font shrinks until everything fits the slide width."""
-    used = set(rows["Incidents"].fillna("")) if rows is not None and not rows.empty and "Incidents" in rows else set()
     kinds = [(MAJOR, "diamond", COLORS[MAJOR]), (MINOR, "diamond", COLORS[MINOR]), (HOTFIX, "diamond", COLORS[HOTFIX]),
              (UPCOMING, "diamond", COLORS[UPCOMING]), (REMARKABLE, "remarkable", None)]
-    incidents = [(label, "circle", color) for label, color in INCIDENT_COLORS.items()] if used & set(INCIDENT_COLORS) else []
+    incidents = [(label, "circle", color) for label, color in INCIDENT_COLORS.items()] if traffic_lights else []
     for size in (11, 10.5, 10, 9.5, 9, 8.5, 8):
         def item_width(label):
             return 0.24 + len(label) * size * 0.52 / 72

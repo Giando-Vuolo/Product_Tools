@@ -67,6 +67,8 @@ class HelperTests(unittest.TestCase):
                                 date(2026, 12, 31), TODAY)
         self.assertEqual(rows["Kind"].tolist(), [ro.MINOR, ro.HOTFIX, ro.MAJOR, ro.MINOR])
         self.assertEqual(rows["Box"].tolist(), [False, True, True, False])
+        # Traffic light: green for deployed releases, none for upcoming ones
+        self.assertEqual(rows["Incidents"].tolist(), [ro.NO_INCIDENTS, "", "", ""])
 
     def test_default_headline_and_runs(self):
         text = ro.default_headline(_rows(), TODAY)
@@ -111,6 +113,15 @@ class PlanTests(unittest.TestCase):
                 self.assertLessEqual(e["x"] + e["w"], ro.SLIDE_W)
         incident_dots = [e for e in self.elements if e["kind"] == "circle" and e["fill"] == ro.INCIDENT_COLORS[ro.MINOR_INCIDENTS]]
         self.assertEqual(len(incident_dots), 2)  # in the R33.0.0 box and in the legend
+
+    def test_traffic_light_only_for_deployed_releases(self):
+        rows = _rows().assign(Incidents=[ro.MAJOR_INCIDENTS, "", "", ro.MAJOR_INCIDENTS])  # 35.0.0 is upcoming
+        els = ro.plan_overview(rows, None, date(2026, 8, 1), date(2026, 12, 31), "T", "", TODAY)
+        red = [e for e in els if e["kind"] == "circle" and e["fill"] == ro.INCIDENT_COLORS[ro.MAJOR_INCIDENTS]]
+        self.assertEqual(len(red), 2)  # the R33.0.0 box and the legend, not the upcoming R35.0.0 box
+        only_upcoming = _rows().assign(Incidents=["", "", "", ro.MAJOR_INCIDENTS])
+        texts = _texts(ro.plan_overview(only_upcoming, None, date(2026, 8, 1), date(2026, 12, 31), "T", "", TODAY))
+        self.assertNotIn(ro.MAJOR_INCIDENTS, texts)  # no traffic light drawn, so no traffic light legend
 
     def test_no_incident_legend_without_incidents(self):
         rows = _rows().assign(Incidents="")
