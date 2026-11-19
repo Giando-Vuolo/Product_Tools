@@ -6,7 +6,7 @@ REST resource used by Confluence's own UI (Server/Data Center, verified on Team 
 - GET  /rest/calendar-services/1.0/calendar/subcalendars.json?include=<calendar id>   calendar + event types
 - GET  /rest/calendar-services/1.0/calendar/events.json?subCalendarId=<child>&start&end
 - PUT  /rest/calendar-services/1.0/calendar/events.json   form body: create (no uid) or update (uid)
-- DELETE same URL, form body subCalendarId=<child>&uid=<uid>   (not used by PO Tools)
+- DELETE same URL, form body subCalendarId=<child>&uid=<uid>   delete one (non-recurring) event
 
 A Team Calendar is a parent sub-calendar with one child sub-calendar per event type. The HTTP layer is
 injected (``send(method, path, params=None, data=None)`` returning a requests-like response) so the logic
@@ -237,3 +237,10 @@ def put_event(send, form: dict) -> str:
     if not uid:
         raise CalendarApiError("Confluence did not return the event id after saving.")
     return uid
+
+
+def delete_event(send, child_id: str, uid: str) -> None:
+    """Delete one non-recurring event (form body as Confluence's own dialog sends it)."""
+    if not (child_id and uid):
+        raise CalendarApiError("Missing sub-calendar or event id for the deletion.")
+    _call(send, "DELETE", f"{API}/events.json", data={"subCalendarId": child_id, "uid": uid}, what="event deletion")

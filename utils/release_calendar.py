@@ -467,3 +467,24 @@ def releases_display(releases: pd.DataFrame) -> pd.DataFrame:
         if pd.api.types.is_datetime64_any_dtype(out[col]):
             out[col] = [_iso(v) for v in out[col]]
     return out
+
+
+def prod_deploy_info(events: pd.DataFrame, version: str) -> dict:
+    """The calendar's Prod Deploy event(s) of ``version``: earliest date, titles and description.
+
+    Returns {"date": Timestamp | None, "title": str, "description": str}; with several Prod Deploy events
+    (rescheduled or split) the date is the earliest and the distinct non-empty descriptions are joined.
+    """
+    empty = {"date": None, "title": "", "description": ""}
+    if events is None or events.empty or not version:
+        return empty
+    prod = events[_is_type(events["Type"], PROD_DEPLOY) & (events["Version"] == version)].sort_values("Start")
+    if prod.empty:
+        return empty
+    descriptions = []
+    for d in prod["Description"]:
+        d = (d or "").strip()
+        if d and d not in descriptions:
+            descriptions.append(d)
+    return {"date": prod.iloc[0]["Start"], "title": " / ".join(dict.fromkeys(prod["Summary"])),
+            "description": "\n\n".join(descriptions)}

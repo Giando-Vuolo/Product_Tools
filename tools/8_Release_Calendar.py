@@ -208,59 +208,225 @@ with tab_jira:
     elif releases.empty:
         st.info("The calendar has no releases to link.")
     else:
-        linked = rcj.link_releases(releases, jira_df, links, NAME_TEMPLATE)
+        linked_all = rcj.link_releases(releases, jira_df, links, NAME_TEMPLATE)
+        jf1, jf2 = st.columns([2, 3])
+        with jf1:
+            prod_span = st.date_input("Prod Deploy between", key="rc_jira_range", format="DD/MM/YYYY",
+                                      value=(today - timedelta(days=90), today + timedelta(days=365)),
+                                      help="Shows the releases whose Prod Deploy date is in this range.")
+        with jf2:
+            st.write("")
+            include_missing = st.checkbox("Include releases without a Prod Deploy date", value=True,
+                                          key="rc_jira_no_prod")
+        if isinstance(prod_span, (tuple, list)):
+            p_start = prod_span[0] if len(prod_span) > 0 else None
+            p_end = prod_span[1] if len(prod_span) > 1 else None
+        else:
+            p_start, p_end = prod_span, None
+        linked = rcj.filter_by_prod_date(linked_all, p_start, p_end, include_missing)
+        st.caption(f"{len(linked)} of {len(linked_all)} releases")
         for w in rcj.link_warnings(linked, today):
             st.warning(w)
-        view = linked[["Version", "Prod Deploy", "Expected name", "Jira version", "Jira release date", "Date check", "Link",
+        view = linked[["Version", "Prod Deploy", "Jira version", "Jira release date", "Date check", "Link",
                        "Released", "Jira id"]].copy()
         view["Open"] = [rcj.version_url(j, VERSION_LINK_BASE, JIRA_SERVER, JIRA_PROJECT) or None
                         for j in view.pop("Jira id")]
         for col in ("Prod Deploy", "Jira release date"):
             view[col] = [rc._iso(v) for v in view[col]]
-        st.dataframe(view, hide_index=True, width="stretch", column_config={
-            "Open": st.column_config.LinkColumn("Jira", display_text="Open"),
-            "Released": st.column_config.CheckboxColumn("Released in Jira"),
-        })
+        if linked.empty:
+            st.info("No releases with a Prod Deploy date in the selected range.")
+        else:
+            st.dataframe(view, hide_index=True, width="stretch", column_config={
+                "Open": st.column_config.LinkColumn("Jira", display_text="Open"),
+                "Released": st.column_config.CheckboxColumn("Released in Jira"),
+            })
 
-        with st.container(border=True):
-            st.markdown("**Link to Jira**")
-            needs = linked[linked["Link"].isin([rcj.UNLINKED, rcj.NAME_DIFFERS])]["Version"].tolist()
-            ordered = needs + [v for v in linked["Version"] if v not in needs]
-            c1, c2 = st.columns([1, 3])
-            version = c1.selectbox("Calendar release", ordered, key="rc_link_version",
-                                   format_func=lambda v: f"{v} ⚠️" if v in needs else v)
-            current = linked.set_index("Version").loc[version]
-            opts = rcj.link_options(jira_df, linked, version, NAME_TEMPLATE)
-            not_in_jira = "— Not in Jira —"
-            labels = [not_in_jira] + [
-                f"{r['Jira version']}" + (f" · {rc._iso(r['Jira release date'])}" if rc._iso(r["Jira release date"]) else "")
-                + (" · released" if r["Released"] else "") for _, r in opts.iterrows()]
-            ids = [""] + opts["Jira id"].tolist()
-            if current["Link"] == rcj.NOT_IN_JIRA:
-                default = 0
-            elif current["Jira id"] and current["Jira id"] in ids:
-                default = ids.index(current["Jira id"])
-            else:  # not linked yet: preselect the best candidate (same X.Y.Z, unreleased first)
-                default = 1 if len(ids) > 1 else 0
-            choice = c2.selectbox("Jira version", range(len(ids)), index=default, key=f"rc_link_jira_{version}",
-                                  format_func=lambda i: labels[i])
-            c2.caption(f"Now: {current['Link']}" + (f" → {current['Jira version']}" if current["Jira version"] else ""))
-            b1, b2, _ = st.columns([1, 1, 3])
-            if b1.button("Save link", type="primary", key="rc_link_save"):
-                name = "" if choice == 0 else opts.iloc[choice - 1]["Jira version"]
-                try:
-                    rcj.save_links(rcj.set_link(links, version, ids[choice], name, linked_by=_who()))
-                    st.toast(f"Release {version} linked to {name or 'nothing (not in Jira)'}.")
-                    st.rerun()
-                except OSError as exc:
-                    st.error(f"Could not save the link: {exc}")
-            if b2.button("Use automatic match", key="rc_link_clear", disabled=version not in links,
-                         help="Remove the manual link of this release and match it by X.Y.Z again."):
-                try:
-                    rcj.save_links(rcj.clear_link(links, version))
-                    st.rerun()
-                except OSError as exc:
-                    st.error(f"Could not save the link: {exc}")
+        # ---- release date and description in Jira vs the calendar's Prod Deploy event
+        sync = rcj.jira_sync_status(linked, jira_df, events)
+        todo = sync[sync["Date status"].isin([rcj.MISSING, rcj.DIFFERS]) | sync["Description status"].isin([rcj.MISSING, rcj.DIFFERS])]
+        if not sync.empty:
+            with st.container(border=True):
+                n_date = int(sync["Date status"].isin([rcj.MISSING, rcj.DIFFERS]).sum())
+                n_desc = int(sync["Description status"].isin([rcj.MISSING, rcj.DIFFERS]).sum())
+                st.markdown(f"**Release date & description in Jira** · {len(sync)} linked versions · "
+                            f"{n_date} release date(s) and {n_desc} description(s) to fill or fix")
+                if todo.empty:
+                    st.caption("✅ Every linked Jira version has the calendar's Prod Deploy date and description.")
+                else:
+                    st.caption("Compared with the release's Prod Deploy event in Confluence (date and description). "
+                               "Missing values are ticked to be filled; tick the ones that differ to overwrite them.")
+                    try:
+                        sync_mode, _ = rce.load_write_config(os.environ)
+                    except ValueError:
+                        sync_mode = None
+                    grid = pd.DataFrame({
+                        "Version": todo["Version"],
+                        "Jira version": todo["Jira version"],
+                        "Prod Deploy": [rc._iso(v) if v is not None else "" for v in todo["Prod Deploy"]],
+                        "Jira release date": [rc._iso(v) for v in todo["Jira release date"]],
+                        "Date": todo["Date status"],
+                        "Fill date": todo["Date status"].eq(rcj.MISSING),
+                        "Calendar description": todo["Calendar description"],
+                        "Jira description": todo["Jira description"],
+                        "Description": todo["Description status"],
+                        "Fill description": todo["Description status"].eq(rcj.MISSING),
+                    }).reset_index(drop=True)
+                    picked = st.data_editor(
+                        grid, hide_index=True, width="stretch", key="rc_jira_sync_grid",
+                        disabled=[c for c in grid.columns if c not in ("Fill date", "Fill description")],
+                        column_config={
+                            "Fill date": st.column_config.CheckboxColumn("Fill date", help="Set the Jira release date "
+                                                                         "to the Prod Deploy date."),
+                            "Fill description": st.column_config.CheckboxColumn("Fill description", help="Set the Jira description "
+                                                                                "to the Prod Deploy event's description."),
+                            "Calendar description": st.column_config.TextColumn("Calendar description", width="medium"),
+                            "Jira description": st.column_config.TextColumn("Jira description", width="medium"),
+                        })
+                    updates = []
+                    for i, row in todo.reset_index(drop=True).iterrows():
+                        do_date = bool(picked.loc[i, "Fill date"]) and row["Date status"] in (rcj.MISSING, rcj.DIFFERS)
+                        do_desc = bool(picked.loc[i, "Fill description"]) and row["Description status"] in (rcj.MISSING, rcj.DIFFERS)
+                        payload = rcj.sync_payload(row, do_date, do_desc)
+                        if payload:
+                            updates.append((row, payload))
+                    if sync_mode == "sandbox":
+                        st.caption(f"🧪 Sandbox mode: updating Jira versions is blocked. Set {rce.ENV_WRITE_MODE}=live "
+                                   "in .env to update them.")
+                    if st.button(f"Update {len(updates)} Jira version(s)" if updates else "Update Jira versions",
+                                 key="rc_jira_sync", disabled=not updates or sync_mode != "live"):
+                        put = rcj.make_jira_poster(JIRA_SERVER, JIRA_TOKEN, AUTH_METHOD, EMAIL, method="PUT")
+                        new_df, done, failed = st.session_state[JIRA_STATE_KEY], [], []
+                        for row, payload in updates:
+                            entry = {"at": datetime.now().isoformat(timespec="seconds"), "by": _who(),
+                                     "action": "jira_version_update", "project": JIRA_PROJECT,
+                                     "version": row["Version"], "jira_id": row["Jira id"], "name": row["Jira version"],
+                                     "before": {"releaseDate": rc._iso(row["Jira release date"]) or None,
+                                                "description": row["Jira description"]},
+                                     "after": payload}
+                            try:
+                                body = rcj.update_jira_version(put, row["Jira id"], payload)
+                                new_df = rcj.apply_version_update(new_df, row["Jira id"], body, payload)
+                                entry["status"] = "updated"
+                                done.append(row["Jira version"])
+                            except rcj.JiraVersionsError as exc:
+                                entry.update(status="failed", error=str(exc))
+                                failed.append(f"{row['Jira version']}: {exc}")
+                            try:
+                                rce.append_audit(entry)
+                            except OSError:
+                                pass
+                        st.session_state[JIRA_STATE_KEY] = new_df
+                        for f in failed:
+                            st.error(f)
+                        if done and not failed:
+                            st.toast(f"Updated {len(done)} Jira version(s).")
+                            st.rerun()
+                        elif done:
+                            st.success(f"Updated: {', '.join(done)}")
+
+        if not linked.empty:
+            with st.container(border=True):
+                st.markdown("**Link to Jira**")
+                needs = linked[linked["Link"].isin([rcj.UNLINKED, rcj.NAME_DIFFERS])]["Version"].tolist()
+                ordered = needs + [v for v in linked["Version"] if v not in needs]
+                c1, c2 = st.columns([1, 3])
+                version = c1.selectbox("Calendar release", ordered, key="rc_link_version",
+                                       format_func=lambda v: f"{v} ⚠️" if v in needs else v)
+                current = linked.set_index("Version").loc[version]
+                opts = rcj.link_options(jira_df, linked_all, version, NAME_TEMPLATE)  # taken = by any release
+                not_in_jira = "— Not in Jira —"
+                labels = [not_in_jira] + [
+                    f"{r['Jira version']}" + (f" · {rc._iso(r['Jira release date'])}" if rc._iso(r["Jira release date"]) else "")
+                    + (" · released" if r["Released"] else "") for _, r in opts.iterrows()]
+                ids = [""] + opts["Jira id"].tolist()
+                if current["Link"] == rcj.NOT_IN_JIRA:
+                    default = 0
+                elif current["Jira id"] and current["Jira id"] in ids:
+                    default = ids.index(current["Jira id"])
+                else:  # not linked yet: preselect the best candidate (same X.Y.Z, unreleased first)
+                    default = 1 if len(ids) > 1 else 0
+                choice = c2.selectbox("Jira version", range(len(ids)), index=default, key=f"rc_link_jira_{version}",
+                                      format_func=lambda i: labels[i])
+                c2.caption(f"Now: {current['Link']}" + (f" → {current['Jira version']}" if current["Jira version"] else ""))
+                b1, b2, _ = st.columns([1, 1, 3])
+                if b1.button("Save link", type="primary", key="rc_link_save"):
+                    name = "" if choice == 0 else opts.iloc[choice - 1]["Jira version"]
+                    try:
+                        rcj.save_links(rcj.set_link(links, version, ids[choice], name, linked_by=_who()))
+                        st.toast(f"Release {version} linked to {name or 'nothing (not in Jira)'}.")
+                        st.rerun()
+                    except OSError as exc:
+                        st.error(f"Could not save the link: {exc}")
+                if b2.button("Use automatic match", key="rc_link_clear", disabled=version not in links,
+                             help="Remove the manual link of this release and match it by X.Y.Z again."):
+                    try:
+                        rcj.save_links(rcj.clear_link(links, version))
+                        st.rerun()
+                    except OSError as exc:
+                        st.error(f"Could not save the link: {exc}")
+
+                # ---- create the release in Jira when it is not there
+                if current["Link"] in (rcj.UNLINKED, rcj.NAME_DIFFERS, rcj.NOT_IN_JIRA):
+                    st.markdown("**Create in Jira**")
+                    new_name = rcj.release_name(NAME_TEMPLATE, version)
+                    try:
+                        jira_mode, _ = rce.load_write_config(os.environ)
+                    except ValueError as exc:
+                        jira_mode = None
+                        st.error(str(exc))
+                    exists = rcj.name_exists(jira_df, new_name)
+                    prod_info = rc.prod_deploy_info(events, version)
+                    if prod_info["title"]:
+                        st.caption(f"From the calendar's Prod Deploy event “{prod_info['title']}”"
+                                   f" on {prod_info['date']:%d %b %Y}: release date and description below.")
+                    else:
+                        st.caption("This release has no Prod Deploy event in the calendar: no date or description to copy.")
+                    j1, j2 = st.columns([1, 2])
+                    new_date = j1.date_input("Release date", key=f"rc_jira_new_date_{version}", format="DD/MM/YYYY",
+                                             value=prod_info["date"].date() if prod_info["date"] is not None else None,
+                                             help="Prefilled with the Prod Deploy date of the Confluence calendar.")
+                    new_desc = j2.text_area("Description", value=prod_info["description"],
+                                            key=f"rc_jira_new_desc_{version}", height=90,
+                                            help="Prefilled with the description of the Prod Deploy event in "
+                                                 "Confluence. Edit or clear it before creating.")
+                    if exists:
+                        st.caption(f"Jira already has a version named {new_name}. Reload Jira versions.")
+                    elif jira_mode == "sandbox":
+                        st.caption(f"🧪 Sandbox mode: creating Jira versions is blocked. Set {rce.ENV_WRITE_MODE}=live "
+                                   "in .env to create them.")
+                    else:
+                        st.caption(f"Creates the unreleased version **{new_name}** in Jira project {JIRA_PROJECT} "
+                                   f"and links it to release {version}.")
+                    if st.button(f"Create {new_name} in Jira", key="rc_jira_create",
+                                 disabled=exists or jira_mode != "live"):
+                        audit = {"at": datetime.now().isoformat(timespec="seconds"), "by": _who(),
+                                 "action": "jira_version_create", "project": JIRA_PROJECT, "version": version,
+                                 "name": new_name, "release_date": f"{new_date}" if new_date else None}
+                        try:
+                            created = rcj.create_jira_version(
+                                rcj.make_jira_poster(JIRA_SERVER, JIRA_TOKEN, AUTH_METHOD, EMAIL), JIRA_PROJECT,
+                                new_name, new_date, new_desc, existing=jira_df)
+                        except rcj.JiraVersionsError as exc:
+                            audit.update(status="failed", error=str(exc))
+                            st.error(str(exc))
+                        else:
+                            audit.update(status="created", jira_id=str(created["id"]))
+                            st.session_state[JIRA_STATE_KEY] = pd.concat(
+                                [jira_df, rcj.jira_versions_dataframe([created])], ignore_index=True)
+                            try:  # link it explicitly, so it stays linked even if the template changes later
+                                rcj.save_links(rcj.set_link(links, version, str(created["id"]),
+                                                            created.get("name") or new_name, linked_by=_who()))
+                                audit["linked"] = True
+                                st.toast(f"Created {new_name} in Jira and linked it to release {version}.")
+                            except OSError as exc:
+                                audit["linked"] = False
+                                st.toast(f"Created {new_name} in Jira, but the link could not be saved: {exc}")
+                        try:
+                            rce.append_audit(audit)
+                        except OSError:
+                            pass
+                        if audit["status"] == "created":
+                            st.rerun()
 
 # ----------------------------------------------------------------- Edit (Epic 2: write to the Team Calendar)
 def _sender():
@@ -280,9 +446,10 @@ def _load_for_editing():
 
 
 with tab_edit:
-    st.caption("Add releases or change their dates in the Confluence Team Calendar. Only the events behind "
-               "the cells you change are written; nothing is deleted. Before publishing you see every change, "
-               "and the calendar is re-read: if someone changed those events meanwhile, publishing is blocked.")
+    st.caption("Add, change or delete releases in the Confluence Team Calendar. Only the events behind "
+               "the cells you change are written; deleting a row deletes that release's step events. Before "
+               "publishing you see every change, and the calendar is re-read: if someone changed those events "
+               "meanwhile, publishing is blocked.")
     try:
         write_mode, sandbox_versions = rce.load_write_config(os.environ)
     except ValueError as exc:
@@ -349,7 +516,7 @@ with tab_edit:
                 column_config={
                     "Version": st.column_config.TextColumn("Version", help="X.Y.Z", required=False),
                     **{c: st.column_config.DateColumn(c, format=DATE_FMT) for c in rce.DATE_COLUMNS},
-                    rce.NOTES: st.column_config.TextColumn("Notes", help="Saved as the Prod Deploy description.",
+                    rce.NOTES: st.column_config.TextColumn("Description", help="Saved as the description of the Prod Deploy event.",
                                                            width="large"),
                     rce.LOCKED: st.column_config.TextColumn("Locked steps", disabled=True,
                                                             help="Steps with several, recurring or timed events: "
@@ -364,21 +531,32 @@ with tab_edit:
                 st.error(err)
             counts = plan.rows["Status"].value_counts() if not plan.rows.empty else pd.Series(dtype=int)
             st.markdown(f"**Preview** · {counts.get('New', 0)} new · {counts.get('Changed', 0)} changed · "
-                        f"{counts.get('Unchanged', 0)} unchanged · {len(plan.changes)} event writes")
+                        f"{counts.get('Deleted', 0)} deleted · {counts.get('Unchanged', 0)} unchanged · "
+                        f"{len(plan.changes)} event writes")
             if plan.changes:
                 st.dataframe(pd.DataFrame([{
                     "Release": c.version, "Step": c.type_title, "Action": c.action.capitalize(),
                     "Before": (f"{c.before['start']} → {c.before['end']}" if c.before else "—"),
-                    "After": f"{c.after['start']} → {c.after['end']}",
-                    "Title": c.after["title"],
-                    "Description": ("changed" if c.before and c.before["description"] != c.after["description"]
+                    "After": f"{c.after['start']} → {c.after['end']}" if c.after else "deleted",
+                    "Title": (c.after or c.before)["title"],
+                    "Description": ("" if c.action == "delete" else
+                                    "changed" if c.before and c.before["description"] != c.after["description"]
                                     else ("set" if not c.before and c.after["description"] else "")),
                 } for c in plan.changes]), hide_index=True, width="stretch")
                 changed_rows = plan.rows[plan.rows["Status"] != "Unchanged"]
                 if not changed_rows.empty:
                     st.dataframe(changed_rows, hide_index=True, width="stretch")
 
-            can_publish = bool(plan.changes) and not plan.errors and write_mode is not None and cal.events_editable
+            confirmed = True
+            if plan.deletions and not plan.errors:
+                versions = sorted({c.version for c in plan.deletions}, key=rc.version_key)
+                st.warning(f"🗑️ Deleting release(s) {', '.join(versions)} removes {len(plan.deletions)} event(s) "
+                           "from the Confluence calendar. They cannot be restored from Confluence; the JSON backup "
+                           "keeps their details.")
+                confirmed = st.checkbox(f"Yes, delete {len(plan.deletions)} event(s) of {', '.join(versions)}",
+                                        key=f"rc_edit_confirm_delete_{state['gen']}")
+            can_publish = (bool(plan.changes) and not plan.errors and write_mode is not None and cal.events_editable
+                           and confirmed)
             if st.button(f"Publish {len(plan.changes)} change(s)" if plan.changes else "Publish", type="primary",
                          key="rc_edit_publish", disabled=not can_publish):
                 with st.spinner("Publishing to the calendar..."):

@@ -45,6 +45,8 @@ class FakeConfluence:
         self.events = {e["id"]: e for e in events}
         self.editable = editable
         self.puts = []
+        self.deletes = []
+        self.ignore_delete = False
         self.fail_put_after = None   # fail the n-th PUT (0-based)
         self.ignore_description = False
         self.n = 0
@@ -77,6 +79,15 @@ class FakeConfluence:
                 uid, form["what"], etype, form["startDate"], form["endDate"],
                 description=old.get("description", "") if self.ignore_description else form["description"])
             return self._json({"success": True, "event": {"id": uid}})
+        if path.endswith("/events.json") and method == "DELETE":
+            form = dict(data)
+            self.deletes.append(form)
+            ev = self.events.get(form["uid"])
+            if ev is None or ev["subCalendarId"] != form["subCalendarId"]:
+                return MagicMock(status_code=404, text="")
+            if not self.ignore_delete:
+                del self.events[form["uid"]]
+            return MagicMock(status_code=204, text="")
         raise AssertionError(f"unexpected call {method} {path}")
 
     @staticmethod
@@ -187,7 +198,7 @@ class TableAndPlanTests(unittest.TestCase):
         self.assertEqual(list(t.index), ["36.0.0", "37.0.0"])  # hotfix has no version
         self.assertEqual((t.loc["36.0.0", "QS Freeze start"], t.loc["36.0.0", "QS Freeze end"]),
                          (date(2026, 11, 27), date(2026, 12, 15)))
-        self.assertEqual(t.loc["36.0.0", "Notes"], "* Spring Boot")
+        self.assertEqual(t.loc["36.0.0", "Description"], "* Spring Boot")
         self.assertEqual(t.loc["36.0.0", "Locked"], "Regression (has a time)")
         self.assertEqual(t.loc["37.0.0", "Locked"], "BAT (2 events)")
         self.assertEqual(t.loc["37.0.0", "BAT"], date(2027, 1, 20))
@@ -214,7 +225,7 @@ class TableAndPlanTests(unittest.TestCase):
 
     def test_qs_freeze_and_notes_and_new_step(self):
         p = self.plan(edited_from(self.table, {
-            ("36.0.0", "QS Freeze end"): date(2026, 12, 16), ("36.0.0", "Notes"): "* Spring Boot\n* Java 21",
+            ("36.0.0", "QS Freeze end"): date(2026, 12, 16), ("36.0.0", "Description"): "* Spring Boot\n* Java 21",
             ("36.0.0", "BAT"): date(2026, 12, 10)}))
         self.assertEqual(p.errors, [])
         by = {(c.type_title, c.action): c for c in p.changes}
@@ -226,7 +237,7 @@ class TableAndPlanTests(unittest.TestCase):
 
     def test_new_release_row(self):
         new = pd.DataFrame([{rce.KEY: None, "Version": "38.0.0", "QS Freeze start": date(2027, 3, 1),
-                             "Prod Deploy": date(2027, 3, 20), "Notes": "Big one"}])
+                             "Prod Deploy": date(2027, 3, 20), "Description": "Big one"}])
         p = self.plan(pd.concat([self.table, new], ignore_index=True), template="{type} | {version}")
         self.assertEqual(p.errors, [])
         self.assertEqual(sorted((c.type_title, c.after["start"], c.after["end"], c.after["title"], c.after["description"])
@@ -248,12 +259,11 @@ class TableAndPlanTests(unittest.TestCase):
                                                                  row(Version="37.0.0", BAT=date(2027, 1, 1))])))
         self.assertIn("at least one date", errs(pd.concat([base, row(Version="38.0.0")])))
         self.assertIn("set a Prod Deploy date", errs(pd.concat([base, row(Version="38.0.0", BAT=date(2027, 1, 1),
-                                                                          Notes="x")])))
+                                                                          Description="x")])))
         self.assertIn("version is empty", errs(pd.concat([base, row(Version="", BAT=date(2027, 1, 1))])))
         self.assertEqual(errs(pd.concat([base, row(Version="")])), "")  # empty row ignored
         self.assertIn("clearing Load Test", errs(edited_from(base, {("36.0.0", "Load Test"): None})))
         self.assertIn("renaming", errs(edited_from(base, {("36.0.0", "Version"): "36.1.0"})))
-        self.assertIn("deleting releases is not supported", errs(base[base["Version"] != "37.0.0"]))
         self.assertIn("BAT cannot be edited here (2 events)", errs(edited_from(base, {("37.0.0", "BAT"): date(2027, 1, 21)})))
         self.assertIn("Regression cannot be edited here (has a time)",
                       errs(edited_from(base, {("36.0.0", "Regression"): date(2026, 11, 11)})))
@@ -298,12 +308,85 @@ class TableAndPlanTests(unittest.TestCase):
         self.assertEqual([(c.action, c.version, c.type_title) for c in p.changes], [("create", "38.0.0", "Prod Deploy")])
 
 
+class DeleteTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.fake, self.cal, self.events = loaded()
+        self.table = rce.editable_table(self.events)
+
+    def plan(self, edited, sandbox=None, events=None):
+        return rce.plan_changes(self.table, edited, events or self.events, self.cal, sandbox_versions=sandbox)
+
+    def test_removed_row_deletes_every_step_event_of_the_release(self):
+        p = self.plan(self.table[self.table["Version"] != "37.0.0"])
+        self.assertEqual(p.errors, [])
+        self.assertEqual(sorted((c.action, c.uid) for c in p.changes),
+                         [("delete", "bat-37a"), ("delete", "bat-37b"), ("delete", "qs-37")])
+        self.assertEqual(len(p.deletions), 3)
+        row = p.rows.set_index("Version").loc["37.0.0"]
+        self.assertEqual(row["Status"], "Deleted")
+        self.assertIn("3 event(s)", row["Details"])
+        # a locked (timed) step is deleted with its release too; other versions are untouched
+        p36 = self.plan(self.table[self.table["Version"] != "36.0.0"])
+        self.assertEqual(sorted(c.uid for c in p36.changes), ["lt-36", "prod-36", "qs-36", "reg-36"])
+
+    def test_recurring_release_is_not_deleted(self):
+        raw = sample_events() + [raw_event("pen-37", "PEN 37.0.0", "PEN test PreLive", "2027-01-19",
+                                           rruleStr="FREQ=WEEKLY;COUNT=2")]
+        fake, cal, events = loaded(FakeConfluence(raw))
+        table = rce.editable_table(events)
+        p = rce.plan_changes(table, table[table["Version"] != "37.0.0"], events, cal)
+        self.assertEqual(p.changes, [])
+        self.assertIn("PEN test PreLive is a recurring event", " ".join(p.errors))
+
+    def test_sandbox_blocks_deleting_real_releases(self):
+        p = self.plan(self.table[self.table["Version"] != "37.0.0"], sandbox=("999.0.0",))
+        self.assertEqual(p.changes, [])
+        self.assertIn("sandbox mode", " ".join(p.errors))
+
+    def publish(self, plan, **kw):
+        args = dict(allowed_id=CAL_ID, user="me@x", backup_dir=self.tmp / "bk", audit_path=self.tmp / "audit.jsonl")
+        args.update(kw)
+        return rce.publish(self.fake.send, self.cal, plan.changes, self.events, WINDOW, **args)
+
+    def test_publish_deletes_verifies_and_keeps_the_rest(self):
+        keep = {k: dict(v) for k, v in self.fake.events.items() if "37" not in k}
+        res = self.publish(self.plan(self.table[self.table["Version"] != "37.0.0"]))
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(sorted(d["uid"] for d in self.fake.deletes), ["bat-37a", "bat-37b", "qs-37"])
+        self.assertEqual(self.fake.deletes[0]["subCalendarId"], CHILD[next(
+            c.type_title for c in self.plan(self.table[self.table["Version"] != "37.0.0"]).changes)])
+        self.assertEqual(self.fake.events, keep)
+        backup = json.loads(Path(res["backup"]).read_text())
+        self.assertTrue({"bat-37a", "bat-37b", "qs-37"} <= {e["uid"] for e in backup["events"]})
+        entry = json.loads((self.tmp / "audit.jsonl").read_text().splitlines()[0])
+        self.assertEqual({(c["action"], c["applied"]) for c in entry["changes"]}, {("delete", True)})
+
+    def test_delete_conflict_and_verification(self):
+        plan = self.plan(self.table[self.table["Version"] != "37.0.0"])
+        self.fake.events["qs-37"]["end"] = "2027-01-30T00:00:00.000+01:00"  # moved meanwhile
+        res = self.publish(plan)
+        self.assertEqual(res["status"], "refused")
+        self.assertEqual(self.fake.deletes, [])
+        self.fake, self.cal, self.events = loaded()
+        self.fake.ignore_delete = True
+        res = self.publish(self.plan(self.table[self.table["Version"] != "37.0.0"]))
+        self.assertEqual(res["status"], "verification_failed")
+        self.assertIn("still in the calendar", res["error"])
+
+    def test_delete_event_api(self):
+        with self.assertRaises(api.CalendarApiError):
+            api.delete_event(self.fake.send, "", "x")
+        with self.assertRaisesRegex(api.CalendarApiError, "not found"):
+            api.delete_event(self.fake.send, CHILD["BAT"], "nope")
+
+
 class PublishTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.fake, self.cal, self.events = loaded()
         self.table = rce.editable_table(self.events)
-        new = pd.DataFrame([{rce.KEY: None, "Version": "38.0.0", "Prod Deploy": date(2027, 3, 20), "Notes": "n"}])
+        new = pd.DataFrame([{rce.KEY: None, "Version": "38.0.0", "Prod Deploy": date(2027, 3, 20), "Description": "n"}])
         edited = pd.concat([edited_from(self.table, {("36.0.0", "Load Test"): date(2026, 12, 3)}), new],
                            ignore_index=True)
         self.plan = rce.plan_changes(self.table, edited, self.events, self.cal)
@@ -422,7 +505,7 @@ class PageTests(unittest.TestCase):
         at.button(key="rc_edit_load").click().run()
         self.assertFalse(at.exception, [e.value for e in at.exception])
         self.assertTrue(any("Recall 2 Release Calendar" in c.value for c in at.caption))
-        self.assertTrue(any("0 new · 0 changed · 2 unchanged" in m.value for m in at.markdown))
+        self.assertTrue(any("0 new · 0 changed · 0 deleted · 2 unchanged" in m.value for m in at.markdown))
         self.assertTrue(at.button(key="rc_edit_publish").disabled)
         self.assertEqual(self.fake.puts, [])
 

@@ -3,12 +3,13 @@
 Pure logic plus injected HTTP (``send``) so it is testable without network. Only the events behind the
 cells that changed are written; every other event of the calendar is left untouched.
 
-One row per release (X.Y.Z) with the date of each release step and Notes (the Prod Deploy description).
+One row per release (X.Y.Z) with the date of each release step and the Description of the Prod Deploy event.
 A cell maps to the calendar event of that step whose title carries the version:
 - no event + date        -> create the event (title from RELEASE_CALENDAR_EVENT_TITLE)
 - one simple event       -> update its dates (duration kept) / description; title unchanged
 - several, recurring, timed or with invitees -> locked: edit it in Confluence
-Clearing a date, renaming a release or deleting a row is refused (nothing is deleted from the calendar).
+Deleting a row deletes every release-step event of that release (refused if one is recurring).
+Clearing a single date or renaming a release is refused.
 
 Publishing: allow-list + sandbox check, re-read of the affected events and refusal if they changed
 since loading, local JSON backup, writes one by one (stop at the first error), re-read to verify, and
@@ -38,7 +39,7 @@ DEFAULT_SANDBOX_VERSIONS = ("999.0.0",)
 BACKUP_DIR = Path("data/confluence_backups")
 AUDIT_FILE = Path("data/release_calendar_audit.jsonl")
 
-QS_START, QS_END, NOTES, KEY, LOCKED = "QS Freeze start", "QS Freeze end", "Notes", "_key", "Locked"
+QS_START, QS_END, NOTES, KEY, LOCKED = "QS Freeze start", "QS Freeze end", "Description", "_key", "Locked"
 # simple one-date steps: (column, event type title)
 SIMPLE_STEPS = tuple((c, t) for c, t, _ in rc.RELEASE_STEPS if t != rc.QS_FREEZE)
 DATE_COLUMNS = [QS_START, QS_END, *(c for c, _ in SIMPLE_STEPS)]
@@ -52,7 +53,7 @@ class PublishRefused(Exception):
 
 @dataclass(frozen=True)
 class Change:
-    action: str            # "create" | "update"
+    action: str            # "create" | "update" | "delete"
     version: str
     type_title: str
     uid: str = ""
@@ -68,7 +69,11 @@ class Change:
 class Plan:
     changes: list
     errors: list
-    rows: pd.DataFrame     # Version, Status (New/Changed/Unchanged), Details
+    rows: pd.DataFrame     # Version, Status (New/Changed/Unchanged/Deleted), Details
+
+    @property
+    def deletions(self) -> list:
+        return [c for c in self.changes if c.action == "delete"]
 
 
 # --------------------------------------------------------------------------- config
@@ -317,7 +322,7 @@ def plan_changes(original: pd.DataFrame, edited: pd.DataFrame, events: Iterable,
                                           dict(_ev_state(e), start=_fmt(qs_s), end=_fmt(qs_e)), e.extra))
             details.append(f"QS Freeze: {_fmt(old[QS_START])} → {_fmt(old[QS_END])} ⇒ {_fmt(qs_s)} → {_fmt(qs_e)}")
 
-        # simple steps (+ Notes on Prod Deploy)
+        # simple steps (+ the description of Prod Deploy)
         for col, t in SIMPLE_STEPS:
             value, before = new[col], old[col]
             notes_change = t == rc.PROD_DEPLOY and notes != old_notes
@@ -327,7 +332,7 @@ def plan_changes(original: pd.DataFrame, edited: pd.DataFrame, events: Iterable,
             if not evs:
                 if value is None:
                     if notes_change:
-                        row_errors.append(f"Release {version}: Notes are saved on the Prod Deploy event; "
+                        row_errors.append(f"Release {version}: the description is saved on the Prod Deploy event; "
                                           "set a Prod Deploy date.")
                     continue
                 et = need_type(t)
@@ -351,7 +356,7 @@ def plan_changes(original: pd.DataFrame, edited: pd.DataFrame, events: Iterable,
                 details.append(f"{col}: {_fmt(before)} ⇒ {_fmt(value)}")
             if notes_change:
                 after["description"] = notes
-                details.append("Notes changed")
+                details.append("Description changed")
             row_changes.append(Change("update", version, e.type_title, e.uid, _ev_state(e), after, e.extra))
 
         if not key and not row_changes and not row_errors:
@@ -364,8 +369,22 @@ def plan_changes(original: pd.DataFrame, edited: pd.DataFrame, events: Iterable,
         status_rows.append({"Version": version, "Status": status, "Details": "; ".join(details)})
 
     for missing in sorted(set(orig_by_key) - keys_seen, key=rc.version_key):
-        errors.append(f"Release {missing} was removed from the table; deleting releases is not supported "
-                      "(nothing is deleted from the calendar).")
+        evs = sorted((e for (v, _), group in idx.items() if v == missing for e in group),
+                     key=lambda e: (e.start, e.type_title))
+        recurring = [e for e in evs if e.recurring]
+        if recurring:
+            errors.append(f"Release {missing}: cannot delete it here because "
+                          f"{', '.join(sorted({e.type_title for e in recurring}))} is a recurring event; "
+                          "delete it in Confluence.")
+            continue
+        if sandbox_versions is not None and missing not in sandbox_versions:
+            errors.append(f"Release {missing}: sandbox mode only allows {', '.join(sandbox_versions)}.")
+            continue
+        for e in evs:
+            changes.append(Change("delete", missing, e.type_title, e.uid, _ev_state(e), {}, {"child_id": e.child_id}))
+        status_rows.append({"Version": missing, "Status": "Deleted",
+                            "Details": f"{len(evs)} event(s): " + ", ".join(f"{e.type_title} {e.start:%Y-%m-%d}"
+                                                                            for e in evs)})
     rows = pd.DataFrame(status_rows, columns=["Version", "Status", "Details"])
     return Plan(changes, errors, rows)
 
@@ -405,6 +424,10 @@ def verify_after_write(applied: Iterable, after: Iterable) -> list:
     errors = []
     for c, uid in applied:
         e = by_uid.get(uid)
+        if c.action == "delete":
+            if e is not None:
+                errors.append(f"{c.label()}: event {uid} is still in the calendar after deleting it.")
+            continue
         if e is None:
             errors.append(f"{c.label()}: event {uid} not found after writing.")
             continue
@@ -485,11 +508,16 @@ def publish(send, cal: api.CalendarInfo, changes: list, loaded_events: list, win
     applied = []  # (index in changes, uid)
     for i, c in enumerate(changes):
         etype = cal.type_by_title(c.type_title)
-        form = api.event_form(cal, etype, title=c.after["title"], start=date.fromisoformat(c.after["start"]),
-                              end=date.fromisoformat(c.after["end"]), description=c.after.get("description", ""),
-                              uid=c.uid, where=str(c.extra.get("where", "")), url=str(c.extra.get("url", "")))
         try:
-            uid = api.put_event(send, form)
+            if c.action == "delete":
+                api.delete_event(send, c.extra.get("child_id") or etype.child_id, c.uid)
+                uid = c.uid
+            else:
+                form = api.event_form(cal, etype, title=c.after["title"], start=date.fromisoformat(c.after["start"]),
+                                      end=date.fromisoformat(c.after["end"]),
+                                      description=c.after.get("description", ""), uid=c.uid,
+                                      where=str(c.extra.get("where", "")), url=str(c.extra.get("url", "")))
+                uid = api.put_event(send, form)
         except api.CalendarApiError as exc:
             result["applied"] = applied
             done = f"{len(applied)} of {len(changes)} changes were saved before the error. " if applied else ""
