@@ -8,6 +8,9 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from utils import release_calendar as rc
+from utils import release_calendar_api as rca
+from utils import release_calendar_edit as rce
+from utils import release_calendar_jira as rcj
 
 load_dotenv(override=True)
 
@@ -15,7 +18,17 @@ ICS_URL = os.getenv(rc.ENV_ICS_URL, "")
 CONF_TOKEN = os.getenv("CONFLUENCE_API_TOKEN", "")
 AUTH_METHOD = os.getenv("JIRA_AUTH_METHOD", "Jira Server Token (Bearer)")
 EMAIL = os.getenv("JIRA_EMAIL", "")
+JIRA_SERVER = os.getenv("JIRA_SERVER", "")
+JIRA_TOKEN = os.getenv("JIRA_API_TOKEN", "")
+JIRA_PROJECT = os.getenv("RELEASE_PLAN_JIRA_PROJECT", "RECALLTWO").strip() or "RECALLTWO"
+NAME_TEMPLATE = os.getenv(rcj.ENV_NAME_TEMPLATE, "").strip() or rcj.DEFAULT_NAME_TEMPLATE
+VERSION_LINK_BASE = os.getenv("JIRA_VERSION_LINK_BASE", "")
 STATE_KEY = "release_calendar_data"
+JIRA_STATE_KEY = "release_calendar_jira_versions"
+CONF_SERVER = os.getenv("CONFLUENCE_SERVER", "")
+CALENDAR_ID = rca.parse_calendar_id(os.getenv(rca.ENV_CALENDAR_ID, ""))
+EVENT_TITLE_TEMPLATE = os.getenv(rce.ENV_TITLE_TEMPLATE, "").strip() or rce.DEFAULT_TITLE_TEMPLATE
+EDIT_STATE_KEY = "release_calendar_edit"
 
 st.title("🗓️ Release Calendar")
 st.caption("Read-only view of the Confluence release calendar (ICS subscription). "
@@ -122,7 +135,7 @@ def _events_html(df):
            '<col style="width:22%"><col style="width:7%"><col style="width:41%"></colgroup>'
     head = "<tr><th>Start</th><th>End</th><th>Type</th><th>Summary</th><th>Version</th><th>Description</th></tr>"
     return f'{_EVENTS_CSS}<div class="rc-events"><table>{cols}<thead>{head}</thead><tbody>{rows}</tbody></table></div>'
-tab_rel, tab_events, tab_timeline = st.tabs(["Releases", "Events", "Timeline"])
+tab_rel, tab_jira, tab_edit, tab_events, tab_timeline = st.tabs(["Releases", "Jira", "Edit", "Events", "Timeline"])
 
 # ----------------------------------------------------------------- Releases (one row per version)
 with tab_rel:
@@ -142,6 +155,247 @@ with tab_rel:
                    "Status is based on the Prod Deploy date.")
         st.dataframe(rc.releases_display(rel), hide_index=True, width="stretch",
                      column_config={"Days to Prod": st.column_config.NumberColumn("Days to Prod", format="%d")})
+
+# ----------------------------------------------------------------- Jira (link calendar releases to fixVersions)
+def _jira_request(path):
+    from utils.release_helpers import jira_request
+    return jira_request(JIRA_SERVER, JIRA_TOKEN, path, auth_type=AUTH_METHOD, email=EMAIL)
+
+
+def _who():
+    if EMAIL:
+        return EMAIL
+    try:
+        import getpass
+        return getpass.getuser()
+    except Exception:
+        return ""
+
+
+with tab_jira:
+    try:
+        template_error = ""
+        example = rcj.release_name(NAME_TEMPLATE, "37.0.0")
+    except ValueError as exc:
+        template_error, example = str(exc), ""
+    st.caption(f"Links each calendar release to its Jira fixVersion in project {JIRA_PROJECT}. A release is "
+               f"linked automatically to the Jira version named with the release name template "
+               f"`{NAME_TEMPLATE}`" + (f" (e.g. {example})" if example else "") + ". Change the template in "
+               "Configuration → Release name template. A manual link always wins and is saved locally in "
+               "PO Tools. The Confluence calendar is not changed.")
+    if template_error:
+        st.error(f"{template_error} Fix it in Configuration → Release name template.")
+    elif not (JIRA_SERVER and JIRA_TOKEN):
+        st.info("Set JIRA_SERVER and JIRA_API_TOKEN in Configuration to link releases to Jira.")
+    elif st.button("Load Jira versions", key="rc_jira_load"):
+        try:
+            with st.spinner("Reading Jira versions..."):
+                versions = rcj.fetch_jira_versions(_jira_request, JIRA_PROJECT)
+            st.session_state[JIRA_STATE_KEY] = rcj.jira_versions_dataframe(versions)
+        except rcj.JiraVersionsError as exc:
+            st.error(str(exc))
+
+    jira_df = st.session_state.get(JIRA_STATE_KEY) if not template_error else None
+    try:
+        links = rcj.load_links()
+    except rcj.JiraVersionsError as exc:
+        st.error(str(exc))
+        links = {}
+    if template_error:
+        pass
+    elif jira_df is None:
+        st.info("Click Load Jira versions to match the calendar releases with Jira.")
+    elif releases.empty:
+        st.info("The calendar has no releases to link.")
+    else:
+        linked = rcj.link_releases(releases, jira_df, links, NAME_TEMPLATE)
+        for w in rcj.link_warnings(linked, today):
+            st.warning(w)
+        view = linked[["Version", "Prod Deploy", "Expected name", "Jira version", "Jira release date", "Date check", "Link",
+                       "Released", "Jira id"]].copy()
+        view["Open"] = [rcj.version_url(j, VERSION_LINK_BASE, JIRA_SERVER, JIRA_PROJECT) or None
+                        for j in view.pop("Jira id")]
+        for col in ("Prod Deploy", "Jira release date"):
+            view[col] = [rc._iso(v) for v in view[col]]
+        st.dataframe(view, hide_index=True, width="stretch", column_config={
+            "Open": st.column_config.LinkColumn("Jira", display_text="Open"),
+            "Released": st.column_config.CheckboxColumn("Released in Jira"),
+        })
+
+        with st.container(border=True):
+            st.markdown("**Link to Jira**")
+            needs = linked[linked["Link"].isin([rcj.UNLINKED, rcj.NAME_DIFFERS])]["Version"].tolist()
+            ordered = needs + [v for v in linked["Version"] if v not in needs]
+            c1, c2 = st.columns([1, 3])
+            version = c1.selectbox("Calendar release", ordered, key="rc_link_version",
+                                   format_func=lambda v: f"{v} ⚠️" if v in needs else v)
+            current = linked.set_index("Version").loc[version]
+            opts = rcj.link_options(jira_df, linked, version, NAME_TEMPLATE)
+            not_in_jira = "— Not in Jira —"
+            labels = [not_in_jira] + [
+                f"{r['Jira version']}" + (f" · {rc._iso(r['Jira release date'])}" if rc._iso(r["Jira release date"]) else "")
+                + (" · released" if r["Released"] else "") for _, r in opts.iterrows()]
+            ids = [""] + opts["Jira id"].tolist()
+            if current["Link"] == rcj.NOT_IN_JIRA:
+                default = 0
+            elif current["Jira id"] and current["Jira id"] in ids:
+                default = ids.index(current["Jira id"])
+            else:  # not linked yet: preselect the best candidate (same X.Y.Z, unreleased first)
+                default = 1 if len(ids) > 1 else 0
+            choice = c2.selectbox("Jira version", range(len(ids)), index=default, key=f"rc_link_jira_{version}",
+                                  format_func=lambda i: labels[i])
+            c2.caption(f"Now: {current['Link']}" + (f" → {current['Jira version']}" if current["Jira version"] else ""))
+            b1, b2, _ = st.columns([1, 1, 3])
+            if b1.button("Save link", type="primary", key="rc_link_save"):
+                name = "" if choice == 0 else opts.iloc[choice - 1]["Jira version"]
+                try:
+                    rcj.save_links(rcj.set_link(links, version, ids[choice], name, linked_by=_who()))
+                    st.toast(f"Release {version} linked to {name or 'nothing (not in Jira)'}.")
+                    st.rerun()
+                except OSError as exc:
+                    st.error(f"Could not save the link: {exc}")
+            if b2.button("Use automatic match", key="rc_link_clear", disabled=version not in links,
+                         help="Remove the manual link of this release and match it by X.Y.Z again."):
+                try:
+                    rcj.save_links(rcj.clear_link(links, version))
+                    st.rerun()
+                except OSError as exc:
+                    st.error(f"Could not save the link: {exc}")
+
+# ----------------------------------------------------------------- Edit (Epic 2: write to the Team Calendar)
+def _sender():
+    return rca.make_sender(CONF_SERVER, CONF_TOKEN, AUTH_METHOD, EMAIL)
+
+
+def _load_for_editing():
+    send = _sender()
+    cal = rca.get_calendar(send, CALENDAR_ID)
+    window = (today - timedelta(days=180), today + timedelta(days=730))
+    events = rca.list_events(send, cal, *window)
+    st.session_state[EDIT_STATE_KEY] = {
+        "cal": cal, "events": events, "window": window, "loaded_at": datetime.now(),
+        "table": rce.editable_table(events), "extra": rce.proposal_rows(pd.DataFrame(columns=["Version", "Prod Deploy"])),
+        "gen": st.session_state.get(EDIT_STATE_KEY, {}).get("gen", 0) + 1,
+    }
+
+
+with tab_edit:
+    st.caption("Add releases or change their dates in the Confluence Team Calendar. Only the events behind "
+               "the cells you change are written; nothing is deleted. Before publishing you see every change, "
+               "and the calendar is re-read: if someone changed those events meanwhile, publishing is blocked.")
+    try:
+        write_mode, sandbox_versions = rce.load_write_config(os.environ)
+    except ValueError as exc:
+        write_mode, sandbox_versions = None, None
+        st.error(str(exc))
+    if write_mode == "sandbox":
+        st.warning(f"🧪 Sandbox mode: only {', '.join(sandbox_versions)} can be published. "
+                   f"Set {rce.ENV_WRITE_MODE}=live in .env to edit real releases.")
+    if not (CONF_SERVER and CONF_TOKEN and CALENDAR_ID):
+        st.info("To edit, set the Confluence server and token and the Release Calendar link "
+                "(Configuration → Release Calendar link).")
+    else:
+        if st.button("Load for editing", key="rc_edit_load",
+                     help="Reads the calendar events through the Confluence API (needed to write)."):
+            try:
+                with st.spinner("Reading the calendar events..."):
+                    _load_for_editing()
+            except rca.CalendarApiError as exc:
+                st.error(str(exc))
+        state = st.session_state.get(EDIT_STATE_KEY)
+        if not state:
+            st.info("Click Load for editing to edit the release calendar.")
+        else:
+            cal = state["cal"]
+            st.caption(f"**{cal.name}** · {len(state['events'])} events between {state['window'][0]:%d %b %Y} and "
+                       f"{state['window'][1]:%d %b %Y} · loaded {state['loaded_at']:%H:%M} · new events are "
+                       f"titled `{EVENT_TITLE_TEMPLATE}`")
+            if not cal.events_editable:
+                st.error("Your user cannot edit events in this calendar.")
+
+            # ---- add from Jira
+            jira_df = st.session_state.get(JIRA_STATE_KEY)
+            with st.expander("Add releases from Jira", expanded=False):
+                if jira_df is None:
+                    st.caption("Load Jira versions in the Jira tab to get proposals.")
+                else:
+                    try:
+                        prop_links = rcj.load_links()
+                    except rcj.JiraVersionsError:
+                        prop_links = {}
+                    in_table = set(state["table"]["Version"]) | set(state["extra"]["Version"])
+                    props = rce.jira_proposals(jira_df, in_table, prop_links, NAME_TEMPLATE)
+                    if props.empty:
+                        st.caption("Every unreleased Jira version is already in the calendar.")
+                    else:
+                        labels = {r["Jira id"]: f"{r['Jira version']}" + (f" · {r['Prod Deploy']:%d %b %Y}"
+                                  if r["Prod Deploy"] else " · no release date") for _, r in props.iterrows()}
+                        chosen = st.multiselect("Jira versions not in the calendar", list(labels),
+                                                format_func=labels.get, key="rc_edit_props")
+                        if st.button("Add to the table", key="rc_edit_add", disabled=not chosen):
+                            state["extra"] = pd.concat([state["extra"], rce.proposal_rows(
+                                props[props["Jira id"].isin(chosen)])], ignore_index=True)
+                            state["gen"] += 1
+                            st.rerun()
+
+            # ---- editor
+            base = pd.concat([state["table"], state["extra"]], ignore_index=True)
+            shown = base.copy()
+            for col in rce.DATE_COLUMNS:
+                shown[col] = pd.to_datetime(shown[col])
+            edited = st.data_editor(
+                shown, key=f"rc_editor_{state['gen']}", num_rows="dynamic", hide_index=True, width="stretch",
+                column_order=["Version", *rce.DATE_COLUMNS, rce.NOTES, rce.LOCKED],
+                column_config={
+                    "Version": st.column_config.TextColumn("Version", help="X.Y.Z", required=False),
+                    **{c: st.column_config.DateColumn(c, format=DATE_FMT) for c in rce.DATE_COLUMNS},
+                    rce.NOTES: st.column_config.TextColumn("Notes", help="Saved as the Prod Deploy description.",
+                                                           width="large"),
+                    rce.LOCKED: st.column_config.TextColumn("Locked steps", disabled=True,
+                                                            help="Steps with several, recurring or timed events: "
+                                                                 "edit them in Confluence."),
+                },
+            )
+            plan = rce.plan_changes(state["table"], edited, state["events"], cal, EVENT_TITLE_TEMPLATE,
+                                    sandbox_versions)
+
+            # ---- preview
+            for err in plan.errors:
+                st.error(err)
+            counts = plan.rows["Status"].value_counts() if not plan.rows.empty else pd.Series(dtype=int)
+            st.markdown(f"**Preview** · {counts.get('New', 0)} new · {counts.get('Changed', 0)} changed · "
+                        f"{counts.get('Unchanged', 0)} unchanged · {len(plan.changes)} event writes")
+            if plan.changes:
+                st.dataframe(pd.DataFrame([{
+                    "Release": c.version, "Step": c.type_title, "Action": c.action.capitalize(),
+                    "Before": (f"{c.before['start']} → {c.before['end']}" if c.before else "—"),
+                    "After": f"{c.after['start']} → {c.after['end']}",
+                    "Title": c.after["title"],
+                    "Description": ("changed" if c.before and c.before["description"] != c.after["description"]
+                                    else ("set" if not c.before and c.after["description"] else "")),
+                } for c in plan.changes]), hide_index=True, width="stretch")
+                changed_rows = plan.rows[plan.rows["Status"] != "Unchanged"]
+                if not changed_rows.empty:
+                    st.dataframe(changed_rows, hide_index=True, width="stretch")
+
+            can_publish = bool(plan.changes) and not plan.errors and write_mode is not None and cal.events_editable
+            if st.button(f"Publish {len(plan.changes)} change(s)" if plan.changes else "Publish", type="primary",
+                         key="rc_edit_publish", disabled=not can_publish):
+                with st.spinner("Publishing to the calendar..."):
+                    res = rce.publish(_sender(), cal, plan.changes, state["events"], state["window"],
+                                      allowed_id=CALENDAR_ID, sandbox_versions=sandbox_versions, user=_who())
+                if res["ok"]:
+                    st.success(f"Published {len(res['applied'])} change(s) and verified them in Confluence. "
+                               f"Backup: {res['backup']}")
+                    _download.clear()  # the other tabs read the ICS: refresh it on the next load
+                    try:
+                        _load_for_editing()
+                    except rca.CalendarApiError as exc:
+                        st.warning(f"Published, but reloading failed: {exc}")
+                else:
+                    st.error(res["error"] or "Publishing failed.")
+                    if res.get("backup"):
+                        st.caption(f"Backup of the events before writing: {res['backup']}")
 
 # ----------------------------------------------------------------- Events
 with tab_events:
