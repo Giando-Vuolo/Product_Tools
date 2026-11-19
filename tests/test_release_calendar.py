@@ -174,7 +174,7 @@ class PageTests(unittest.TestCase):
 
     def test_missing_config(self):
         at = self._app({})
-        self.assertTrue(any(rc.ENV_ICS_URL in e.value for e in at.error))
+        self.assertTrue(any(rc.ENV_ICS_URL in e.value and "Configuration" in e.value for e in at.error))
 
     def test_load_shows_kpis_and_tabs(self):
         with patch("utils.release_calendar.fetch_ics", return_value=SAMPLE) as fetch:
@@ -211,3 +211,19 @@ class PageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfigurationFieldTests(unittest.TestCase):
+    """Configuration → Confluence holds the ICS link as a secret field and saves it to .env."""
+
+    def test_field_is_secret_and_saved(self):
+        src = (ROOT / "app.py").read_text(encoding="utf-8")
+        self.assertRegex(src, r'_secret_input\("Release Calendar ICS URL \(private\):", "release_calendar_ics_url"')
+        self.assertIn('kv["RELEASE_CALENDAR_ICS_URL"] = st.session_state.release_calendar_ics_url', src)
+        self.assertIn('os.getenv("RELEASE_CALENDAR_ICS_URL", "")', src)
+        self.assertIn("st.session_state.release_calendar_ics_url != cics_in", src)
+        # placed in the Confluence block, right after the Confluence token and before Ollama
+        conf, ics, ollama = (src.index('"central_conf_token"'), src.index('"central_conf_ics"'),
+                             src.index("Local AI (Ollama)"))
+        self.assertLess(conf, ics)
+        self.assertLess(ics, ollama)

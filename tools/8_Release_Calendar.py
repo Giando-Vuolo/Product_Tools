@@ -22,7 +22,8 @@ st.caption("Read-only view of the Confluence release calendar (ICS subscription)
            "Data is downloaded only when you click Load calendar.")
 
 if not ICS_URL:
-    st.error(f"Missing configuration (set in .env): {rc.ENV_ICS_URL}. "
+    st.error("Release Calendar not configured. Add the Confluence calendar's .ics link in "
+             "Configuration → Release Calendar ICS URL (or set RELEASE_CALENDAR_ICS_URL in .env). "
              "In Confluence open the calendar → ⋯ → Subscribe → copy the link.")
     st.stop()
 

@@ -80,6 +80,7 @@ def save_credentials_to_env():
     kv["JIRA_EMAIL"] = st.session_state.jira_email
     kv["CONFLUENCE_SERVER"] = st.session_state.conf_server
     kv["CONFLUENCE_API_TOKEN"] = st.session_state.conf_token
+    kv["RELEASE_CALENDAR_ICS_URL"] = st.session_state.release_calendar_ics_url
     kv["OLLAMA_URL"] = st.session_state.ollama_url
     kv["SONAR_SERVER"] = st.session_state.sonar_server
     kv["SONAR_TOKEN"] = st.session_state.sonar_token
@@ -126,6 +127,8 @@ if "conf_server" not in st.session_state:
     st.session_state.conf_server = os.getenv("CONFLUENCE_SERVER", "")
 if "conf_token" not in st.session_state:
     st.session_state.conf_token = os.getenv("CONFLUENCE_API_TOKEN", "")
+if "release_calendar_ics_url" not in st.session_state:
+    st.session_state.release_calendar_ics_url = os.getenv("RELEASE_CALENDAR_ICS_URL", "")
 if "ollama_url" not in st.session_state:
     st.session_state.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
 if "ollama_models" not in st.session_state:
@@ -662,6 +665,11 @@ def show_configuration():
         csrv_in = st.text_input("Confluence Server URL:", value=st.session_state.conf_server, key="central_conf_server")
     with col_ctok:
         ctok_in = _secret_input("Confluence Personal Access Token (PAT):", "conf_token", "central_conf_token")
+    col_cics, _ = st.columns(2)
+    with col_cics:
+        # The private subscription link works like a key: stored like a secret, never sent back to the browser
+        cics_in = _secret_input("Release Calendar ICS URL (private):", "release_calendar_ics_url", "central_conf_ics").strip()
+        st.caption("Confluence calendar → ⋯ → Subscribe → copy the .ics link. Used by Releases → Release Calendar.")
 
     st.markdown("---")
     st.markdown("##### 🤖 Local AI (Ollama)")
@@ -708,6 +716,7 @@ def show_configuration():
         st.session_state.jira_email != mail_in or
         st.session_state.conf_server != csrv_in or
         st.session_state.conf_token != ctok_in or
+        st.session_state.release_calendar_ics_url != cics_in or
         st.session_state.ollama_url != ourl_in or
         st.session_state.sonar_server != sonar_server_in or
         st.session_state.sonar_token != sonar_token_in or
@@ -729,6 +738,7 @@ def show_configuration():
         st.session_state.jira_email = mail_in
         st.session_state.conf_server = csrv_in
         st.session_state.conf_token = ctok_in
+        st.session_state.release_calendar_ics_url = cics_in
         st.session_state.ollama_url = ourl_in
         st.session_state.sonar_server = sonar_server_in
         st.session_state.sonar_token = sonar_token_in
