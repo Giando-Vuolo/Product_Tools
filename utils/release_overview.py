@@ -156,11 +156,11 @@ def highlight_runs(text: str, color: str = WHITE, highlight: str = LIME) -> list
 
 # --------------------------------------------------------------------------- layout
 
-def _text(x, y, w, h, paragraphs, size, *, bold=False, align="l", anchor="t", rotation=0.0, color=WHITE):
+def _text(x, y, w, h, paragraphs, size, *, bold=False, align="l", anchor="t", rotation=0.0, color=WHITE, wrap=True):
     """paragraphs: list of strings or {"runs": [(text, colour)], "bullet": bool}."""
     paras = [p if isinstance(p, dict) else {"runs": [(p, color)], "bullet": False} for p in paragraphs]
     return {"kind": "text", "x": x, "y": y, "w": w, "h": h, "paragraphs": paras, "size": size, "bold": bold,
-            "align": align, "anchor": anchor, "rotation": rotation}
+            "align": align, "anchor": anchor, "rotation": rotation, "wrap": wrap and not rotation}
 
 
 def _estimate_lines(paragraphs: Iterable[str], width_in: float, size_pt: float, indent_in: float = 0.0) -> int:
@@ -173,6 +173,22 @@ def fit_size(title: str, bullets: list, width_in: float, height_in: float, sizes
     for size in sizes:
         lines = _estimate_lines([title], width_in, size + 1) + _estimate_lines(bullets, width_in, size, 0.18)
         if lines * size * 1.2 / 72 <= height_in:
+            return size
+    return sizes[-1]
+
+
+def title_size_for(title: str, width_in: float, sizes=(13, 12.5, 12, 11.5, 11, 10.5, 10, 9.5, 9, 8.5, 8)) -> float:
+    """Largest bold font size for which the title is estimated to fit on one line."""
+    for size in sizes:
+        if len(title) * size * 0.55 / 72 <= width_in:
+            return size
+    return sizes[-1]
+
+
+def fit_bullets_size(bullets: list, width_in: float, height_in: float, sizes=(12, 11, 10, 9, 8)) -> float:
+    """Largest font size for which the bullets are estimated to fit the space under the title."""
+    for size in sizes:
+        if _estimate_lines(bullets, width_in, size, 0.18) * size * 1.2 / 72 <= height_in:
             return size
     return sizes[-1]
 
@@ -240,23 +256,32 @@ def plan_overview(rows: pd.DataFrame, remarkable: pd.DataFrame, start: date, end
     boxed = rows[rows["Box"].fillna(False).astype(bool)] if not rows.empty else rows
     width = _box_width(len(boxed), 2.75)
     lefts = _spread([x_of(d) for d in boxed["Prod Deploy"]], width) if not boxed.empty else []
-    for (_, r), left in zip(boxed.iterrows(), lefts):
+    # Every box title on one line, at the same height and in the same size; bullets start on one level
+    dot_room = 0.24
+    titles = [f"R{r['Version']} ({_day_month(r['Prod Deploy'])})" for _, r in boxed.iterrows()]
+    title_size = min([13.0] + [title_size_for(t, width - 0.12 - dot_room) for t in titles])
+    title_h = title_size * 1.35 / 72 + 0.04
+    bullets_top = BOX_TOP + 0.05 + title_h
+    bullets_h = BOX_BOTTOM - bullets_top - 0.05
+    all_bullets = [[b.strip() for b in str(r.get("Highlights") or "").splitlines() if b.strip()][:MAX_BULLETS]
+                   for _, r in boxed.iterrows()]
+    size = min([12] + [fit_bullets_size(b, width - 0.16, bullets_h) for b in all_bullets if b])
+    for (_, r), left, title_text, bullets in zip(boxed.iterrows(), lefts, titles, all_bullets):
         upcoming = r["Prod Deploy"] >= today
         color = COLORS[UPCOMING] if upcoming else TEAL
         mx = x_of(r["Prod Deploy"])
-        title_text = f"R{r['Version']} ({_day_month(r['Prod Deploy'])})"
-        bullets = [b.strip() for b in str(r.get("Highlights") or "").splitlines() if b.strip()][:MAX_BULLETS]
         incident = "" if upcoming else str(r.get("Incidents") or "")  # traffic light: deployed releases only
-        dot = 0.24 if incident in INCIDENT_COLORS else 0.0
-        size = fit_size(title_text, bullets, width - 0.16 - dot, BOX_BOTTOM - BOX_TOP - 0.12)
+        dot = dot_room if incident in INCIDENT_COLORS else 0.0
         els.append({"kind": "rect", "x": left, "y": BOX_TOP, "w": width, "h": BOX_BOTTOM - BOX_TOP,
                     "fill": None, "line": color, "line_width": 1.75})
-        paragraphs = [{"runs": [(title_text, WHITE)], "bullet": False, "bold": True, "size": size + 1}]
-        paragraphs += [{"runs": [(b, WHITE)], "bullet": True} for b in bullets]
-        els.append(_text(left + 0.06, BOX_TOP + 0.05, width - 0.12 - dot, BOX_BOTTOM - BOX_TOP - 0.1, paragraphs, size))
+        els.append(_text(left + 0.06, BOX_TOP + 0.05, width - 0.12 - dot_room, title_h,
+                         [title_text], title_size, bold=True, anchor="m", wrap=False))
+        if bullets:
+            els.append(_text(left + 0.06, bullets_top, width - 0.12, bullets_h,
+                             [{"runs": [(b, WHITE)], "bullet": True} for b in bullets], size))
         if dot:
             traffic_lights = True
-            els.append({"kind": "circle", "cx": left + width - 0.08 - dot / 2, "cy": BOX_TOP + 0.08 + dot / 2,
+            els.append({"kind": "circle", "cx": left + width - 0.08 - dot / 2, "cy": BOX_TOP + 0.05 + title_h / 2,
                         "r": dot / 2, "fill": INCIDENT_COLORS[incident], "line": None})
         bx = min(max(mx, left + 0.01), left + width - 0.01)
         els.append({"kind": "line", "x1": bx, "y1": BOX_BOTTOM, "x2": mx, "y2": AXIS_Y - 0.12,
@@ -448,7 +473,7 @@ def build_overview_pptx(elements: list, template_path: Optional[str] = None) -> 
             box = slide.shapes.add_textbox(X(el["x"]), Y(el["y"]), X(el["w"]), Y(el["h"]))
             box.rotation = el["rotation"]
             tf = box.text_frame
-            tf.word_wrap = el["rotation"] == 0
+            tf.word_wrap = el.get("wrap", el["rotation"] == 0)
             tf.vertical_anchor = anchors[el["anchor"]]
             tf.margin_left = tf.margin_right = Inches(0.04)
             tf.margin_top = tf.margin_bottom = Inches(0.02)
@@ -514,7 +539,7 @@ def _svg_text(el: dict, ppi: float, pt: float) -> str:
         bold = para.get("bold", el["bold"])
         indent = 0.18 if para.get("bullet") else 0.0
         text = "".join(t for t, _ in para["runs"])
-        if el["rotation"]:
+        if el["rotation"] or not el.get("wrap", True):
             wrapped = [text]
         else:
             chars = max(8, int((el["w"] - 0.08 - indent) * 72 / (size * 0.5)))

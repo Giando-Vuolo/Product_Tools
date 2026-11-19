@@ -93,8 +93,8 @@ class PlanTests(unittest.TestCase):
 
     def test_content(self):
         texts = _texts(self.elements)
-        for expected in ("ReCall2 | Overview", "August", "December", "R33.0.0 (20 August)\nMulti Context\nNew announcements system",
-                         "R35.0.0 (25 November)\nImprove virus detection", "R 33.0.0", "R33.1.0", "R34.1.1",
+        for expected in ("ReCall2 | Overview", "August", "December", "R33.0.0 (20 August)", "Multi Context\nNew announcements system",
+                         "R35.0.0 (25 November)", "Improve virus detection", "R 33.0.0", "R33.1.0", "R34.1.1",
                          "Major recall campaign\nrolled out",
                          ro.MAJOR, ro.UPCOMING, ro.REMARKABLE, ro.MINOR_INCIDENTS):
             self.assertIn(expected, texts)
@@ -114,6 +114,21 @@ class PlanTests(unittest.TestCase):
         incident_dots = [e for e in self.elements if e["kind"] == "circle" and e["fill"] == ro.INCIDENT_COLORS[ro.MINOR_INCIDENTS]]
         self.assertEqual(len(incident_dots), 2)  # in the R33.0.0 box and in the legend
 
+    def test_box_titles_share_one_line_and_size(self):
+        rows = _rows()
+        rows.loc[0, "Version"] = "33.10.0"  # longer title
+        rows.loc[0, "Prod Deploy"] = date(2026, 9, 28)
+        els = ro.plan_overview(rows, None, date(2026, 8, 1), date(2026, 12, 31), "T", "", TODAY)
+        titles = [e for e in els if e["kind"] == "text" and e["paragraphs"][0]["runs"][0][0].endswith(")")
+                  and e["bold"] and not e["rotation"]]
+        self.assertEqual(len(titles), 2)
+        self.assertEqual({e["y"] for e in titles}, {titles[0]["y"]})
+        self.assertEqual({e["size"] for e in titles}, {titles[0]["size"]})
+        self.assertTrue(all(not e["wrap"] for e in titles))
+        bullets = [e for e in els if e["kind"] == "text" and e["paragraphs"][0].get("bullet")]
+        self.assertEqual({e["y"] for e in bullets}, {bullets[0]["y"]})
+        self.assertEqual({e["size"] for e in bullets}, {bullets[0]["size"]})
+
     def test_traffic_light_only_for_deployed_releases(self):
         rows = _rows().assign(Incidents=[ro.MAJOR_INCIDENTS, "", "", ro.MAJOR_INCIDENTS])  # 35.0.0 is upcoming
         els = ro.plan_overview(rows, None, date(2026, 8, 1), date(2026, 12, 31), "T", "", TODAY)
@@ -132,7 +147,8 @@ class PlanTests(unittest.TestCase):
         prs = Presentation(io.BytesIO(ro.build_overview_pptx(self.elements)))
         self.assertEqual(len(prs.slides), 1)
         texts = [s.text_frame.text for s in prs.slides[0].shapes if s.has_text_frame]
-        self.assertIn("R33.0.0 (20 August)\nMulti Context\nNew announcements system", texts)
+        self.assertIn("R33.0.0 (20 August)", texts)
+        self.assertIn("Multi Context\nNew announcements system", texts)
         self.assertIn(320.0, [s.rotation for s in prs.slides[0].shapes if s.has_text_frame and s.text_frame.text == "R 33.0.0"])
 
     def test_pptx_template_replaces_its_slides(self):
