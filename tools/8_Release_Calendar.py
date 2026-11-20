@@ -436,10 +436,20 @@ def _sender():
     return rca.make_sender(CONF_SERVER, CONF_TOKEN, AUTH_METHOD, EMAIL)
 
 
+def _edit_window():
+    """Events read for editing: the default window widened to cover the page's date range filter."""
+    lo, hi = today - timedelta(days=180), today + timedelta(days=730)
+    if start is not None:
+        lo = min(lo, start)
+    if end is not None:
+        hi = max(hi, end)
+    return lo, hi
+
+
 def _load_for_editing():
     send = _sender()
     cal = rca.get_calendar(send, CALENDAR_ID)
-    window = (today - timedelta(days=180), today + timedelta(days=730))
+    window = _edit_window()
     events = rca.list_events(send, cal, *window)
     st.session_state[EDIT_STATE_KEY] = {
         "cal": cal, "events": events, "window": window, "loaded_at": datetime.now(),
@@ -473,6 +483,23 @@ with tab_edit:
             except rca.CalendarApiError as exc:
                 st.error(str(exc))
         state = st.session_state.get(EDIT_STATE_KEY)
+        if state:
+            # The date range filter reaches outside the loaded events: re-read them (automatically when there
+            # are no pending edits, which a reload would discard).
+            want = _edit_window()
+            if want[0] < state["window"][0] or want[1] > state["window"][1]:
+                if not state.get("dirty") or st.button("Reload for the selected date range (discards pending "
+                                                       "edits)", key="rc_edit_reload_range"):
+                    try:
+                        with st.spinner("Reading the calendar events for the selected date range..."):
+                            _load_for_editing()
+                        state = st.session_state.get(EDIT_STATE_KEY)
+                    except rca.CalendarApiError as exc:
+                        st.error(str(exc))
+                else:
+                    st.warning(f"The date range starts before / ends after the loaded events "
+                               f"({state['window'][0]:%d %b %Y} – {state['window'][1]:%d %b %Y}). "
+                               "Publish or discard your edits, or reload for the selected range.")
         if not state:
             st.info("Click Load for editing to edit the release calendar.")
         else:
@@ -503,17 +530,45 @@ with tab_edit:
                         chosen = st.multiselect("Jira versions not in the calendar", list(labels),
                                                 format_func=labels.get, key="rc_edit_props")
                         if st.button("Add to the table", key="rc_edit_add", disabled=not chosen):
-                            state["extra"] = pd.concat([state["extra"], rce.proposal_rows(
-                                props[props["Jira id"].isin(chosen)])], ignore_index=True)
+                            new_rows = rce.proposal_rows(props[props["Jira id"].isin(chosen)])
+                            state["extra"] = pd.concat([state["extra"], new_rows], ignore_index=True)
+                            draft = state.get("last_full", state.get("draft"))
+                            if draft is not None:
+                                state["draft"] = pd.concat([draft, new_rows], ignore_index=True)
                             state["gen"] += 1
                             st.rerun()
 
             # ---- editor
-            base = pd.concat([state["table"], state["extra"]], ignore_index=True)
-            shown = base.copy()
+            # The editor shows only the rows matching the page filters (date range on any step, search on the
+            # version). Hidden rows are kept in a full draft and merged back, so they never count as deleted.
+            # New rows (not in the calendar yet) and rows without dates are always shown so they cannot get lost.
+            filter_sig = (str(start), str(end), text.strip())
+            if "draft" not in state:
+                state["draft"] = pd.concat([state["table"], state["extra"]], ignore_index=True)
+                state["filter_sig"] = filter_sig
+            elif state.get("filter_sig") != filter_sig:
+                state["draft"] = state.get("last_full", state["draft"])
+                state["filter_sig"] = filter_sig
+                state["gen"] += 1
+            base = state["draft"].reset_index(drop=True)
+            dates = base[rce.DATE_COLUMNS].apply(pd.to_datetime)
+            visible = pd.Series(True, index=base.index)
+            if start is not None or end is not None:
+                lo = pd.Timestamp(start) if start else pd.Timestamp.min
+                hi = pd.Timestamp(end) if end else pd.Timestamp.max
+                visible &= dates.apply(lambda col: col.between(lo, hi)).any(axis=1)
+            if text.strip():
+                visible &= base["Version"].fillna("").astype(str).str.contains(text.strip(), regex=False)
+            is_new = base[rce.KEY].isna() | (base[rce.KEY].astype(str).str.strip().isin(["", "None", "nan"]))
+            visible |= is_new | dates.isna().all(axis=1)
+            hidden = base[~visible]
+            shown = base[visible].reset_index(drop=True)
             for col in rce.DATE_COLUMNS:
                 shown[col] = pd.to_datetime(shown[col])
-            edited = st.data_editor(
+            if len(hidden):
+                st.caption(f"Showing {len(shown)} of {len(base)} releases (date range and search filters above). "
+                           "Hidden releases are not changed.")
+            edited_view = st.data_editor(
                 shown, key=f"rc_editor_{state['gen']}", num_rows="dynamic", hide_index=True, width="stretch",
                 column_order=["Version", *rce.DATE_COLUMNS, rce.NOTES, rce.LOCKED],
                 column_config={
@@ -526,8 +581,11 @@ with tab_edit:
                                                                  "edit them in Confluence."),
                 },
             )
+            edited = pd.concat([hidden, edited_view], ignore_index=True)
+            state["last_full"] = edited
             plan = rce.plan_changes(state["table"], edited, state["events"], cal, EVENT_TITLE_TEMPLATE,
                                     sandbox_versions)
+            state["dirty"] = bool(plan.changes) or bool(plan.errors)
 
             # ---- preview
             for err in plan.errors:
