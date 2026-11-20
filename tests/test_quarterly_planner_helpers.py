@@ -4,6 +4,7 @@ import unittest
 import pandas as pd
 
 from utils.quarterly_planner_helpers import (
+    progress_slides,
     build_delivery_roadmap_timeline,
     get_quarterly_team_label,
     parse_quarter_to_date,
@@ -31,6 +32,29 @@ class QuarterlyPlannerHelpersTests(unittest.TestCase):
         try:
             self.assertEqual(get_quarterly_team_label("Frontend_Team Backend_Team"), "Backend_Team")
             self.assertEqual(get_quarterly_team_label("Billing"), "-")
+        finally:
+            if old is None:
+                os.environ.pop("TEAM_LABELS", None)
+            else:
+                os.environ["TEAM_LABELS"] = old
+
+    def test_team_labels_given_explicitly_override_env(self):
+        old = os.environ.get("TEAM_LABELS")
+        os.environ["TEAM_LABELS"] = "Backend_Team,Frontend_Team"
+        try:
+            self.assertEqual(get_quarterly_team_label("Frontend_Team Backend_Team", ["frontend_team"]), "frontend_team")
+            self.assertEqual(get_quarterly_team_label("Backend_Team", []), "-")
+            df = pd.DataFrame(
+                [
+                    {"Key": "PR-1", "Summary": "A", "Status": "To Do", "Completion": 0, "Labels": "Backend_Team"},
+                    {"Key": "PR-2", "Summary": "B", "Status": "To Do", "Completion": 50, "Labels": "Mobile Frontend_Team"},
+                ]
+            )
+            out = prepare_quarterly_progress_for_presentation(df, ["Mobile", "Backend_Team"])
+            self.assertEqual(list(out["Key"]), ["PR-2", "PR-1"])
+            self.assertEqual(list(out["Team"]), ["Mobile", "Backend_Team"])
+            slides = progress_slides(df, "T", team_labels=["Mobile", "Backend_Team"])
+            self.assertEqual(list(slides[0]["blocks"][0]["df"]["Team"]), ["Mobile", "Backend_Team"])
         finally:
             if old is None:
                 os.environ.pop("TEAM_LABELS", None)

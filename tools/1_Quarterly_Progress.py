@@ -1,5 +1,6 @@
 import base64
 import os
+import re
 
 import pandas as pd
 import streamlit as st
@@ -10,7 +11,7 @@ from utils.quarterly_load import render_load_source, render_title_fields, jira_a
 from utils.quarterly_planner_helpers import (
     prepare_quarterly_progress_for_presentation, build_quarterly_progress_slide_pdf, build_quarterly_progress_pptx,
     normalize_progress_csv, PROGRESS_CSV_TEMPLATE,
-    compact_quarterly_progress_counts, PROGRESS_COUNTS_COLUMN,
+    compact_quarterly_progress_counts, PROGRESS_COUNTS_COLUMN, quarterly_team_labels,
 )
 from utils.slide_templates import render_slide_template_selector
 from utils.quarterly_theme import apply_quarterly_page_setup
@@ -25,6 +26,26 @@ if 'quarterly_progress_config' not in st.session_state:
 
 LAYOUT_ALL = "📋 All Epics in one table"
 LAYOUT_BY_INITIATIVE = "🧭 Grouped by initiative (Parent Link)"
+
+def team_labels():
+    """The team labels chosen for this report (TEAM_LABELS from the environment until changed)."""
+    config = st.session_state.quarterly_progress_config
+    if "team_labels" not in config:
+        config["team_labels"] = quarterly_team_labels()
+    return config["team_labels"]
+
+
+def labels_in(df):
+    """Every label present in the loaded Epics, without duplicates (case-insensitive)."""
+    if not isinstance(df, pd.DataFrame) or "Labels" not in df.columns:
+        return []
+    found = {}
+    for labels in blank_if_missing(df["Labels"]):
+        for label in re.split(r"[\s,]+", str(labels)):
+            if label.strip():
+                found.setdefault(label.strip().lower(), label.strip())
+    return list(found.values())
+
 
 SLIDE_DEFAULTS = {
     "title": "Committed Epics Q3 - Status",
@@ -99,7 +120,7 @@ if st.session_state.active_tab_qprog == STEPS[0]:
             progress_df["Presentation update"].astype(str).str.strip() != "",
             blank_if_missing(progress_df["Key"].map(previous_updates)),
         )
-        st.session_state.quarterly_progress_df = prepare_quarterly_progress_for_presentation(progress_df)
+        st.session_state.quarterly_progress_df = prepare_quarterly_progress_for_presentation(progress_df, team_labels())
         config = {**SLIDE_DEFAULTS, **st.session_state.quarterly_progress_config}
         config["source"] = source_label
         if request["source"] == "jira":
@@ -119,6 +140,26 @@ elif st.session_state.active_tab_qprog == STEPS[1]:
 
     progress_df = st.session_state.get("quarterly_progress_df")
     if isinstance(progress_df, pd.DataFrame) and not progress_df.empty:
+        with st.expander("🏷️ Team labels", expanded=False):
+            st.caption(
+                "Choose the Jira labels that name a team, in priority order. The Team column shows the first of them "
+                "found on each Epic (\"-\" when none), and Epics are grouped by team in this order in the report."
+            )
+            current_labels = team_labels()
+            known = {label.lower() for label in current_labels}
+            options = current_labels + sorted(
+                (label for label in labels_in(progress_df) if label.lower() not in known), key=str.lower
+            )
+            chosen_labels = st.multiselect(
+                "Team labels", options=options, default=current_labels, key="qprog_team_labels",
+                accept_new_options=True, placeholder="Choose or type team labels in priority order...",
+            )
+            if chosen_labels != current_labels:
+                st.session_state.quarterly_progress_config["team_labels"] = chosen_labels
+                st.session_state.quarterly_progress_df = prepare_quarterly_progress_for_presentation(progress_df, chosen_labels)
+                st.rerun()
+            if not chosen_labels:
+                st.info("No team labels selected: the Team column will show \"-\" for every Epic.")
         st.caption("Write a short update for each Epic; it appears in the report. Jira fields remain read-only. The delivery roadmap is built in Quarterly Review → Planning.")
         progress_columns = [
             "Parent Link", "Key", "Summary", "Completion", PROGRESS_COUNTS_COLUMN, "Status", "Team", "Presentation update",
@@ -152,7 +193,7 @@ elif st.session_state.active_tab_qprog == STEPS[1]:
         if save_progress_updates:
             updated_progress = progress_df.copy()
             updated_progress["Presentation update"] = edited_progress["Presentation update"]
-            st.session_state.quarterly_progress_df = prepare_quarterly_progress_for_presentation(updated_progress)
+            st.session_state.quarterly_progress_df = prepare_quarterly_progress_for_presentation(updated_progress, team_labels())
             st.success("Presentation updates saved.")
     else:
         st.info("Load the committed Epics in step 1 to add the updates that will appear in the report.")
@@ -181,7 +222,7 @@ elif st.session_state.active_tab_qprog == STEPS[2]:
         by_initiative = config["layout"] == LAYOUT_BY_INITIATIVE
         progress_title = config["title"].strip() or "Quarterly Epic Progress"
         progress_subtitle = config["subtitle"].strip()
-        report_df = prepare_quarterly_progress_for_presentation(progress_df)
+        report_df = prepare_quarterly_progress_for_presentation(progress_df, team_labels())
         primary = st.session_state.get("primary_color", "#0B2756")
         jira_server = st.session_state.get("jira_server", os.getenv("JIRA_SERVER", ""))
         if not jira_server.strip():
@@ -190,12 +231,12 @@ elif st.session_state.active_tab_qprog == STEPS[2]:
             progress_pdf = build_quarterly_progress_slide_pdf(
                 report_df, progress_title, primary, progress_subtitle,
                 by_initiative=by_initiative, template_path=config["template_path"],
-                jira_server=jira_server,
+                jira_server=jira_server, team_labels=team_labels(),
             )
             progress_pptx = build_quarterly_progress_pptx(
                 report_df, None, progress_title, progress_subtitle, "", "", primary,
                 by_initiative=by_initiative, template_path=config["template_path"],
-                jira_server=jira_server,
+                jira_server=jira_server, team_labels=team_labels(),
             )
         except Exception as error:
             st.error(f"The report could not be generated with the selected slide template: {error}")
