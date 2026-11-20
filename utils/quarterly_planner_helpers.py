@@ -79,9 +79,16 @@ def val_changed(v1, v2):
         return True
 
 
-def get_quarterly_team_label(labels):
+def quarterly_team_labels(team_labels=None):
+    """The team labels in priority order: the given list, or TEAM_LABELS from the environment when None."""
+    if team_labels is None:
+        team_labels = os.getenv("TEAM_LABELS", "").split(",")
+    return [str(label).strip() for label in team_labels if str(label).strip()]
+
+
+def get_quarterly_team_label(labels, team_labels=None):
     """Return the first configured team label assigned to an Epic."""
-    configured_labels = [label.strip() for label in os.getenv("TEAM_LABELS", "").split(",") if label.strip()]
+    configured_labels = quarterly_team_labels(team_labels)
     item_labels = {label.strip().lower() for label in re.split(r'[\s,]+', str(labels)) if label.strip()}
     return next((label for label in configured_labels if label.lower() in item_labels), "-")
 
@@ -193,8 +200,11 @@ def quarterly_progress_table_view(df):
     return compact[columns]
 
 
-def prepare_quarterly_progress_for_presentation(df):
-    """Add presentation fields and prioritize open, lower-progress Epics for review."""
+def prepare_quarterly_progress_for_presentation(df, team_labels=None):
+    """Add presentation fields and prioritize open, lower-progress Epics for review.
+
+    team_labels: the labels that name a team, in priority order (None: TEAM_LABELS from the environment).
+    """
     prepared = df.copy()
     presentation_defaults = {
         "Presentation update": "",
@@ -206,9 +216,11 @@ def prepare_quarterly_progress_for_presentation(df):
     for column, default_value in presentation_defaults.items():
         if column not in prepared.columns:
             prepared[column] = default_value
-    prepared["Team"] = prepared.get("Labels", pd.Series("", index=prepared.index)).apply(get_quarterly_team_label)
+    prepared["Team"] = prepared.get("Labels", pd.Series("", index=prepared.index)).apply(
+        lambda labels: get_quarterly_team_label(labels, team_labels)
+    )
 
-    configured_labels = [label.strip() for label in os.getenv("TEAM_LABELS", "").split(",") if label.strip()]
+    configured_labels = quarterly_team_labels(team_labels)
     priorities = {label.lower(): position for position, label in enumerate(configured_labels)}
     prepared["_team_order"] = prepared["Team"].str.lower().map(priorities).fillna(len(priorities))
     status_values = blank_if_missing(prepared.get("Status", pd.Series("", index=prepared.index))).astype(str).str.strip().str.lower()
@@ -470,7 +482,7 @@ def _quarterly_jira_link_text(value, jira_server):
     return f'<link href="{html.escape(url, quote=True)}"><u>{text}</u></link>' if url else text
 
 
-def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle="", by_initiative=False, template_path="auto", jira_server=None):
+def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle="", by_initiative=False, template_path="auto", jira_server=None, team_labels=None):
     """Create a presentation-style landscape slide for the quarterly Epic progress.
 
     With a local PowerPoint template in assets/templates the PDF copies its look
@@ -482,7 +494,7 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle=""
     template_path = find_quarterly_pptx_template() if automatic_template else template_path
     if template_path is not None:
         try:
-            return _build_template_progress_pdf(df, title, subtitle, template_path, by_initiative, jira_server)
+            return _build_template_progress_pdf(df, title, subtitle, template_path, by_initiative, jira_server, team_labels)
         except Exception:
             if not automatic_template:
                 raise
@@ -562,7 +574,7 @@ def build_quarterly_progress_slide_pdf(df, title, primary_color_hex, subtitle=""
     if by_initiative:
         # One page per initiative table, like the PowerPoint slides
         story = []
-        slides = progress_slides(df, title, subtitle, by_initiative=True)
+        slides = progress_slides(df, title, subtitle, by_initiative=True, team_labels=team_labels)
         heading_style = ParagraphStyle("QuarterlyInitiativeHeading", parent=subtitle_style, fontName="Helvetica-Bold",
                                        fontSize=11, leading=14, textColor=primary, spaceAfter=6)
         for index, spec in enumerate(slides):
@@ -673,7 +685,7 @@ def _natural_key(text):
 INITIATIVE_GAP_ROWS = 1.3
 
 
-def progress_slides(df, title, subtitle="", by_initiative=False):
+def progress_slides(df, title, subtitle="", by_initiative=False, team_labels=None):
     """Plan the progress report slides: [{"title", "subtitle", "blocks": [{"heading", "df", "columns"}]}].
 
     All Epics in one table (paged by PROGRESS_ROWS_PER_SLIDE rows) under the
@@ -685,7 +697,7 @@ def progress_slides(df, title, subtitle="", by_initiative=False):
     (PROGRESS_ROWS_PER_SLIDE rows plus header); the first heading sits in the
     space above the table area and every further one needs INITIATIVE_GAP_ROWS.
     """
-    df = prepare_quarterly_progress_for_presentation(df) if df is not None else pd.DataFrame()
+    df = prepare_quarterly_progress_for_presentation(df, team_labels) if df is not None else pd.DataFrame()
     df = compact_quarterly_progress_counts(df)
     title = (title or "").strip()
     subtitle = (subtitle or "").strip()
@@ -805,7 +817,7 @@ def _progress_circle_drawing(value, width, height, primary_color_hex, using_temp
     return drawing
 
 
-def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiative=False, jira_server=None):
+def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiative=False, jira_server=None, team_labels=None):
     """PDF version of the template-styled PowerPoint progress slides (same layout, colours and paging)."""
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
@@ -818,7 +830,7 @@ def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiati
     white = colors.white
     teal = colors.HexColor(TEMPLATE_TEAL_HEX)
     background = colors.HexColor(TEMPLATE_BACKGROUND_HEX)
-    slides = progress_slides(df, title, subtitle, by_initiative) or [
+    slides = progress_slides(df, title, subtitle, by_initiative, team_labels) or [
         {"title": (title or "").strip(), "subtitle": (subtitle or "").strip(),
          "blocks": [{"heading": "", "df": pd.DataFrame(), "columns": _progress_columns(df)}]}
     ]
@@ -911,7 +923,7 @@ def _build_template_progress_pdf(df, title, subtitle, template_path, by_initiati
     return buffer.getvalue()
 
 
-def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progress_subtitle, roadmap_title, roadmap_subtitle, primary_color_hex, by_initiative=False, template_path="auto", jira_server=None):
+def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progress_subtitle, roadmap_title, roadmap_subtitle, primary_color_hex, by_initiative=False, template_path="auto", jira_server=None, team_labels=None):
     """Build editable slides; template_path="auto" discovers a template, None uses the built-in design."""
     from pptx import Presentation
     from pptx.util import Inches, Pt
@@ -992,7 +1004,7 @@ def build_quarterly_progress_pptx(progress_df, roadmap_df, progress_title, progr
             add_text(slide, subtitle, 0.7, 0.82, 11.7, 0.24, size=10, color=muted)
 
     # One slide per table, or with by_initiative several initiative tables stacked on a slide
-    for slide_spec in progress_slides(progress_df, progress_title, progress_subtitle, by_initiative):
+    for slide_spec in progress_slides(progress_df, progress_title, progress_subtitle, by_initiative, team_labels):
         slide = prs.slides.add_slide(content_layout)
         add_chrome(slide, slide_spec["title"], slide_spec["subtitle"])
         table_left, table_top, table_width = 0.42, 1.90, 12.45
