@@ -189,11 +189,39 @@ class ValidationTests(unittest.TestCase):
 
 
 class PageTests(unittest.TestCase):
-    def test_page_renders_both_tabs(self):
-        at = AppTest.from_file(PAGE, default_timeout=30).run()
+    """The page is a three-step stepper: Set up, Load & Details, Report. Nothing here calls Jira."""
+
+    def _app(self):
+        return AppTest.from_file(PAGE, default_timeout=30).run()
+
+    def _go(self, at, number):
+        next(b for b in at.button if b.label.startswith(f"{number}.")).click().run()
+
+    def test_starts_on_set_up(self):
+        at = self._app()
         self.assertFalse(at.exception)
-        self.assertEqual([t.label for t in at.tabs], ["📊 Report", "📋 Details", "🏷️ Label configuration"])
+        self.assertEqual(len(at.tabs), 0)
         self.assertTrue(any("Group labels" in s.value for s in at.subheader))
+        step_buttons = [b.label for b in at.button if b.label[:2] in ("2.", "3.")]
+        self.assertEqual(step_buttons, ["2. 📥 Load & Details", "3. 📊 Report"])
+
+    def test_load_and_details_step(self):
+        at = self._app()
+        self._go(at, 2)
+        self.assertFalse(at.exception)
+        self.assertTrue(any(b.label == "📥 Load progress from Jira" for b in at.button))
+        self.assertFalse(any("Group labels" in s.value for s in at.subheader))
+        self.assertTrue(any("Load the progress from Jira" in i.value for i in at.info))
+
+    def test_report_step_and_project_kept(self):
+        at = self._app()
+        self._go(at, 2)
+        at.text_input(key="rr_project").set_value("MYPROJ").run()
+        self._go(at, 3)
+        self.assertFalse(at.exception)
+        self.assertTrue(any("📤 Export" in s.value for s in at.subheader))
+        self._go(at, 2)
+        self.assertEqual(at.text_input(key="rr_project").value, "MYPROJ")
 
 
 if __name__ == "__main__":

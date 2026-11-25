@@ -1,9 +1,10 @@
 """Roadmap Reporting: project KPIs by initiative (slide 3 of Template QP).
 
-Two reporting levels identified by Jira labels: Group labels (on Initiatives) and, inside
-each group, Topic labels (on Initiatives or Epics), each Topic with an optional due date. The Label configuration tab
-defines which labels belong to each level; the Report tab lays them out as in the slide.
-Each Topic's Harvey ball is the average score of the tickets under its Epics (utils.roadmap_progress).
+Three steps:
+1. Set up: the Jira group labels (on Initiatives) and, inside each group, the topic labels (on
+   Initiatives or Epics), each topic with an optional subtitle, due date and status.
+2. Load & Details: progress of every topic from Jira (utils.roadmap_progress) and its details.
+3. Report: the topics laid out as in the slide, and the PowerPoint export.
 """
 import html
 import math
@@ -16,11 +17,15 @@ import streamlit as st
 from utils import roadmap_labels as rl
 from utils import roadmap_export as rx
 from utils import roadmap_progress as rp
+from utils.stepper import render_stepper
 
 BASE_KEY = "rr_cfg_base"      # configuration the editors start from (saved file, or defaults after a reset)
 VERSION_KEY = "rr_cfg_ver"    # bumped to reset the editors after save / discard / reset
 EXPORT_KEY = "rr_export"      # bytes of the last prepared PowerPoint
 PROGRESS_KEY = "rr_progress"  # {"data": load_topic_progress result, "loaded_at", "project"}
+PROJECT_KEY = "rr_project_value"  # project key typed in step 2 (kept when the step is left)
+STEP_KEY = "rr_step"
+STEPS = ["⚙️ Set up", "📥 Load & Details", "📊 Report"]
 
 if BASE_KEY not in st.session_state:
     st.session_state[BASE_KEY] = rl.load_config()
@@ -74,155 +79,15 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-tab_report, tab_details, tab_config = st.tabs(["📊 Report", "📋 Details", "🏷️ Label configuration"])
+render_stepper(STEPS, STEP_KEY, key="rr_stepper")
+step = st.session_state[STEP_KEY]
+saved = rl.load_config()
+groups = saved["groups"]
+loaded = st.session_state.get(PROGRESS_KEY)
+progress = loaded["data"] if loaded else {}
 
-# ---------------------------------------------------------------- Report
-with tab_report:
-    saved = rl.load_config()
-    groups = saved["groups"]
-
-    with st.container(border=True):
-        col_project, col_load = st.columns([3, 1], vertical_alignment="bottom")
-        with col_project:
-            project = st.text_input(
-                "Jira project key", key="rr_project",
-                value=os.getenv("RELEASE_PLAN_JIRA_PROJECT", "") or os.getenv("JIRA_PROJECT_KEY", ""),
-                help="Only Epics of this project are counted. Leave empty to search all projects.")
-        with col_load:
-            load_clicked = st.button("📥 Load progress from Jira", type="primary", width="stretch")
-        st.caption(
-            "Per ticket under the Epics with each Topic label: **100%** closed in a released version "
-            f"(or in *{rp.NOT_RELEASE_RELEVANT}*) · **90%** closed, version not released yet · "
-            "**50%** in progress (no resolution) · **0%** To Do. The Topic is the average; every ticket weighs the same.")
-
-    if load_clicked:
-        server = st.session_state.get("jira_server")
-        token = st.session_state.get("jira_token")
-        if not server or not token:
-            st.error("Configure and test the Jira connection first on the Configuration page.")
-        else:
-            try:
-                with st.spinner("Downloading Epics and tickets from Jira..."):
-                    data = rp.load_topic_progress(
-                        server, token, st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)"),
-                        st.session_state.get("jira_email", ""), saved, project.strip())
-            except Exception as e:  # Jira or network failure: keep the previous result
-                st.error(f"Jira could not be read: {e}")
-            else:
-                st.session_state.pop(EXPORT_KEY, None)
-                st.session_state[PROGRESS_KEY] = {"data": data, "project": project.strip(),
-                                                  "loaded_at": datetime.now().strftime("%d.%m.%Y %H:%M")}
-
-    loaded = st.session_state.get(PROGRESS_KEY)
-    progress = loaded["data"] if loaded else {}
-    if loaded:
-        st.caption(f"Loaded {loaded['loaded_at']} · project {loaded['project'] or 'all'}.")
-    else:
-        st.info("Load the progress from Jira to fill the Harvey balls.")
-
-    st.markdown(f'<div class="rr-banner">{html.escape(st.session_state.get("rr_exp_banner", rx.DEFAULT_BANNER))}</div>', unsafe_allow_html=True)
-    if any(t.get("due") for g in groups for t in g["topics"]):
-        st.markdown('<div class="rr-legend">Due date:' + "".join(
-            f'<span class="rr-swatch" style="background:{color}"></span>{label}'
-            for label, color in rl.DUE_STATUS.values()) + '</div>',
-            unsafe_allow_html=True)
-    if not groups:
-        st.warning("No group labels configured. Add them in the Label configuration tab.")
-    per_row = 4
-    for start in range(0, len(groups), per_row):
-        row = groups[start:start + per_row]
-        for col, group in zip(st.columns(per_row, gap="small"), row):
-            with col, st.container(border=True):
-                st.markdown(f'<div class="rr-head">{html.escape(group["name"])}</div>', unsafe_allow_html=True)
-                if not group["topics"]:
-                    st.caption("No topics configured.")
-                for topic in group["topics"]:
-                    info = progress.get(topic["label"])
-                    pct = info["progress"] if info else None
-                    if not info:
-                        hover = "Progress not loaded"
-                    elif not info["epics"]:
-                        hover = "No Epics with this label"
-                    else:
-                        hover = f"{len(info['tickets'])} tickets · {len(info['epics'])} Epics"
-                    pct_text = "–" if pct is None else f"{pct:.0f}%"
-                    due_html = ""
-                    if topic.get("due"):
-                        status = topic.get("status")
-                        status_label = rl.DUE_STATUS[status][0] if status in rl.DUE_STATUS else "No status set"
-                        due_html = (f'<span class="rr-due" title="{status_label}" style="background:'
-                                    f'{rl.due_box_color(status)};color:{rl.DUE_TEXT_COLOR}">'
-                                    f'{datetime.fromisoformat(topic["due"]):%d.%m.%y}</span>')
-                    subtitle = (f'<span>{html.escape(topic["subtitle"])}</span>'
-                                if topic.get("subtitle") else "")
-                    st.markdown(
-                        f'<div class="rr-item" title="{html.escape(hover)}">'
-                        f'<div class="rr-ball">{harvey_ball_svg(pct, size=30)}'
-                        f'<span class="rr-pct">{pct_text}</span>{due_html}</div>'
-                        f'<div class="rr-text"><b>{html.escape(topic["name"])}</b>{subtitle}</div></div>',
-                        unsafe_allow_html=True,
-                    )
-
-    st.subheader("📤 Export")
-    template_path = rx.find_template()
-    if not template_path:
-        st.warning("No slide template found. Add 'Template QP.pptx' to assets/templates/ to export.")
-    elif not progress:
-        st.info("Load the progress from Jira first; the export uses the loaded data.")
-    else:
-        with st.container(border=True):
-            st.caption(f"Fills the 'Project KPIs by initiative' slide of {os.path.basename(template_path)} "
-                       "with the configured groups, topics and Harvey balls.")
-            exp_title = st.text_input("Slide title", value=rx.DEFAULT_TITLE, key="rr_exp_title")
-            exp_subtitle = st.text_input("Subtitle", value=rx.DEFAULT_SUBTITLE, key="rr_exp_subtitle")
-            exp_banner = st.text_input("Banner", value=rx.DEFAULT_BANNER, key="rr_exp_banner")
-            if st.button("🛠️ Prepare PowerPoint"):
-                try:
-                    st.session_state[EXPORT_KEY] = rx.build_roadmap_pptx(
-                        saved, progress, template_path, exp_title, exp_subtitle, exp_banner)
-                except rx.TemplateError as e:
-                    st.session_state.pop(EXPORT_KEY, None)
-                    st.error(f"The template could not be used: {e}")
-            if st.session_state.get(EXPORT_KEY):
-                st.download_button(
-                    "⬇️ Download PowerPoint", data=st.session_state[EXPORT_KEY], type="primary",
-                    file_name=f"Roadmap_Reporting_{datetime.now():%Y%m%d}.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
-
-# ---------------------------------------------------------------- Details
-with tab_details:
-    if not progress:
-        st.info("Load the progress from Jira in the Report tab to see the details.")
-    else:
-        st.caption(f"Loaded {loaded['loaded_at']} · project {loaded['project'] or 'all'}.")
-        summary = []
-        for group in groups:
-            for topic in group["topics"]:
-                info = progress.get(topic["label"]) or {"epics": [], "tickets": [], "progress": None}
-                counts = rp.bucket_counts(info["tickets"])
-                summary.append({"Group": group["name"], "Topic": topic["name"],
-                                "Progress": None if info["progress"] is None else round(info["progress"], 1),
-                                "Due date": topic.get("due") or None,
-                                "Due status": rl.DUE_STATUS[topic["status"]][0] if topic.get("status") else None,
-                                "Epics": len(info["epics"]), "Tickets": len(info["tickets"]), **counts})
-        st.dataframe(pd.DataFrame(summary), hide_index=True, width="stretch",
-                     column_config={"Progress": st.column_config.ProgressColumn(
-                         "Progress", format="%.0f%%", min_value=0, max_value=100)})
-        for group in groups:
-            for topic in group["topics"]:
-                info = progress.get(topic["label"])
-                if not info or not info["tickets"]:
-                    continue
-                with st.expander(f"{group['name']} › {topic['name']} · {len(info['tickets'])} tickets"):
-                    tickets = pd.DataFrame(info["tickets"])
-                    tickets["Score"] = tickets["bucket"].map(rp.BUCKET_SCORES)
-                    st.dataframe(
-                        tickets.rename(columns={"key": "Key", "summary": "Summary", "status": "Status",
-                                                "epic": "Epic", "fix_versions": "Fix versions", "bucket": "Counted as"}),
-                        hide_index=True, width="stretch")
-
-# ---------------------------------------------------------------- Label configuration
-with tab_config:
+# ---------------------------------------------------------------- 1. Set up
+if step == STEPS[0]:
     st.markdown(
         "**Group labels** cluster big overarching topics and go on Initiatives "
         "(`RC2_G<#>_<Group Name>`). **Topic labels** are work packages inside one group and go on "
@@ -280,7 +145,7 @@ with tab_config:
         st.warning(w)
     n_topics = sum(len(g["topics"]) for g in draft["groups"])
     st.caption(f"{len(draft['groups'])} groups · {n_topics} topics"
-               + (" · unsaved changes" if dirty else " · saved"))
+               + (" · unsaved changes: save them before changing step, or they are lost" if dirty else " · saved"))
 
     with st.container(horizontal=True):
         if st.button("💾 Save configuration", type="primary", disabled=bool(errors) or not dirty):
@@ -298,3 +163,148 @@ with tab_config:
             st.session_state[BASE_KEY] = rl.normalize_config(rl.DEFAULT_CONFIG)
             st.session_state[VERSION_KEY] += 1
             st.rerun()
+
+# ---------------------------------------------------------------- 2. Load & Details
+elif step == STEPS[1]:
+    with st.container(border=True):
+        col_project, col_load = st.columns([3, 1], vertical_alignment="bottom")
+        with col_project:
+            project = st.text_input(
+                "Jira project key", key="rr_project",
+                value=st.session_state.get(PROJECT_KEY) if PROJECT_KEY in st.session_state
+                else os.getenv("RELEASE_PLAN_JIRA_PROJECT", "") or os.getenv("JIRA_PROJECT_KEY", ""),
+                help="Only Epics of this project are counted. Leave empty to search all projects.")
+            st.session_state[PROJECT_KEY] = project
+        with col_load:
+            load_clicked = st.button("📥 Load progress from Jira", type="primary", width="stretch")
+        st.caption(
+            "Per ticket under the Epics with each Topic label: **100%** closed in a released version "
+            f"(or in *{rp.NOT_RELEASE_RELEVANT}*) · **90%** closed, version not released yet · "
+            "**50%** in progress (no resolution) · **0%** To Do. The Topic is the average; every ticket weighs the same.")
+
+    if load_clicked:
+        server = st.session_state.get("jira_server")
+        token = st.session_state.get("jira_token")
+        if not server or not token:
+            st.error("Configure and test the Jira connection first on the Configuration page.")
+        else:
+            try:
+                with st.spinner("Downloading Epics and tickets from Jira..."):
+                    data = rp.load_topic_progress(
+                        server, token, st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)"),
+                        st.session_state.get("jira_email", ""), saved, project.strip())
+            except Exception as e:  # Jira or network failure: keep the previous result
+                st.error(f"Jira could not be read: {e}")
+            else:
+                st.session_state.pop(EXPORT_KEY, None)
+                st.session_state[PROGRESS_KEY] = {"data": data, "project": project.strip(),
+                                                  "loaded_at": datetime.now().strftime("%d.%m.%Y %H:%M")}
+
+    loaded = st.session_state.get(PROGRESS_KEY)
+    progress = loaded["data"] if loaded else {}
+
+    if not progress:
+        st.info("Load the progress from Jira to see the details per topic.")
+    else:
+        st.caption(f"Loaded {loaded['loaded_at']} · project {loaded['project'] or 'all'}. "
+                   "Go to Report to see the slide view and export it.")
+        summary = []
+        for group in groups:
+            for topic in group["topics"]:
+                info = progress.get(topic["label"]) or {"epics": [], "tickets": [], "progress": None}
+                counts = rp.bucket_counts(info["tickets"])
+                summary.append({"Group": group["name"], "Topic": topic["name"],
+                                "Progress": None if info["progress"] is None else round(info["progress"], 1),
+                                "Due date": topic.get("due") or None,
+                                "Due status": rl.DUE_STATUS[topic["status"]][0] if topic.get("status") else None,
+                                "Epics": len(info["epics"]), "Tickets": len(info["tickets"]), **counts})
+        st.dataframe(pd.DataFrame(summary), hide_index=True, width="stretch",
+                     column_config={"Progress": st.column_config.ProgressColumn(
+                         "Progress", format="%.0f%%", min_value=0, max_value=100)})
+        for group in groups:
+            for topic in group["topics"]:
+                info = progress.get(topic["label"])
+                if not info or not info["tickets"]:
+                    continue
+                with st.expander(f"{group['name']} › {topic['name']} · {len(info['tickets'])} tickets"):
+                    tickets = pd.DataFrame(info["tickets"])
+                    tickets["Score"] = tickets["bucket"].map(rp.BUCKET_SCORES)
+                    st.dataframe(
+                        tickets.rename(columns={"key": "Key", "summary": "Summary", "status": "Status",
+                                                "epic": "Epic", "fix_versions": "Fix versions", "bucket": "Counted as"}),
+                        hide_index=True, width="stretch")
+
+# ---------------------------------------------------------------- 3. Report
+else:
+    if loaded:
+        st.caption(f"Loaded {loaded['loaded_at']} · project {loaded['project'] or 'all'}.")
+    else:
+        st.info("Load the progress from Jira in step 2 to fill the Harvey balls.")
+    st.markdown(f'<div class="rr-banner">{html.escape(st.session_state.get("rr_exp_banner", rx.DEFAULT_BANNER))}</div>', unsafe_allow_html=True)
+    if any(t.get("due") for g in groups for t in g["topics"]):
+        st.markdown('<div class="rr-legend">Due date:' + "".join(
+            f'<span class="rr-swatch" style="background:{color}"></span>{label}'
+            for label, color in rl.DUE_STATUS.values()) + '</div>',
+            unsafe_allow_html=True)
+    if not groups:
+        st.warning("No group labels configured. Add them in step 1, Set up.")
+    per_row = 4
+    for start in range(0, len(groups), per_row):
+        row = groups[start:start + per_row]
+        for col, group in zip(st.columns(per_row, gap="small"), row):
+            with col, st.container(border=True):
+                st.markdown(f'<div class="rr-head">{html.escape(group["name"])}</div>', unsafe_allow_html=True)
+                if not group["topics"]:
+                    st.caption("No topics configured.")
+                for topic in group["topics"]:
+                    info = progress.get(topic["label"])
+                    pct = info["progress"] if info else None
+                    if not info:
+                        hover = "Progress not loaded"
+                    elif not info["epics"]:
+                        hover = "No Epics with this label"
+                    else:
+                        hover = f"{len(info['tickets'])} tickets · {len(info['epics'])} Epics"
+                    pct_text = "–" if pct is None else f"{pct:.0f}%"
+                    due_html = ""
+                    if topic.get("due"):
+                        status = topic.get("status")
+                        status_label = rl.DUE_STATUS[status][0] if status in rl.DUE_STATUS else "No status set"
+                        due_html = (f'<span class="rr-due" title="{status_label}" style="background:'
+                                    f'{rl.due_box_color(status)};color:{rl.DUE_TEXT_COLOR}">'
+                                    f'{datetime.fromisoformat(topic["due"]):%d.%m.%y}</span>')
+                    subtitle = (f'<span>{html.escape(topic["subtitle"])}</span>'
+                                if topic.get("subtitle") else "")
+                    st.markdown(
+                        f'<div class="rr-item" title="{html.escape(hover)}">'
+                        f'<div class="rr-ball">{harvey_ball_svg(pct, size=30)}'
+                        f'<span class="rr-pct">{pct_text}</span>{due_html}</div>'
+                        f'<div class="rr-text"><b>{html.escape(topic["name"])}</b>{subtitle}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+
+    st.subheader("📤 Export")
+    template_path = rx.find_template()
+    if not template_path:
+        st.warning("No slide template found. Add 'Template QP.pptx' to assets/templates/ to export.")
+    elif not progress:
+        st.info("Load the progress from Jira in step 2 first; the export uses the loaded data.")
+    else:
+        with st.container(border=True):
+            st.caption(f"Fills the 'Project KPIs by initiative' slide of {os.path.basename(template_path)} "
+                       "with the configured groups, topics and Harvey balls.")
+            exp_title = st.text_input("Slide title", value=rx.DEFAULT_TITLE, key="rr_exp_title")
+            exp_subtitle = st.text_input("Subtitle", value=rx.DEFAULT_SUBTITLE, key="rr_exp_subtitle")
+            exp_banner = st.text_input("Banner", value=rx.DEFAULT_BANNER, key="rr_exp_banner")
+            if st.button("🛠️ Prepare PowerPoint"):
+                try:
+                    st.session_state[EXPORT_KEY] = rx.build_roadmap_pptx(
+                        saved, progress, template_path, exp_title, exp_subtitle, exp_banner)
+                except rx.TemplateError as e:
+                    st.session_state.pop(EXPORT_KEY, None)
+                    st.error(f"The template could not be used: {e}")
+            if st.session_state.get(EXPORT_KEY):
+                st.download_button(
+                    "⬇️ Download PowerPoint", data=st.session_state[EXPORT_KEY], type="primary",
+                    file_name=f"Roadmap_Reporting_{datetime.now():%Y%m%d}.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
