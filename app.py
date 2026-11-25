@@ -260,6 +260,8 @@ sprint_review_page = st.Page("tools/2_Sprint_Review.py", title="Sprint Review", 
 release_notes_page = st.Page("tools/3_Release_Notes.py", title="Release Notes", icon="📣")
 release_calendar_page = st.Page("tools/8_Release_Calendar.py", title="Release Calendar", icon="🗓️")
 sprint_kpis_page = st.Page("tools/4_Sprint_KPIs.py", title="Sprint KPIs", icon="📊")
+roadmap_reporting_page = st.Page("tools/9_Roadmap_Reporting.py", title="Roadmap Reporting", icon="🗺️",
+                                 url_path="roadmap_reporting")
 ai_creator_page = st.Page("tools/5_AI_Issue_Creator.py", title="Issue Creator", icon="🤖")
 # Reachable by URL only: hidden from the menu
 ai_agent_page = st.Page("tools/6_AI_Agent.py", title="AI Agent", icon="💬", visibility="hidden")
@@ -572,6 +574,12 @@ def show_home():
                    "Create and publish Release Notes from a Jira version, check a release plan before go-live, or view the release calendar.",
                    "ACTIVE 🚀", [(release_notes_page, "Notes", "📣"), (release_calendar_page, "Calendar", "🗓️"),
                                 (rr_overview_page, "Plan", "🎯")])
+
+    c_rr, _, _ = st.columns(3, gap="medium")
+    with c_rr:
+        _home_card("roadmap", "🗺️", "Roadmap Reporting",
+                   "Report roadmap progress by initiative with Harvey balls, as in the Quarterly Progress steering slide.",
+                   "NEW ✨", [(roadmap_reporting_page, "Roadmap", "🗺️")])
 
     st.markdown('<div class="po-section">AI</div>', unsafe_allow_html=True)
     c4, _, _ = st.columns(3, gap="medium")
@@ -928,7 +936,7 @@ pg = st.navigation(
     {
         # Single pages are direct links; Streamlit renders them before the dropdown sections,
         # so the final order is set with CSS in the top menu styles below
-        "": [home_page, ai_creator_page, ai_agent_page, configuration_page],
+        "": [home_page, roadmap_reporting_page, ai_creator_page, ai_agent_page, configuration_page],
         "🏃 Sprint": [sprint_review_page, sprint_kpis_page],
         "🚀 Releases": [release_notes_page, release_calendar_page, *release_plan_nav_pages],
         "📅 Quarterly Review": [progress_page, planner_page],
@@ -986,7 +994,7 @@ st.markdown("""
             flex: 0 0 auto;
             /* A fixed width, not fit-content: with fit-content Streamlit's overflow logic
                measures the collapsed bar and folds every item into "N more". */
-            width: min(980px, calc(100vw - 220px));
+            width: min(1120px, calc(100vw - 220px));
             max-width: 100%;
             justify-content: center;
             gap: 0.25rem;
@@ -998,16 +1006,17 @@ st.markdown("""
             margin: 0.5rem 0;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
         }
-        /* Menu order: Home, Sprint, Releases, Quarterly Review, Issue Creator, Configuration.
-           Streamlit renders the individual pages first (Home, Issue Creator, Configuration;
+        /* Menu order: Home, Sprint, Releases, Quarterly Review, Roadmap Reporting, Issue Creator, Configuration.
+           Streamlit renders the individual pages first (Home, Roadmap Reporting, Issue Creator, Configuration;
            AI Agent is hidden) and then the sections in dict order (Sprint, Releases, Quarterly Review). */
         nav[data-testid="stTopNav"] > :nth-child(1) { order: 1 !important; }
         nav[data-testid="stTopNav"] > :nth-child(2) { order: 5 !important; }
         nav[data-testid="stTopNav"] > :nth-child(3) { order: 6 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(4) { order: 2 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(5) { order: 3 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(6) { order: 4 !important; }
-        nav[data-testid="stTopNav"] > :nth-child(n+7) { order: 7 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(4) { order: 7 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(5) { order: 2 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(6) { order: 3 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(7) { order: 4 !important; }
+        nav[data-testid="stTopNav"] > :nth-child(n+8) { order: 8 !important; }
         nav[data-testid="stTopNav"] [data-testid="stTopNavLinkContainer"],
         nav[data-testid="stTopNav"] [data-testid="stTopNavSection"] {
             margin: 0;
