@@ -215,22 +215,44 @@ def groups_to_rows(config):
 
 
 def topics_to_rows(group):
-    """Topic rows of one group for an editable table: [{"Topic", "Label", "Subtitle", "Due date", "Status"}].
+    """Topic rows of one group for an editable table: [{"Order", "Topic", "Label", "Subtitle", "Due date", "Status"}].
 
-    Due date is a date or None; Status is the status label or None.
+    Order is the 1-based position; Due date is a date or None; Status is the status label or None.
     """
-    return [{"Topic": t["name"], "Label": t["label"], "Subtitle": t.get("subtitle", ""),
+    return [{"Order": i, "Topic": t["name"], "Label": t["label"], "Subtitle": t.get("subtitle", ""),
              "Due date": date.fromisoformat(t["due"]) if t.get("due") else None,
              "Status": DUE_STATUS[t["status"]][0] if t.get("status") in DUE_STATUS else None}
-            for t in group.get("topics", [])]
+            for i, t in enumerate(group.get("topics", []), 1)]
+
+
+def sort_by_order(rows):
+    """Rows sorted by their "Order" number; rows without one keep their place after the numbered ones.
+
+    Ties keep the table order, so two topics with the same number stay as they were.
+    """
+    def key(item):
+        index, row = item
+        order = row.get("Order")
+        try:
+            order = float(order)
+        except (TypeError, ValueError):
+            order = None
+        if order is None or order != order:  # missing or NaN
+            return (1, 0, index)
+        return (0, order, index)
+    return [row for _, row in sorted(enumerate(rows), key=key)]
 
 
 def build_config(group_rows, topic_rows_per_group):
-    """Config from edited table rows: group_rows[i] owns topic_rows_per_group[i]."""
+    """Config from edited table rows: group_rows[i] owns topic_rows_per_group[i].
+
+    Topics are stored in the order of their "Order" column; the number itself is not saved
+    (the position in the list is the order, renumbered 1..n when the table is shown again).
+    """
     return normalize_config({"groups": [
         {"name": g.get("Group"), "label": g.get("Label"),
          "topics": [{"name": t.get("Topic"), "label": t.get("Label"), "subtitle": t.get("Subtitle"),
                      "due": t.get("Due date"),
-                     "status": t.get("Status")} for t in topics]}
+                     "status": t.get("Status")} for t in sort_by_order(topics)]}
         for g, topics in zip(group_rows, topic_rows_per_group)
     ]})

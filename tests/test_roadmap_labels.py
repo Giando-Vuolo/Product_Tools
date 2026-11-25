@@ -106,6 +106,38 @@ class DueDateTests(unittest.TestCase):
         self.assertEqual(cfg["groups"][0]["topics"][0]["due"], "")
 
 
+class TopicOrderTests(unittest.TestCase):
+    def _names(self, rows):
+        cfg = rl.build_config([{"Group": "A", "Label": "RC2_G1_A"}], [rows])
+        return [t["name"] for t in cfg["groups"][0]["topics"]]
+
+    def _row(self, name, order):
+        return {"Order": order, "Topic": name, "Label": f"RC2_G1_T1_{name}"}
+
+    def test_rows_are_numbered_in_list_order(self):
+        cfg = rl.normalize_config(rl.DEFAULT_CONFIG)
+        self.assertEqual([r["Order"] for r in rl.topics_to_rows(cfg["groups"][1])], [1, 2, 3, 4, 5, 6])
+
+    def test_topics_are_saved_sorted_by_order(self):
+        rows = [self._row("a", 3), self._row("b", 1), self._row("c", 2)]
+        self.assertEqual(self._names(rows), ["b", "c", "a"])
+
+    def test_ties_keep_table_order_and_decimals_work(self):
+        rows = [self._row("a", 2), self._row("b", 2), self._row("c", 1.5)]
+        self.assertEqual(self._names(rows), ["c", "a", "b"])
+
+    def test_missing_order_goes_last(self):
+        rows = [self._row("new", None), self._row("a", 2), self._row("nan", float("nan")), self._row("b", 1)]
+        self.assertEqual(self._names(rows), ["b", "a", "new", "nan"])
+
+    def test_order_is_not_saved_and_is_renumbered(self):
+        cfg = rl.build_config([{"Group": "A", "Label": "RC2_G1_A"}],
+                              [[self._row("a", 10), self._row("b", 5)]])
+        self.assertNotIn("order", cfg["groups"][0]["topics"][0])
+        self.assertEqual([(r["Order"], r["Topic"]) for r in rl.topics_to_rows(cfg["groups"][0])],
+                         [(1, "b"), (2, "a")])
+
+
 class SubtitleTests(unittest.TestCase):
     def test_subtitle_roundtrips_and_is_cleaned(self):
         cfg = rl.build_config([{"Group": "A", "Label": "RC2_G1_A"}], [[

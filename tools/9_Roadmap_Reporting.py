@@ -12,10 +12,12 @@ import os
 from datetime import datetime
 
 import pandas as pd
+import requests
 import streamlit as st
 
 from utils import roadmap_labels as rl
 from utils import roadmap_export as rx
+from utils import roadmap_jira_labels as rj
 from utils import roadmap_progress as rp
 from utils.stepper import render_stepper
 
@@ -23,6 +25,7 @@ BASE_KEY = "rr_cfg_base"      # configuration the editors start from (saved file
 VERSION_KEY = "rr_cfg_ver"    # bumped to reset the editors after save / discard / reset
 EXPORT_KEY = "rr_export"      # bytes of the last prepared PowerPoint
 PROGRESS_KEY = "rr_progress"  # {"data": load_topic_progress result, "loaded_at", "project"}
+IMPORT_KEY = "rr_import"     # {"labels", "complete", "prefix", "group_pattern", "topic_pattern"} from Jira
 PROJECT_KEY = "rr_project_value"  # project key typed in step 2 (kept when the step is left)
 STEP_KEY = "rr_step"
 STEPS = ["⚙️ Set up", "📥 Load & Details", "📊 Report"]
@@ -93,7 +96,7 @@ if step == STEPS[0]:
         "(`RC2_G<#>_<Group Name>`). **Topic labels** are work packages inside one group and go on "
         "Initiatives or Epics (`RC2_G<#>_T<#>_<Topic Name>`). Each topic can have a subtitle (shown under its "
         "name), a due date and a status (On track, At risk, Late) that colours the date box under its Harvey ball. "
-        "Table order is report order."
+        "Topics appear in the order of their **Order** number; groups in table order."
     )
     base = st.session_state[BASE_KEY]
     ver = st.session_state[VERSION_KEY]
@@ -116,12 +119,16 @@ if step == STEPS[0]:
         base_group = base["groups"][idx] if isinstance(idx, int) and idx < len(base["groups"]) else {"topics": []}
         title = str(grow.get("Group") or "").strip() or "(unnamed group)"
         with st.expander(f"{title} · {str(grow.get('Label') or '').strip() or 'no label'}", expanded=False):
-            topics_df = pd.DataFrame(rl.topics_to_rows(base_group), columns=["Topic", "Label", "Subtitle", "Due date", "Status"])
+            topics_df = pd.DataFrame(rl.topics_to_rows(base_group), columns=["Order", "Topic", "Label", "Subtitle", "Due date", "Status"])
             topics_df["Due date"] = pd.to_datetime(topics_df["Due date"])
             tdf = st.data_editor(
                 topics_df,
                 num_rows="dynamic", width="stretch", hide_index=True, key=f"rr_topics_{ver}_{idx}",
                 column_config={
+                    "Order": st.column_config.NumberColumn(
+                        "Order", min_value=1, step=1, format="%d", width="small",
+                        help="Position of the topic in its group. Change a number and the table is sorted "
+                             "right away; save to keep the new order. Topics without a number go last."),
                     "Topic": st.column_config.TextColumn("Topic name", required=True),
                     "Label": st.column_config.TextColumn("Jira label (Initiative or Epic level)", required=True),
                     "Subtitle": st.column_config.TextColumn(
@@ -136,6 +143,75 @@ if step == STEPS[0]:
         topic_rows.append(tdf.to_dict("records"))
 
     draft = rl.build_config(group_rows, topic_rows)
+    if any([id(r) for r in rl.sort_by_order(rows)] != [id(r) for r in rows] for rows in topic_rows):
+        # An order number changed: show the tables sorted and renumbered right away. The draft keeps
+        # every unsaved edit, so it becomes the editors' new starting point (nothing is saved).
+        st.session_state[BASE_KEY] = draft
+        st.session_state[VERSION_KEY] += 1
+        st.rerun()
+    with st.expander("🔎 Import labels from Jira", expanded=IMPORT_KEY in st.session_state):
+        st.caption("Finds the group and topic labels used in Jira that start with the prefix, and adds the "
+                   "ones that are not in the tables yet. A topic goes to the group with the same group number "
+                   "(G<#>). Nothing is saved until you click Save configuration.")
+        c_prefix, c_group, c_topic = st.columns([1, 2, 2])
+        prefix = c_prefix.text_input("Search prefix", value=rj.DEFAULT_PREFIX, key="rr_imp_prefix")
+        group_pattern = c_group.text_input(
+            "Group label pattern", value=rj.DEFAULT_GROUP_PATTERN, key="rr_imp_group",
+            help="Regular expression; its first group in brackets is the group number.")
+        topic_pattern = c_topic.text_input(
+            "Topic label pattern", value=rj.DEFAULT_TOPIC_PATTERN, key="rr_imp_topic",
+            help="Regular expression; its first group in brackets is the group number, the second the topic number.")
+        try:
+            group_rx = rj.compile_pattern(group_pattern, 1, "group")
+            topic_rx = rj.compile_pattern(topic_pattern, 2, "topic")
+        except ValueError as e:
+            group_rx = topic_rx = None
+            st.error(str(e))
+        if st.button("🔎 Search Jira", disabled=group_rx is None):
+            server, token = st.session_state.get("jira_server"), st.session_state.get("jira_token")
+            if not server or not token:
+                st.error("Configure and test the Jira connection first on the Configuration page.")
+            else:
+                try:
+                    with st.spinner("Reading the labels from Jira..."):
+                        labels, complete = rj.fetch_labels(
+                            server, token, st.session_state.get("jira_auth_method", "Personal Access Token (Bearer PAT)"),
+                            st.session_state.get("jira_email", ""), prefix)
+                except (rj.JiraLabelsError, requests.RequestException) as e:
+                    st.error(f"The labels could not be read from Jira: {e}")
+                else:
+                    st.session_state[IMPORT_KEY] = {"labels": labels, "complete": complete}
+
+        found = st.session_state.get(IMPORT_KEY)
+        if found and group_rx is not None:
+            plan = rj.plan_import(draft, found["labels"], group_rx, topic_rx)
+            st.caption(f"{len(found['labels'])} labels found in Jira starting with the prefix · "
+                       f"{plan['known']} already in the tables.")
+            if not found["complete"]:
+                st.warning("Jira returned too many labels to read them all; narrow the search prefix.")
+            if plan["new_groups"] or plan["new_topics"]:
+                rows = [{"Type": "Group", "Label": g["label"], "Name": g["name"], "Group": g["label"]}
+                        for g in plan["new_groups"]] + [
+                       {"Type": "Topic", "Label": t["label"], "Name": t["name"], "Group": t["group_label"]}
+                       for t in plan["new_topics"]]
+                st.markdown(f"**New in Jira** ({len(rows)})")
+                st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+                if st.button(f"➕ Add {len(rows)} new label(s) to the tables", type="primary"):
+                    st.session_state[BASE_KEY] = rj.apply_import(draft, plan)
+                    st.session_state[VERSION_KEY] += 1
+                    st.session_state.pop(IMPORT_KEY, None)
+                    st.toast("Labels added to the tables. Review the names and save the configuration.")
+                    st.rerun()
+            else:
+                st.success("Every group and topic label found in Jira is already in the tables.")
+            if plan["orphans"]:
+                st.warning("Topic labels without a group (no group label with the same number): "
+                           + ", ".join(f"`{x}`" for x in plan["orphans"]))
+            if plan["not_in_jira"]:
+                st.info("In the tables but not used in Jira yet: " + ", ".join(f"`{x}`" for x in plan["not_in_jira"]))
+            if plan["other"]:
+                st.caption("Ignored (match neither pattern): " + ", ".join(f"`{x}`" for x in plan["other"]))
+
     errors, warnings = rl.validate_config(draft)
     dirty = draft != rl.load_config()
 
