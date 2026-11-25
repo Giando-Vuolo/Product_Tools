@@ -309,19 +309,22 @@ def _topic_size(topic, sample, scale, text_width, title_pt, note_pt):
     return max(marker, sample["text_dy"] * scale + text_h), text_h
 
 
-def _fit_column(topics, sample, left, col_width, avail, title_pt, note_pt):
+def _fit_column(topics, sample, left, col_width, avail, title_pt, note_pt, scale=None):
     """Size factor and vertical layout so a column's topics fit without overlapping.
 
-    Full size when they fit; otherwise balls, boxes and fonts shrink step by step down to MIN_SCALE
-    (and, below that, the gaps between topics). Returns (scale, geometry, text heights, tops).
+    Without scale: full size when they fit; otherwise balls, boxes and fonts shrink step by step down
+    to MIN_SCALE. With scale: that size factor is used as given (the same one for every column, so all
+    Harvey balls are equal). Gaps tighten when the topics still do not fit.
+    Returns (scale, geometry, text heights, tops).
     """
-    scale = 1.0
+    fixed = scale is not None
+    scale = scale if fixed else 1.0
     while True:
         geometry = _column_geometry(sample, left, col_width, scale)
         sizes = [_topic_size(t, sample, scale, geometry[2], title_pt, note_pt) for t in topics]
         blocks = [b for b, _ in sizes]
         gap = ITEM_GAP * scale
-        if sum(blocks) + gap * (len(blocks) - 1) <= avail or scale <= MIN_SCALE + 1e-9:
+        if fixed or sum(blocks) + gap * (len(blocks) - 1) <= avail or scale <= MIN_SCALE + 1e-9:
             break
         scale = round(scale - SCALE_STEP, 2)
     advances = [max(b + gap, MAX_STEP) for b in blocks]
@@ -456,6 +459,18 @@ def build_roadmap_pptx(config, progress, template_path=None, title=DEFAULT_TITLE
             shape._element.getparent().remove(shape._element)
 
     col_bottom = template_cols[0].top + template_cols[0].height
+
+    def column_layout(i, src, scale=None):
+        sample, header = samples[src], parts["headers"][src]
+        topics = groups[i]["topics"] if i < len(groups) else []
+        top0 = min(sample["ball_top"], header.top + header.height + Inches(0.1))
+        left = span_left + i * (col_width + gap)
+        return top0, _fit_column(topics, sample, left, col_width, col_bottom - Inches(0.06) - top0,
+                                 *_sample_sizes(sample["text"]), scale=scale)
+
+    # One size for the whole slide: the one the most crowded column needs, so all Harvey balls are equal
+    slide_scale = min((column_layout(i, src)[1][0] for i, (src, *_) in enumerate(frames)), default=1.0)
+
     for i, (src, col_el, head_el, icon_els) in enumerate(frames):
         left = span_left + i * (col_width + gap)
         g = geo[src]
@@ -474,12 +489,8 @@ def build_roadmap_pptx(config, progress, template_path=None, title=DEFAULT_TITLE
 
         sample = samples[src]
         topics = groups[i]["topics"] if i < len(groups) else []
-        header = parts["headers"][src]
-        top0 = min(sample["ball_top"], header.top + header.height + Inches(0.1))
         typeface = _typeface(sample["text"])
-        title_pt, note_pt = _sample_sizes(sample["text"])
-        scale, (center, text_left, text_width), text_heights, tops = _fit_column(
-            topics, sample, left, col_width, col_bottom - Inches(0.06) - top0, title_pt, note_pt)
+        top0, (scale, (center, text_left, text_width), text_heights, tops) = column_layout(i, src, slide_scale)
         ball_d, box_w, box_h, pct_h, v_gap = (int(v * scale) for v in (BALL, BOX_W, BOX_H, PCT_H, V_GAP))
         for topic, dy, text_h in zip(topics, tops, text_heights):
             info = progress.get(topic["label"]) if progress else None

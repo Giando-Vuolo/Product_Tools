@@ -221,7 +221,7 @@ class TopicElementTests(_TemplateCase):
     def _column_items(self, slide, index):
         column = sorted((s for s in _shapes(slide, "roundRect") if s.height > Inches(3)), key=lambda s: s.left)[index]
         inside = [s for s in slide.shapes if column.left <= s.left < column.left + column.width
-                  and s.top > column.top + Inches(0.5)]
+                  and column.top + Inches(0.5) < s.top < column.top + column.height]
         balls = sorted((s for s in inside if rx._geom(s) == "ellipse"), key=lambda s: s.top)
         texts = sorted((s for s in inside if s.shape_type == 17 and s.width > Inches(1)), key=lambda s: s.top)
         boxes = sorted((s for s in inside if rx._geom(s) == "roundRect" and s.has_text_frame
@@ -247,11 +247,26 @@ class TopicElementTests(_TemplateCase):
         self.assertLessEqual(max(boxes[-1].top + boxes[-1].height, texts[-1].top + texts[-1].height),
                              column.top + column.height)
 
-    def test_roomy_column_keeps_full_size(self):
+    def test_all_harvey_balls_are_equal_and_full_size_when_there_is_room(self):
         slide = self._build().slides[0]
-        _, balls, texts, _ = self._column_items(slide, 0)
-        self.assertTrue(all(b.width == rx.BALL for b in balls))
+        balls = [self._column_items(slide, k)[1] for k in range(4)]
+        self.assertTrue(all(b.width == b.height == rx.BALL for col in balls for b in col))
+        _, _, texts, _ = self._column_items(slide, 0)
         self.assertEqual(texts[0].text_frame.paragraphs[0].runs[0].font.size.pt, 11)
+
+    def test_crowded_column_resizes_every_column_alike(self):
+        config = rl.normalize_config(rl.DEFAULT_CONFIG)
+        config["groups"][1]["topics"] = [{"name": f"Topic {k} with a name long enough to wrap", "label": f"RC2_G2_T{k}_X",
+                                          "subtitle": "A subtitle", "due": "2027-01-01"} for k in range(1, 10)]
+        slide = self._build(config=config).slides[0]
+        columns = [self._column_items(slide, k) for k in range(4)]
+        widths = {b.width for _, balls, _, _ in columns for b in balls}
+        self.assertEqual(len(widths), 1)                       # one ball size on the whole slide
+        self.assertLess(widths.pop(), rx.BALL)
+        title_sizes = {t.text_frame.paragraphs[0].runs[0].font.size for _, _, texts, _ in columns for t in texts}
+        self.assertEqual(len(title_sizes), 1)                  # and one font size
+        boxes = {(b.width, b.height) for _, _, _, bxs in columns for b in bxs}
+        self.assertEqual(len(boxes), 1)                        # and one date box size
 
     def test_due_dates_do_not_move_the_columns(self):
         def lefts(slide):
