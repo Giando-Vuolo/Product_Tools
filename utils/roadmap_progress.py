@@ -5,7 +5,8 @@ Tickets counted for a Topic: every child of the Epics that carry the Topic label
 
 - 100 %: resolved and in a released fix version, or in the "not release relevant" version
 - 90 %:  resolved but no fix version released yet
-- 50 %:  not resolved and not in a To Do status (in progress)
+- 50 %:  not resolved and not in a To Do status (in progress), or in one of
+         IN_PROGRESS_STATUSES even though Jira files it under To Do ("Ready for testing")
 - 0 %:   To Do
 
 The Topic progress is the plain average: every ticket weighs the same.
@@ -20,6 +21,13 @@ from utils.jira_helpers import get_jira_auth_headers, map_jira_status
 logger = logging.getLogger(__name__)
 
 NOT_RELEASE_RELEVANT = os.getenv("ROADMAP_NOT_RELEASE_RELEVANT", "DIGI:HUB Not release relevant").strip()
+
+# Statuses Jira files under the To Do category that still count as in progress (comma-separated names)
+IN_PROGRESS_STATUSES = {
+    name.strip().lower()
+    for name in os.getenv("ROADMAP_IN_PROGRESS_STATUSES", "Ready for testing").split(",")
+    if name.strip()
+}
 
 BUCKET_RELEASED = "Closed & released"
 BUCKET_CLOSED = "Closed, not released"
@@ -41,6 +49,8 @@ def ticket_bucket(fields, not_release_relevant=NOT_RELEASE_RELEVANT):
                 return BUCKET_RELEASED
         return BUCKET_CLOSED
     status = fields.get("status") or {}
+    if str(status.get("name") or "").strip().lower() in IN_PROGRESS_STATUSES:
+        return BUCKET_PROGRESS
     category = str((status.get("statusCategory") or {}).get("key", "")).lower()
     if category == "new" or (not category and map_jira_status(status.get("name")) == "To Do"):
         return BUCKET_TODO

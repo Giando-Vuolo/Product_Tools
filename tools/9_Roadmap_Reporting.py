@@ -278,7 +278,7 @@ elif step == STEPS[1]:
         st.caption(
             "Per ticket under the Epics with each Topic label: **100%** closed in a released version "
             f"(or in *{rp.NOT_RELEASE_RELEVANT}*) · **90%** closed, version not released yet · "
-            "**50%** in progress (no resolution) · **0%** To Do. The Topic is the average; every ticket weighs the same.")
+            "**50%** in progress (no resolution, *Ready for testing* included) · **0%** To Do. The Topic is the average; every ticket weighs the same.")
 
     if load_clicked:
         server = st.session_state.get("jira_server")

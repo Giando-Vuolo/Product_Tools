@@ -41,6 +41,18 @@ class TicketBucketTests(unittest.TestCase):
     def test_to_do_category_is_0(self):
         self.assertEqual(rp.ticket_bucket(_fields(None, [], "new", "Open"), NRR), rp.BUCKET_TODO)
 
+    def test_ready_for_testing_is_50_despite_to_do_category(self):
+        f = _fields(None, [], "new", "Ready for testing")
+        self.assertEqual(rp.ticket_bucket(f, NRR), rp.BUCKET_PROGRESS)
+
+    def test_ready_for_testing_any_case_without_category(self):
+        f = {"resolution": None, "status": {"name": " READY FOR TESTING "}}
+        self.assertEqual(rp.ticket_bucket(f, NRR), rp.BUCKET_PROGRESS)
+
+    def test_ready_for_testing_resolved_is_still_closed(self):
+        f = _fields("Done", [], "new", "Ready for testing")
+        self.assertEqual(rp.ticket_bucket(f, NRR), rp.BUCKET_CLOSED)
+
     def test_to_do_by_name_without_category(self):
         f = {"resolution": None, "status": {"name": "Backlog"}}
         self.assertEqual(rp.ticket_bucket(f, NRR), rp.BUCKET_TODO)
