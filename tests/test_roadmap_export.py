@@ -218,6 +218,41 @@ class TopicElementTests(_TemplateCase):
             self.assertLessEqual(box.top + box.height, next_ball.top)
         self.assertLessEqual(boxes[-1].top + boxes[-1].height, column.top + column.height)
 
+    def _column_items(self, slide, index):
+        column = sorted((s for s in _shapes(slide, "roundRect") if s.height > Inches(3)), key=lambda s: s.left)[index]
+        inside = [s for s in slide.shapes if column.left <= s.left < column.left + column.width
+                  and s.top > column.top + Inches(0.5)]
+        balls = sorted((s for s in inside if rx._geom(s) == "ellipse"), key=lambda s: s.top)
+        texts = sorted((s for s in inside if s.shape_type == 17 and s.width > Inches(1)), key=lambda s: s.top)
+        boxes = sorted((s for s in inside if rx._geom(s) == "roundRect" and s.has_text_frame
+                        and s.text_frame.text), key=lambda s: s.top)
+        return column, balls, texts, boxes
+
+    def test_crowded_column_shrinks_so_nothing_overlaps(self):
+        config = rl.normalize_config(rl.DEFAULT_CONFIG)
+        group = config["groups"][1]
+        group["topics"] = [{"name": f"A rather long topic name number {k} that wraps", "label": f"RC2_G2_T{k}_X",
+                            "subtitle": "Subtitle text that is long enough to wrap onto a second line",
+                            "due": "2027-01-01", "status": "late"} for k in range(1, 10)]
+        slide = self._build(config=config).slides[0]
+        column, balls, texts, boxes = self._column_items(slide, 1)
+        self.assertEqual((len(balls), len(texts), len(boxes)), (9, 9, 9))
+        self.assertLess(balls[0].width, rx.BALL)                       # shrunk
+        sizes = {r.font.size.pt for t in texts for p in t.text_frame.paragraphs for r in p.runs if r.font.size}
+        self.assertLess(max(sizes), 11)
+        self.assertGreaterEqual(min(sizes), 8.5 * rx.MIN_SCALE - 0.1)
+        for k in range(8):
+            self.assertLessEqual(boxes[k].top + boxes[k].height, balls[k + 1].top)
+            self.assertLessEqual(texts[k].top + texts[k].height, texts[k + 1].top)
+        self.assertLessEqual(max(boxes[-1].top + boxes[-1].height, texts[-1].top + texts[-1].height),
+                             column.top + column.height)
+
+    def test_roomy_column_keeps_full_size(self):
+        slide = self._build().slides[0]
+        _, balls, texts, _ = self._column_items(slide, 0)
+        self.assertTrue(all(b.width == rx.BALL for b in balls))
+        self.assertEqual(texts[0].text_frame.paragraphs[0].runs[0].font.size.pt, 11)
+
     def test_due_dates_do_not_move_the_columns(self):
         def lefts(slide):
             return sorted(c.left for c in _shapes(slide, "roundRect") if c.height > Inches(3))
@@ -237,6 +272,20 @@ class RealTemplateTests(unittest.TestCase):
         self.assertEqual(len(prs.slides), 1)
         n_topics = sum(len(g["topics"]) for g in config["groups"])
         self.assertEqual(len(_shapes(prs.slides[0], "pie")), n_topics)
+
+    def test_long_subtitle_shrinks_to_one_line_and_short_texts_keep_their_size(self):
+        config = rl.normalize_config(rl.DEFAULT_CONFIG)
+
+        def sizes(**kwargs):
+            slide = Presentation(io.BytesIO(rx.build_roadmap_pptx(config, {}, **kwargs))).slides[0]
+            return {s.placeholder_format.idx: [r.font.size for r in s.text_frame.paragraphs[0].runs]
+                    for s in slide.placeholders}
+        short = sizes(title="Short", subtitle="Short")
+        self.assertEqual((short[0], short[14]), ([None], [None]))     # template size kept
+        long = sizes(subtitle="A subtitle " * 20)
+        self.assertEqual(long[14], [Pt(rx.MIN_HEADING_PT)])
+        default = sizes()[14][0]
+        self.assertTrue(Pt(rx.MIN_HEADING_PT) <= default < Pt(18))
 
 
 if __name__ == "__main__":

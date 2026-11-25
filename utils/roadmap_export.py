@@ -17,6 +17,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Inches, Pt
 
+from utils.pptx_preview import text_width_pt
 from utils.quarterly_planner_helpers import find_quarterly_pptx_template
 from utils.roadmap_labels import DUE_STATUS, DUE_TEXT_COLOR, due_box_color
 
@@ -27,6 +28,7 @@ DEFAULT_TITLE = "ReCall2 | Project KPIs by initiative"
 DEFAULT_SUBTITLE = ("Progress per topic from the tickets under its Epics: closed & released 100%, "
                     "closed 90%, in progress 50%, to do 0%.")
 DEFAULT_BANNER = "Product Vision Q3/2026 – Q4/2027"
+MIN_HEADING_PT = 10               # title and subtitle shrink down to this size to stay on one line
 
 _NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main",
        "p": "http://schemas.openxmlformats.org/presentationml/2006/main"}
@@ -77,7 +79,46 @@ def _set_text(shape, text):
         para._p.getparent().remove(para._p)
 
 
-def _move(el, left=None, top=None, width=None):
+def _inherited_run_attr(shape, attr):
+    """attr (sz, b) of the first run of a placeholder, else from its layout and master styles."""
+    rpr = shape._element.find(".//a:p/a:r/a:rPr", _NS)
+    if rpr is not None and rpr.get(attr) is not None:
+        return rpr.get(attr)
+    sources = []
+    try:
+        layout_ph = shape._base_placeholder  # the layout placeholder it inherits from
+    except AttributeError:
+        layout_ph = None
+    for ph in (layout_ph, getattr(layout_ph, "_base_placeholder", None) if layout_ph is not None else None):
+        if ph is not None:
+            sources.append(ph._element.find(".//a:lstStyle/a:lvl1pPr/a:defRPr", _NS))
+    master = shape.part.slide_layout.slide_master.element
+    style = "titleStyle" if shape.placeholder_format.type in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE) \
+        else "bodyStyle"
+    sources.append(master.find(f".//p:txStyles/p:{style}/a:lvl1pPr/a:defRPr", _NS))
+    for src in sources:
+        if src is not None and src.get(attr) is not None:
+            return src.get(attr)
+    return None
+
+
+def _fit_one_line(shape, min_pt=MIN_HEADING_PT):
+    """Shrink the font of a one-line placeholder (title, subtitle) until its text fits on one line."""
+    text = shape.text_frame.text
+    size = int(_inherited_run_attr(shape, "sz") or 1800) / 100
+    bold = _inherited_run_attr(shape, "b") in ("1", "true")
+    body = shape._element.find(".//a:bodyPr", _NS)
+    insets = sum(int(body.get(k, 91440)) if body is not None else 91440 for k in ("lIns", "rIns"))
+    width_pt = (shape.width - insets) / 12700 / WIDTH_SAFETY
+    needed = text_width_pt(text, size, bold)
+    if not text or needed <= width_pt:
+        return
+    new_size = max(min_pt, int(size * width_pt / needed * 2) / 2)   # half-point steps
+    for run in shape.text_frame.paragraphs[0].runs:
+        run.font.size = Pt(new_size)
+
+
+def _move(el, left=None, top=None, width=None, height=None):
     off = el.find(".//a:xfrm/a:off", _NS)
     ext = el.find(".//a:xfrm/a:ext", _NS)
     if left is not None:
@@ -86,6 +127,8 @@ def _move(el, left=None, top=None, width=None):
         off.set("y", str(int(top)))
     if width is not None:
         ext.set("cx", str(int(width)))
+    if height is not None:
+        ext.set("cy", str(int(height)))
 
 
 def _classify(slide):
@@ -180,8 +223,8 @@ def _set_fill_like(el, source):
     geom.addnext(copy.deepcopy(fill))
 
 
-def _fill_text(el, name, note):
-    """Name in the first paragraph, note in the second (formatting of the sample kept)."""
+def _fill_text(el, name, note, scale=1.0):
+    """Name in the first paragraph, note in the second (formatting of the sample kept, sizes scaled)."""
     paras = el.findall(".//p:txBody/a:p", _NS)
     for para, text in zip(paras, [name, note]):
         runs = para.findall("a:r", _NS)
@@ -193,10 +236,41 @@ def _fill_text(el, name, note):
                 para.remove(extra)
     for para in paras[2 if note else 1:]:
         para.getparent().remove(para)
-    autofit = el.find(".//a:bodyPr/a:normAutofit", _NS)
-    if autofit is not None:
-        for attr in ("fontScale", "lnSpcReduction"):
-            autofit.attrib.pop(attr, None)
+    if scale != 1.0:
+        for rpr in el.findall(".//p:txBody//a:rPr", _NS) + el.findall(".//p:txBody//a:endParaRPr", _NS):
+            if rpr.get("sz"):
+                rpr.set("sz", str(max(100, round(int(rpr.get("sz")) * scale))))
+    body = el.find(".//a:bodyPr", _NS)
+    if body is not None:  # the box is sized to its text here: no autofit shrinking or growing
+        for fit in list(body):
+            if etree.QName(fit).localname in ("normAutofit", "spAutoFit", "noAutofit"):
+                body.remove(fit)
+
+
+def _sample_sizes(text_el):
+    """(name pt, note pt) of the sample text box (first run of its first two paragraphs)."""
+    sizes = []
+    for para in text_el.findall(".//p:txBody/a:p", _NS)[:2]:
+        rpr = para.find("a:r/a:rPr", _NS)
+        sizes.append(int(rpr.get("sz")) / 100 if rpr is not None and rpr.get("sz") else None)
+    sizes += [None, None]
+    return sizes[0] or 11.0, sizes[1] or 8.5
+
+
+def _line_count(text, size_pt, bold, width_emu):
+    """Lines a text takes when word-wrapped in width_emu (estimated with Helvetica widths)."""
+    width = max(1.0, width_emu / 12700 / WIDTH_SAFETY)
+    lines, current = 1, 0.0
+    space = text_width_pt(" ", size_pt, bold)
+    for word in (text or "").split():
+        w = text_width_pt(word, size_pt, bold)
+        if current and current + space + w > width:
+            lines, current = lines + 1, w
+        else:
+            current += (space if current else 0) + w
+        while current > width:          # a single word longer than the line
+            lines, current = lines + 1, current - width
+    return lines
 
 
 # Topic element: Harvey ball, the percentage under it, the due date in a rounded box under that;
@@ -206,8 +280,61 @@ PCT_H = Inches(0.13)
 BOX_W, BOX_H = Inches(0.56), Inches(0.15)
 V_GAP = Inches(0.015)
 BLOCK_H = BALL + V_GAP + PCT_H + 2 * V_GAP + BOX_H
-MAX_STEP = Inches(0.72)
+MAX_STEP = Inches(0.72)           # distance between topics when there is room
+ITEM_GAP = Inches(0.08)           # minimum free space between two topics
+MIN_SCALE = 0.6                   # smallest size factor for crowded columns (balls, boxes and fonts)
+SCALE_STEP = 0.05
+LINE_HEIGHT = 1.2                 # line height as a share of the font size
+WIDTH_SAFETY = 1.08               # template fonts can be wider than the Helvetica estimate
+PCT_PT, DUE_PT = 8, 7
 PCT_COLOR = "#FFFFFF"
+
+
+def _column_geometry(sample, left, col_width, scale):
+    """(centre of the ball column, text left, text width) of a column for a size factor."""
+    ball, box_w = BALL * scale, BOX_W * scale
+    center = left + max(sample["ball_dx"] + ball / 2, box_w / 2 + Inches(0.07))
+    text_left = max(left + sample["text_dx"], center + box_w / 2 + Inches(0.1))
+    return center, text_left, left + col_width - sample["text_right_margin"] - text_left
+
+
+def _topic_size(topic, sample, scale, text_width, title_pt, note_pt):
+    """(block height, text height) of one topic: the taller of ball+percentage+date and its text."""
+    marker = (BALL + V_GAP + PCT_H + (2 * V_GAP + BOX_H if topic.get("due") else 0)) * scale
+    text_pt = _line_count(topic["name"], title_pt * scale, True, text_width) * title_pt * scale * LINE_HEIGHT
+    if topic.get("subtitle"):
+        text_pt += (_line_count(topic["subtitle"], note_pt * scale, False, text_width)
+                    * note_pt * scale * LINE_HEIGHT)
+    text_h = Pt(text_pt)
+    return max(marker, sample["text_dy"] * scale + text_h), text_h
+
+
+def _fit_column(topics, sample, left, col_width, avail, title_pt, note_pt):
+    """Size factor and vertical layout so a column's topics fit without overlapping.
+
+    Full size when they fit; otherwise balls, boxes and fonts shrink step by step down to MIN_SCALE
+    (and, below that, the gaps between topics). Returns (scale, geometry, text heights, tops).
+    """
+    scale = 1.0
+    while True:
+        geometry = _column_geometry(sample, left, col_width, scale)
+        sizes = [_topic_size(t, sample, scale, geometry[2], title_pt, note_pt) for t in topics]
+        blocks = [b for b, _ in sizes]
+        gap = ITEM_GAP * scale
+        if sum(blocks) + gap * (len(blocks) - 1) <= avail or scale <= MIN_SCALE + 1e-9:
+            break
+        scale = round(scale - SCALE_STEP, 2)
+    advances = [max(b + gap, MAX_STEP) for b in blocks]
+    if blocks and sum(advances[:-1]) + blocks[-1] > avail:
+        advances = [b + gap for b in blocks]
+        if len(blocks) > 1 and sum(advances[:-1]) + blocks[-1] > avail:   # still too tall: tighten the gaps
+            gap = max(0, (avail - sum(blocks)) / (len(blocks) - 1))
+            advances = [b + gap for b in blocks]
+    tops, y = [], 0
+    for adv in advances:
+        tops.append(y)
+        y += adv
+    return scale, geometry, [h for _, h in sizes], tops
 
 
 def _place(el, left, top, size):
@@ -291,8 +418,10 @@ def build_roadmap_pptx(config, progress, template_path=None, title=DEFAULT_TITLE
         idx = shape.placeholder_format.idx
         if idx == 0:
             _set_text(shape, title)
+            _fit_one_line(shape)
         elif shape.placeholder_format.type == PP_PLACEHOLDER.BODY:
             _set_text(shape, subtitle)
+            _fit_one_line(shape)
     if parts["banner"] is not None:
         _set_text(parts["banner"], banner)
     if parts["note"] is not None:  # the template's top-right "Mock data" note is not used
@@ -347,39 +476,37 @@ def build_roadmap_pptx(config, progress, template_path=None, title=DEFAULT_TITLE
         topics = groups[i]["topics"] if i < len(groups) else []
         header = parts["headers"][src]
         top0 = min(sample["ball_top"], header.top + header.height + Inches(0.1))
-        step = MAX_STEP
-        if len(topics) > 1:
-            step = min(step, int((col_bottom - Inches(0.06) - top0 - BLOCK_H) / (len(topics) - 1)))
         typeface = _typeface(sample["text"])
-        # ball column centred over the date box, kept inside the column border
-        center = left + max(sample["ball_dx"] + BALL / 2, BOX_W / 2 + Inches(0.07))
-        text_left = max(left + sample["text_dx"], center + BOX_W / 2 + Inches(0.1))
-        text_width = left + col_width - sample["text_right_margin"] - text_left
-        for k, topic in enumerate(topics):
+        title_pt, note_pt = _sample_sizes(sample["text"])
+        scale, (center, text_left, text_width), text_heights, tops = _fit_column(
+            topics, sample, left, col_width, col_bottom - Inches(0.06) - top0, title_pt, note_pt)
+        ball_d, box_w, box_h, pct_h, v_gap = (int(v * scale) for v in (BALL, BOX_W, BOX_H, PCT_H, V_GAP))
+        for topic, dy, text_h in zip(topics, tops, text_heights):
             info = progress.get(topic["label"]) if progress else None
             pct = info["progress"] if info else None
-            y = top0 + k * step
-            ball_left = center - BALL / 2
+            y = top0 + dy
+            ball_left = center - ball_d / 2
             ball = _add_element(slide, sample["ellipse"])
-            _place(ball, ball_left, y, BALL)
+            _place(ball, ball_left, y, ball_d)
             if pct is not None and pct >= 99.5:
                 fill = _add_element(slide, sample["ellipse"])
-                _place(fill, ball_left, y, BALL)
+                _place(fill, ball_left, y, ball_d)
                 _set_fill_like(fill, sample["pie"])
             elif pct is not None and pct >= 0.5:
                 pie = _add_element(slide, sample["pie"])
-                _place(pie, ball_left, y, BALL)
+                _place(pie, ball_left, y, ball_d)
                 _set_pie(pie, pct)
-            pct_top = y + BALL + V_GAP
-            _add_run_box(slide, center - BOX_W / 2, pct_top, BOX_W, PCT_H,
-                         [("–" if pct is None else f"{pct:.0f}%", 8, PCT_COLOR, True)], typeface, PP_ALIGN.CENTER)
+            pct_top = y + ball_d + v_gap
+            _add_run_box(slide, center - box_w / 2, pct_top, box_w, pct_h,
+                         [("–" if pct is None else f"{pct:.0f}%", round(PCT_PT * scale, 1), PCT_COLOR, True)],
+                         typeface, PP_ALIGN.CENTER)
             if topic.get("due"):
-                _add_box(slide, center - BOX_W / 2, pct_top + PCT_H + 2 * V_GAP, BOX_W, BOX_H,
+                _add_box(slide, center - box_w / 2, pct_top + pct_h + 2 * v_gap, box_w, box_h,
                          due_box_color(topic.get("status")), f"{date.fromisoformat(topic['due']):%d.%m.%y}",
-                         DUE_TEXT_COLOR, 7, typeface)
+                         DUE_TEXT_COLOR, round(DUE_PT * scale, 1), typeface)
             text = _add_element(slide, sample["text"])
-            _move(text, left=text_left, top=y + sample["text_dy"], width=text_width)
-            _fill_text(text, topic["name"], topic.get("subtitle", ""))
+            _move(text, left=text_left, top=y + int(sample["text_dy"] * scale), width=text_width, height=text_h)
+            _fill_text(text, topic["name"], topic.get("subtitle", ""), scale)
 
     if any(t.get("due") for g in groups for t in g["topics"]):
         typeface = _typeface(samples[0]["text"])

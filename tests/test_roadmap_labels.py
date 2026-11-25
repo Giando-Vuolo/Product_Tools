@@ -237,6 +237,12 @@ class PageTests(unittest.TestCase):
         step_buttons = [b.label for b in at.button if b.label[:2] in ("2.", "3.")]
         self.assertEqual(step_buttons, ["2. 📥 Load & Details", "3. 📊 Report"])
 
+    def test_import_is_the_first_option_of_set_up(self):
+        at = self._app()
+        self.assertEqual(at.subheader[0].value, "🔎 Import labels from Jira")
+        self.assertFalse(any("Import labels" in e.label for e in at.expander))
+        self.assertTrue(any(b.label == "🔎 Search Jira" for b in at.button))
+
     def test_load_and_details_step(self):
         at = self._app()
         self._go(at, 2)
@@ -255,6 +261,20 @@ class PageTests(unittest.TestCase):
         self._go(at, 2)
         self.assertEqual(at.text_input(key="rr_project").value, "MYPROJ")
 
+
+    def test_report_shows_slide_preview_and_download(self):
+        from utils import roadmap_export as rx
+        if not rx.find_template():
+            self.skipTest("local Template QP.pptx not available")
+        at = AppTest.from_file(PAGE, default_timeout=60)
+        at.session_state["rr_progress"] = {"data": {"RC2_X": {"epics": [], "tickets": [], "progress": 50}},
+                                           "project": "", "loaded_at": "now"}
+        at.run()
+        self._go(at, 3)
+        self.assertFalse(at.exception)
+        self.assertTrue(any('src="data:image/svg+xml;base64,' in m.value for m in at.markdown))
+        self.assertFalse(any(b.label == "🛠️ Prepare PowerPoint" for b in at.button))
+        self.assertEqual(len(at.get("download_button")), 1)
 
 if __name__ == "__main__":
     unittest.main()

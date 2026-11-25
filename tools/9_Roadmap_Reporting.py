@@ -6,7 +6,9 @@ Three steps:
 2. Load & Details: progress of every topic from Jira (utils.roadmap_progress) and its details.
 3. Report: the topics laid out as in the slide, and the PowerPoint export.
 """
+import base64
 import html
+import logging
 import math
 import os
 from datetime import datetime
@@ -19,16 +21,31 @@ from utils import roadmap_labels as rl
 from utils import roadmap_export as rx
 from utils import roadmap_jira_labels as rj
 from utils import roadmap_progress as rp
+from utils import pptx_preview
 from utils.stepper import render_stepper
 
 BASE_KEY = "rr_cfg_base"      # configuration the editors start from (saved file, or defaults after a reset)
 VERSION_KEY = "rr_cfg_ver"    # bumped to reset the editors after save / discard / reset
-EXPORT_KEY = "rr_export"      # bytes of the last prepared PowerPoint
 PROGRESS_KEY = "rr_progress"  # {"data": load_topic_progress result, "loaded_at", "project"}
 IMPORT_KEY = "rr_import"     # {"labels", "complete", "prefix", "group_pattern", "topic_pattern"} from Jira
 PROJECT_KEY = "rr_project_value"  # project key typed in step 2 (kept when the step is left)
 STEP_KEY = "rr_step"
 STEPS = ["⚙️ Set up", "📥 Load & Details", "📊 Report"]
+
+logger = logging.getLogger(__name__)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _build_export(config, progress, template_path, template_mtime, title, subtitle, banner):
+    """(PowerPoint bytes, SVG preview of its slide or None). template_mtime refreshes the cache on edits."""
+    data = rx.build_roadmap_pptx(config, progress, template_path, title, subtitle, banner)
+    try:
+        svg = pptx_preview.slide_to_svg(data)
+    except Exception:  # the preview is a convenience: never block the download
+        logger.warning("Slide preview failed", exc_info=True)
+        svg = None
+    return data, svg
+
 
 if BASE_KEY not in st.session_state:
     st.session_state[BASE_KEY] = rl.load_config()
@@ -73,6 +90,8 @@ st.markdown("""
         .rr-pct { font-size: 0.78rem; font-weight: 700; line-height: 1.1; }
         .rr-due { font-size: 0.72rem; font-weight: 600; line-height: 1; white-space: nowrap; margin-top: 3px;
                   padding: 0.18rem 0.45rem; border-radius: 999px; }
+        .rr-preview { width: 100%; height: auto; border-radius: 6px; display: block;
+                      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25); margin: 0.2rem 0 0.4rem 0; }
         .rr-legend { font-size: 0.85rem; font-weight: 600; margin: -0.3rem 0 0.8rem 0; }
         .rr-legend .rr-swatch { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%;
                                 vertical-align: 0.02rem; margin: 0 0.3rem 0 0.8rem; }
@@ -91,6 +110,8 @@ progress = loaded["data"] if loaded else {}
 
 # ---------------------------------------------------------------- 1. Set up
 if step == STEPS[0]:
+    # First option of the step; filled further down, once the tables (with unsaved edits) have been read
+    import_box = st.container()
     st.markdown(
         "**Group labels** cluster big overarching topics and go on Initiatives "
         "(`RC2_G<#>_<Group Name>`). **Topic labels** are work packages inside one group and go on "
@@ -149,7 +170,8 @@ if step == STEPS[0]:
         st.session_state[BASE_KEY] = draft
         st.session_state[VERSION_KEY] += 1
         st.rerun()
-    with st.expander("🔎 Import labels from Jira", expanded=IMPORT_KEY in st.session_state):
+    with import_box:
+        st.subheader("🔎 Import labels from Jira")
         st.caption("Finds the group and topic labels used in Jira that start with the prefix, and adds the "
                    "ones that are not in the tables yet. A topic goes to the group with the same group number "
                    "(G<#>). Nothing is saved until you click Save configuration.")
@@ -272,7 +294,6 @@ elif step == STEPS[1]:
             except Exception as e:  # Jira or network failure: keep the previous result
                 st.error(f"Jira could not be read: {e}")
             else:
-                st.session_state.pop(EXPORT_KEY, None)
                 st.session_state[PROGRESS_KEY] = {"data": data, "project": project.strip(),
                                                   "loaded_at": datetime.now().strftime("%d.%m.%Y %H:%M")}
 
@@ -372,15 +393,22 @@ else:
             exp_title = st.text_input("Slide title", value=rx.DEFAULT_TITLE, key="rr_exp_title")
             exp_subtitle = st.text_input("Subtitle", value=rx.DEFAULT_SUBTITLE, key="rr_exp_subtitle")
             exp_banner = st.text_input("Banner", value=rx.DEFAULT_BANNER, key="rr_exp_banner")
-            if st.button("🛠️ Prepare PowerPoint"):
-                try:
-                    st.session_state[EXPORT_KEY] = rx.build_roadmap_pptx(
-                        saved, progress, template_path, exp_title, exp_subtitle, exp_banner)
-                except rx.TemplateError as e:
-                    st.session_state.pop(EXPORT_KEY, None)
-                    st.error(f"The template could not be used: {e}")
-            if st.session_state.get(EXPORT_KEY):
+            try:
+                pptx_bytes, preview_svg = _build_export(saved, progress, template_path, os.path.getmtime(template_path),
+                                                        exp_title, exp_subtitle, exp_banner)
+            except rx.TemplateError as e:
+                st.error(f"The template could not be used: {e}")
+            else:
+                st.markdown("**👁️ Slide preview**")
+                if preview_svg:
+                    encoded = base64.b64encode(preview_svg.encode("utf-8")).decode("ascii")
+                    st.markdown(f'<img class="rr-preview" alt="Slide preview" '
+                                f'src="data:image/svg+xml;base64,{encoded}"/>', unsafe_allow_html=True)
+                    st.caption("Drawn in the browser with its own fonts: line breaks can differ slightly "
+                               "from PowerPoint.")
+                else:
+                    st.info("The preview could not be drawn; the PowerPoint can still be downloaded.")
                 st.download_button(
-                    "⬇️ Download PowerPoint", data=st.session_state[EXPORT_KEY], type="primary",
+                    "⬇️ Download PowerPoint", data=pptx_bytes, type="primary",
                     file_name=f"Roadmap_Reporting_{datetime.now():%Y%m%d}.pptx",
                     mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
